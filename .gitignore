@@ -1,0 +1,30 @@
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies and build output
+node_modules/
+dist/
+dist-electron/
+dist-renderer/
+build/
+target/
+
+# Local application data
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Test and tooling output
+coverage/
+playwright-report/
+test-results/
+.pytest_cache/
+.ruff_cache/

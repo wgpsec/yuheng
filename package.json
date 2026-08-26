@@ -1,0 +1,35 @@
+{
+  "name": "yuheng",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Yuheng desktop personal secretary",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "npm run build:electron && concurrently -k \"vite --host 127.0.0.1 --port ${VITE_PORT:-5173} --strictPort\" \"tsc -p tsconfig.electron.json --watch\" \"wait-on http://127.0.0.1:${VITE_PORT:-5173} && ELECTRON_RENDERER_URL=http://127.0.0.1:${VITE_PORT:-5173} electron dist-electron/main.js\"",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "build": "npm run build:electron && vite build",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "start": "electron .",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.3",
+    "react": "19.2.1",
+    "react-dom": "19.2.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "thinking-orbs": "0.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^6.0.0",
+    "concurrently": "^9.0.0",
+    "electron": "42.10.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
+    "vite": "^8.2.1",
+    "wait-on": "^8.0.0"
+  }
+}
