@@ -5,22 +5,65 @@ contextBridge.exposeInMainWorld('desktopBridge', {
     getInfo: () => ipcRenderer.invoke('app:get-info'),
   },
   conversations: {
-    list: () => ipcRenderer.invoke('conversations:list'),
+    list: (includeArchived?: boolean) => ipcRenderer.invoke('conversations:list', includeArchived),
     messages: (conversationId: string) => ipcRenderer.invoke('conversations:messages', conversationId),
     create: (title?: string) => ipcRenderer.invoke('conversations:create', title),
+    rename: (conversationId: string, title: string) => ipcRenderer.invoke('conversations:rename', conversationId, title),
+    archive: (conversationId: string, archived: boolean) => ipcRenderer.invoke('conversations:archive', conversationId, archived),
+    pin: (conversationId: string, pinned: boolean) => ipcRenderer.invoke('conversations:pin', conversationId, pinned),
+    delete: (conversationId: string) => ipcRenderer.invoke('conversations:delete', conversationId),
   },
   provider: {
     get: () => ipcRenderer.invoke('provider:get'),
     save: (config: unknown) => ipcRenderer.invoke('provider:save', config),
   },
+  browserUse: {
+    get: () => ipcRenderer.invoke('browser-use:get'),
+    save: (config: unknown) => ipcRenderer.invoke('browser-use:save', config),
+  },
+  computerUse: {
+    get: () => ipcRenderer.invoke('computer-use:get'),
+    save: (config: unknown) => ipcRenderer.invoke('computer-use:save', config),
+  },
+  reasoning: {
+    get: (conversationId: string) => ipcRenderer.invoke('reasoning:get', conversationId),
+    save: (conversationId: string, level: unknown) => ipcRenderer.invoke('reasoning:save', conversationId, level),
+  },
   attachments: {
     pick: () => ipcRenderer.invoke('attachments:pick'),
     release: (attachmentIds: string[]) => ipcRenderer.invoke('attachments:release', attachmentIds),
   },
+  tasks: {
+    boards: {
+      list: () => ipcRenderer.invoke('tasks:boards:list'),
+      create: (name: string) => ipcRenderer.invoke('tasks:boards:create', name),
+      rename: (id: string, name: string) => ipcRenderer.invoke('tasks:boards:rename', id, name),
+    },
+    list: (boardId: string) => ipcRenderer.invoke('tasks:list', boardId),
+    takeOpenRequest: () => ipcRenderer.invoke('tasks:open-request:take'),
+    types: {
+      list: (boardId: string) => ipcRenderer.invoke('tasks:types:list', boardId),
+      create: (boardId: string, name: string) => ipcRenderer.invoke('tasks:types:create', boardId, name),
+      rename: (id: string, name: string) => ipcRenderer.invoke('tasks:types:rename', id, name),
+    },
+    create: (boardId: string, input: unknown) => ipcRenderer.invoke('tasks:create', boardId, input),
+    update: (id: string, patch: unknown) => ipcRenderer.invoke('tasks:update', id, patch),
+    onEvent: (listener: (event: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: unknown) => listener(payload);
+      ipcRenderer.on('task:event', handler);
+      return () => ipcRenderer.removeListener('task:event', handler);
+    },
+    assets: {
+      import: (input: unknown) => ipcRenderer.invoke('tasks:assets:import', input),
+      pick: () => ipcRenderer.invoke('tasks:assets:pick'),
+      open: (url: string) => ipcRenderer.invoke('tasks:assets:open', url),
+    },
+  },
   runs: {
     list: (conversationId: string) => ipcRenderer.invoke('runs:list', conversationId),
-    start: (conversationId: string, content: string, attachmentIds?: string[]) => ipcRenderer.invoke('runs:start', conversationId, content, attachmentIds),
+    start: (conversationId: string, content: string, attachmentIds?: string[], reasoningLevel?: 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max') => ipcRenderer.invoke('runs:start', conversationId, content, attachmentIds, reasoningLevel),
     cancel: (runId: string) => ipcRenderer.invoke('runs:cancel', runId),
+    approve: (approvalId: string, approved: boolean) => ipcRenderer.invoke('runs:approve', approvalId, approved),
     onEvent: (listener: (event: unknown) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: unknown) => listener(payload);
       ipcRenderer.on('run:event', handler);

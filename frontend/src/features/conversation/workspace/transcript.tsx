@@ -2,10 +2,51 @@ import { useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ThinkingOrb } from 'thinking-orbs';
+import { Maximize2, X } from 'lucide-react';
 
 export type TranscriptAttachment = { id: string; name: string; size: number };
-export type TranscriptMessage = { id: string; role: 'user' | 'assistant'; content: string; time: string; attachments?: TranscriptAttachment[] };
+export type TranscriptMessage = { id: string; role: 'user' | 'assistant'; content: string; time: string; createdAt?: string; attachments?: TranscriptAttachment[] };
 export type RecoveryNotice = { message: string; onRetry: () => void };
+export type ToolArtifact = { id: string; kind: 'browser_screenshot' | 'computer_screenshot'; mimeType: string; size: number; url: string };
+export type ToolActivity = { id: string; toolName: string; status: 'running' | 'completed' | 'failed' | 'cancelled'; input?: string; output?: string; startedAt?: string; finishedAt?: string | null; artifacts?: ToolArtifact[] };
+
+export function taskIdentityFromToolActivity(activity: Pick<ToolActivity, 'toolName' | 'output'>): { boardId: string; taskId: string } | null {
+  if (activity.toolName !== 'task_create' && activity.toolName !== 'task_update' || !activity.output) return null;
+  try {
+    const value: unknown = JSON.parse(activity.output);
+    if (!value || typeof value !== 'object' || !('task' in value)) return null;
+    const task = (value as { task?: unknown }).task;
+    if (!task || typeof task !== 'object') return null;
+    const { id, boardId } = task as { id?: unknown; boardId?: unknown };
+    return typeof id === 'string' && id.length > 0 && typeof boardId === 'string' && boardId.length > 0 ? { taskId: id, boardId } : null;
+  } catch {
+    return null;
+  }
+}
+
+function toolLabel(toolName: string): string {
+  return ({ bash: '终端命令', read: '读取文件', write: '写入文件', edit: '编辑文件', browser_navigate: '打开网页', browser_get_state: '读取页面', browser_screenshot: '页面截图', browser_click: '点击网页', browser_type: '填写网页', browser_scroll: '滚动页面', browser_go_back: '返回上页', browser_list_tabs: '查看标签页', browser_switch_tab: '切换标签页', browser_close_tab: '关闭标签页', find_roots: '查找窗口', observe_ui: '观察界面', search_ui: '搜索界面', expand_ui: '展开界面', inspect_ui: '检查控件', act_ui: '操作界面', read_text: '读取界面文本', wait_for: '等待界面变化', launch_browser: '启动浏览器', navigate_browser: '导航浏览器', evaluate_browser: '执行浏览器脚本' } as Record<string, string>)[toolName] ?? toolName;
+}
+
+function ToolActivityCard({ activity, onOpenTask }: { activity: ToolActivity; onOpenTask?: (boardId: string, taskId: string) => void }) {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [failedArtifacts, setFailedArtifacts] = useState<Set<string>>(() => new Set());
+  const statusLabel = activity.status === 'running' ? '执行中' : activity.status === 'completed' ? '已完成' : activity.status === 'failed' ? '失败' : '已取消';
+  const taskIdentity = activity.status === 'completed' ? taskIdentityFromToolActivity(activity) : null;
+  return <article className={`tool-activity is-${activity.status}`}>
+    <div className="tool-activity-summary"><span className="tool-activity-indicator" /><strong>{toolLabel(activity.toolName)}</strong><code>{activity.toolName}</code><span className="tool-activity-status">{statusLabel}</span>{taskIdentity && onOpenTask && <button type="button" className="tool-activity-task-link" onClick={() => onOpenTask(taskIdentity.boardId, taskIdentity.taskId)}>打开任务</button>}</div>
+    {activity.artifacts?.map((artifact) => <div className="tool-artifact" key={artifact.id}>
+      {failedArtifacts.has(artifact.id)
+        ? <div className="tool-artifact-unavailable" role="status">截图文件不可用或已过期</div>
+        : <button type="button" className="tool-artifact-preview" onClick={() => setPreviewUrl(artifact.url)} aria-label="放大查看工具截图">
+          <img src={artifact.url} alt={artifact.kind === 'computer_screenshot' ? 'Computer Use 桌面截图' : 'Browser Use 页面截图'} loading="lazy" onError={() => setFailedArtifacts((current) => new Set(current).add(artifact.id))} />
+          <span><Maximize2 size={14} />{Math.max(1, Math.round(artifact.size / 1024))} KB</span>
+        </button>}
+    </div>)}
+    {(activity.input || activity.output) && <details open={activity.status === 'running'}><summary>查看调用详情</summary>{activity.input && <div><span className="tool-activity-label">输入</span><pre>{activity.input}</pre></div>}{activity.output && <div><span className="tool-activity-label">结果</span><pre>{activity.output}</pre></div>}</details>}
+    {previewUrl && <div className="tool-artifact-lightbox" role="presentation" onClick={() => setPreviewUrl(null)}><section role="dialog" aria-modal="true" aria-label="工具截图预览" onClick={(event) => event.stopPropagation()}><button type="button" onClick={() => setPreviewUrl(null)} aria-label="关闭截图预览" title="关闭"><X size={18} /></button><img src={previewUrl} alt="工具截图大图" /></section></div>}
+  </article>;
+}
 
 function CodeBlock({ language, children }: { language?: string; children: string }) {
   const [copied, setCopied] = useState(false);
@@ -33,7 +74,40 @@ function AssistantContent({ content }: { content: string }) {
   }}>{content}</Markdown></div>;
 }
 
-export function Transcript({ messages, isThinking, recoveryNotice }: { messages: TranscriptMessage[]; isThinking: boolean; recoveryNotice?: RecoveryNotice | null }) {
+function messageTimestamps(messages: TranscriptMessage[]): number[] {
+  const timestamps = messages.map((message) => {
+    if (!message.createdAt) return null;
+    const timestamp = Date.parse(message.createdAt);
+    return Number.isFinite(timestamp) ? timestamp : null;
+  });
+  let start = 0;
+  while (start < timestamps.length) {
+    if (timestamps[start] !== null) {
+      start += 1;
+      continue;
+    }
+    let end = start;
+    while (end < timestamps.length && timestamps[end] === null) end += 1;
+    const previous = start > 0 ? timestamps[start - 1] : null;
+    const next = end < timestamps.length ? timestamps[end] : null;
+    const count = end - start;
+    for (let offset = 0; offset < count; offset += 1) {
+      if (previous !== null && next !== null) timestamps[start + offset] = previous + ((next - previous) * (offset + 1)) / (count + 1);
+      else if (previous !== null) timestamps[start + offset] = previous + offset + 1;
+      else if (next !== null) timestamps[start + offset] = next - count + offset;
+      else timestamps[start + offset] = start + offset;
+    }
+    start = end;
+  }
+  return timestamps as number[];
+}
+
+export function Transcript({ messages, isThinking, activities = [], recoveryNotice, onOpenTask }: { messages: TranscriptMessage[]; isThinking: boolean; activities?: ToolActivity[]; recoveryNotice?: RecoveryNotice | null; onOpenTask?: (boardId: string, taskId: string) => void }) {
+  const timestamps = messageTimestamps(messages);
+  const timeline = [
+    ...messages.map((message, index) => ({ kind: 'message' as const, value: message, timestamp: timestamps[index], order: index })),
+    ...activities.map((activity, index) => ({ kind: 'activity' as const, value: activity, timestamp: activity.startedAt ? Date.parse(activity.startedAt) : Number.MAX_SAFE_INTEGER, order: messages.length + index })),
+  ].sort((left, right) => left.timestamp - right.timestamp || left.order - right.order);
   return (
     <div className="transcript" aria-live="polite">
       {messages.length === 0 && <div className="welcome-block">
@@ -42,11 +116,14 @@ export function Transcript({ messages, isThinking, recoveryNotice }: { messages:
         <p>把想法、资料或下一步行动交给玉衡。</p>
         <div className="suggestion-row"><button type="button">整理今天的计划</button><button type="button">总结一份资料</button><button type="button">记录一个待办</button></div>
       </div>}
-      {messages.length > 0 && <div className="message-list">
-        {messages.map((message) => <article className={`message ${message.role}`} key={message.id}>
-          <div className="message-avatar">{message.role === 'assistant' ? <ThinkingOrb state="breathing" size={20} theme="dark" /> : '你'}</div>
-          <div className="message-body"><div className="message-meta"><strong>{message.role === 'assistant' ? '玉衡' : '你'}</strong><time>{message.time}</time></div>{message.role === 'assistant' ? <AssistantContent content={message.content} /> : <p>{message.content}</p>}{message.attachments && message.attachments.length > 0 && <div className="message-attachments" aria-label="消息附件">{message.attachments.map((attachment) => <span className="message-attachment" key={attachment.id}><span className="message-attachment-icon">↗</span><span className="message-attachment-name">{attachment.name}</span><small>{Math.max(1, Math.round(attachment.size / 1024))} KB</small></span>)}</div>}</div>
-        </article>)}
+      {timeline.length > 0 && <div className="message-list">
+        {timeline.map((item, index) => <div key={`${item.kind}-${item.value.id}`}>
+          {item.kind === 'activity' && (index === 0 || timeline[index - 1].kind !== 'activity') && <div className="tool-activity-heading">执行记录</div>}
+          {item.kind === 'activity' ? <ToolActivityCard activity={item.value} onOpenTask={onOpenTask} /> : <article className={`message ${item.value.role}`}>
+            <div className="message-avatar">{item.value.role === 'assistant' ? <ThinkingOrb state="breathing" size={20} theme="dark" /> : '你'}</div>
+            <div className="message-body"><div className="message-meta"><strong>{item.value.role === 'assistant' ? '玉衡' : '你'}</strong><time>{item.value.time}</time></div>{item.value.role === 'assistant' ? <AssistantContent content={item.value.content} /> : <p>{item.value.content}</p>}{item.value.attachments && item.value.attachments.length > 0 && <div className="message-attachments" aria-label="消息附件">{item.value.attachments.map((attachment) => <span className="message-attachment" key={attachment.id}><span className="message-attachment-icon">↗</span><span className="message-attachment-name">{attachment.name}</span><small>{Math.max(1, Math.round(attachment.size / 1024))} KB</small></span>)}</div>}</div>
+          </article>}
+        </div>)}
       </div>}
       {recoveryNotice && <div className="recovery-notice" role="status"><div><strong>上次运行已中断</strong><p>{recoveryNotice.message}</p></div><button type="button" onClick={recoveryNotice.onRetry}>重新发送</button></div>}
       {isThinking && (

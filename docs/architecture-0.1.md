@@ -88,7 +88,8 @@ Electron Main
   |-- SQLite store（会话、待办、设置、用量）
   |-- Secret store（safeStorage 加密后的 provider/MCP 凭据）
   |-- Pi Agent SDK runtime（Provider 适配、Agent loop、工具执行和流式输出）
-  |-- MCP supervisor（后续版本；0.1 尚未接入）
+  |-- MCP supervisor（Browser Use 可选 sidecar；默认关闭、按需启动）
+  |-- Pi extensions（Computer Use；默认关闭、与 Browser Use 互斥）
   |-- Attachment service（文件校验、临时目录、清理）
   |-- Reminder scheduler（本地提醒，不执行隐式外部写操作）
   `-- 可选 utility process（仅用于长任务或不可信解析）
@@ -128,6 +129,10 @@ Electron Main
 - 提醒到期只做系统通知和应用内提示；
 - 不自动发送邮件、修改第三方日历或执行不可逆外部操作。
 
+任务能力不引入单独的“秘书模式”。每个普通 Pi 会话都可以使用主进程提供的 `task_list`、`task_create`、`task_update` 工具，查询本地看板和任务，创建或修改任务，并按已有任务类型移动任务。Agent 不能新增、删除或重命名看板和任务类型；这些结构操作只保留在任务界面。工具不直接访问 SQLite，所有读写都经过主进程 `AppStore`，写入后复用 `task:changed` 事件刷新看板；新任务记录来源会话 ID。
+
+任务提醒由 Electron 主进程内的单一定时器调度，不建立后台服务。`remind_at` 保存用户设置，`reminder_fired_at` 防止应用重启后重复通知；触发前以任务 ID 和当前提醒时间做原子认领，旧定时器不能消费修改后的提醒。应用启动会恢复未触发提醒，完成和归档类型的任务不进入调度。通知点击通过现有 task 事件通道打开任务；新窗口尚未订阅事件时，Renderer 会从 preload 取走一次性的进程内打开请求，再切换到对应看板和任务详情。
+
 ### 5.3 Provider 与 MCP
 
 - Provider profile 与会话解耦；会话保存使用的 profile 快照标识；
@@ -135,6 +140,22 @@ Electron Main
 - 路由器只负责选择已配置 Provider，不把 Provider 选择写进秘书业务数据；
 - MCP 管理包含连接测试、工具目录、按工具审批和运行中取消；
 - 连接失败只影响对应 MCP，不阻断普通无工具对话。
+
+### 5.4 Browser Use 插件
+
+Browser Use 以可选插件接入 Pi runtime，Pi 仍是唯一 Agent loop。插件默认关闭；每次运行开始时读取一次设置快照，只有开启的运行才会获得固定白名单浏览器工具。第一次实际调用工具时，主进程才通过 stdio MCP 启动锁定版本 `browser-use==0.13.8`，多个调用复用同一 sidecar；插件关闭且 sidecar 空闲时立即回收。
+
+浏览器数据固定写入应用 `userData/browser-use` 下的独立 profile 和 downloads 目录。主进程强制关闭 Browser Use 遥测、Cloud Sync、版本检查和默认扩展，不复用用户日常 Chrome profile。允许的工具仅包括导航、页面状态、截图、点击、填写、滚动、后退和标签页管理；不暴露 `browser_exec` 或 `retry_with_browser_use_agent`。点击、填写和关闭标签页必须逐次审批，审批超时或运行取消均按拒绝处理。`browser_type.text` 只记录字符数，截图 base64 不写入 SQLite 工具摘要。
+
+截图作为独立 run artifact 保存到 `userData/browser-use/screenshots`，通过只允许 UUID 图片文件名的 `yuheng-browser-artifact://` 协议提供给 Renderer。`run_artifacts` 表仅持久化 `run_id + tool_call_id` 关联及图片元数据，不保存图片内容；会话重新加载时截图回到原工具卡，超过 30 天的元数据和文件在启动时一并清理。
+
+### 5.5 Computer Use 插件
+
+Computer Use 通过 `@injaneity/pi-computer-use` 作为显式 Pi extension 加载，不使用 MCP。它默认关闭，并与 Browser Use 在持久化设置层和运行时层强制二选一。启用后注入 `find_roots`、`observe_ui`、`search_ui`、`expand_ui`、`inspect_ui`、`act_ui`、`read_text`、`wait_for`，以及 managed browser 的 `launch_browser`、`navigate_browser`、`evaluate_browser`。`act_ui`、启动/导航浏览器和执行浏览器脚本都需要逐次审批，敏感文本不会写入普通运行日志。
+
+上游 extension 使用模块级 native 状态，因此启用 Computer Use 的运行通过进程内租约串行化；运行结束时由 runtime 显式触发 `session_shutdown` 再释放 extension。桌面和浏览器返回的图片统一保存为受控 run artifact，其中桌面截图标记为 `computer_screenshot`。macOS 14+ 需要 Accessibility 与 Screen Recording 权限。开发环境可由 npm package 安装 helper；正式 Electron 发布必须将签名、公证的 helper 与运行时作为 resources 打包，不能依赖 npm postinstall。
+
+开发态由 `uvx` 获取 Python sidecar，首次使用需要网络。发布态不得依赖用户预装 `uv`、Python 或首次联网安装；macOS arm64 构建需要把 Python 3.12、锁定依赖和启动器作为 Electron resources 打包，并纳入签名、公证与许可证清单。
 
 ## 6. 推荐界面布局
 
@@ -207,6 +228,7 @@ Electron Main
 - 不在 0.1 引入账号体系、云同步、团队协作、远程执行和 Docker 沙箱；
 - 不允许模型默认执行发送消息、删除数据、修改日历等高影响动作；
 - Electron 的体积和安全更新是持续维护成本，发布前必须固定版本、签名并运行依赖审计；
+- Browser Use 的 Python/Chromium 依赖会增加包体和供应链维护成本；当前 `uvx` 路径只用于开发和 MVP 验证，不能直接作为 `.dmg` 发布方案；
 - 不为 Windows、Linux 或 Intel Mac 添加条件分支；后续扩展平台时单独建立构建和验证矩阵；
 - `node:sqlite` 的 Electron 运行时支持需在脚手架阶段验证，若不满足再单独评估数据库驱动，不并行维护两套实现。
 

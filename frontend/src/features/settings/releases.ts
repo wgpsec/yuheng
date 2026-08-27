@@ -1,0 +1,44 @@
+export type ReleaseNote = {
+  version: string;
+  title: string;
+  changes: readonly string[];
+};
+
+export const releaseNotes: readonly ReleaseNote[] = [
+  {
+    version: '0.1.3',
+    title: '任务与会话体验',
+    changes: [
+      '新增本地任务看板、任务类型、截止日期、提醒和附件管理。',
+      'Agent Runtime 可以查询、创建和更新任务，并保留来源会话关联。',
+      '推理级别改为按会话独立保存，重新打开会话后会恢复原选择。',
+    ],
+  },
+  {
+    version: '0.1.2',
+    title: 'Computer Use',
+    changes: [
+      '新增可选的 Computer Use，支持桌面控制和受控浏览器操作。',
+      'Browser Use 与 Computer Use 互斥启用，避免两套浏览器控制能力同时运行。',
+      'Computer Use 截图作为运行产物保存，并在工具执行记录中展示。',
+    ],
+  },
+  {
+    version: '0.1.1',
+    title: 'Browser Use',
+    changes: [
+      '新增默认关闭、按需启用的 Browser Use 浏览器自动化能力。',
+      '浏览器截图可在对话的工具执行记录中查看，并支持应用重启后继续访问。',
+      '点击、填写等敏感操作增加逐次审批，工具记录对敏感输入和截图数据做脱敏处理。',
+    ],
+  },
+  {
+    version: '0.1.0',
+    title: '首个桌面版本',
+    changes: [
+      '提供基于 Electron 和 React 的 macOS 桌面客户端。',
+      '接入 Pi Agent Runtime，支持 Provider 配置、会话管理和流式响应。',
+      '会话、消息与运行记录保存在本地 SQLite 数据库中。',
+    ],
+  },
+];

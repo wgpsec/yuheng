@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { createPiRuntime, type PiSession, type PiSessionEvent, type PiRuntimeInput } from '../electron/pi-runtime';
+import { createPiRuntime, type PiSession, type PiSessionEvent, type PiRuntimeEvent, type PiRuntimeInput } from '../electron/pi-runtime';
 
 function input(overrides: Partial<PiRuntimeInput> = {}): PiRuntimeInput {
   return {
@@ -34,13 +34,13 @@ describe('PiRuntime', () => {
   });
 
   it('maps tool execution lifecycle events without duplicating completion', async () => {
-    const events: string[] = [];
+    const events: PiRuntimeEvent[] = [];
     let sessionListener: ((event: PiSessionEvent) => void) | undefined;
     const session: PiSession = {
       subscribe(listener) { sessionListener = listener; return () => { sessionListener = undefined; }; },
       async prompt() {
-        sessionListener?.({ type: 'tool_execution_start', toolName: 'read' });
-        sessionListener?.({ type: 'tool_execution_end', toolName: 'read', isError: false });
+        sessionListener?.({ type: 'tool_execution_start', toolCallId: 'tool-1', toolName: 'read', args: { path: 'notes.md' } });
+        sessionListener?.({ type: 'tool_execution_end', toolCallId: 'tool-1', toolName: 'read', isError: false, result: { content: 'ok' } });
         sessionListener?.({ type: 'agent_end' });
       },
       async abort() {},
@@ -48,9 +48,13 @@ describe('PiRuntime', () => {
     };
     const runtime = createPiRuntime({ sessionFactory: async () => session });
 
-    await runtime.start(input({ emit: (event) => events.push(event.type === 'tool_start' ? `start:${event.toolName}` : event.type === 'tool_end' ? `end:${event.toolName}` : event.type) }));
+    await runtime.start(input({ emit: (event) => events.push(event) }));
 
-    assert.deepEqual(events, ['start:read', 'end:read', 'completed']);
+    assert.deepEqual(events, [
+      { type: 'tool_start', toolCallId: 'tool-1', toolName: 'read', args: { path: 'notes.md' } },
+      { type: 'tool_end', toolCallId: 'tool-1', toolName: 'read', isError: false, result: { content: 'ok' } },
+      { type: 'completed' },
+    ]);
   });
 
   it('does not finish on an agent_end event that schedules a retry', async () => {
@@ -94,6 +98,27 @@ describe('PiRuntime', () => {
 
     assert.equal(aborted, 1);
     assert.equal(disposed, 1);
+  });
+
+  it('awaits the extension-aware shutdown hook when provided', async () => {
+    let shutdownStarted = false;
+    let shutdownFinished = false;
+    const session: PiSession = {
+      subscribe() { return () => undefined; },
+      async prompt() {},
+      async abort() {},
+      dispose() { throw new Error('dispose should not be used when shutdown is available'); },
+      async shutdown() {
+        shutdownStarted = true;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        shutdownFinished = true;
+      },
+    };
+    const runtime = createPiRuntime({ sessionFactory: async () => session });
+    await runtime.start(input());
+    await runtime.dispose();
+    assert.equal(shutdownStarted, true);
+    assert.equal(shutdownFinished, true);
   });
 
   it('reports cancellation when abort wins while prompt is settling', async () => {
