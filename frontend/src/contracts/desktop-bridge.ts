@@ -2,11 +2,20 @@ export type ProviderProtocol = 'openai' | 'anthropic';
 export type AppInfo = { name: string; version: string; platform: string; arch: string };
 export type ReasoningLevel = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type ReasoningSelection = 'default' | ReasoningLevel;
-export type ProviderConfig = { protocol: ProviderProtocol; baseUrl: string; model: string; displayName: string; contextWindow: number; hasApiKey: boolean };
+export type ProviderConfig = { id: string; protocol: ProviderProtocol; baseUrl: string; model: string; displayName: string; contextWindow: number; hasApiKey: boolean };
+export type ProviderTestResult = { ok: boolean; status: number | null; latencyMs: number; error?: string };
+export type AgentProfileId = 'assistant' | 'analyst' | 'auditor';
+export type AgentProfile = { id: AgentProfileId; name: string; description: string; timeContext: 'full' | 'none' };
+export const AGENT_PROFILES: readonly AgentProfile[] = [
+  { id: 'assistant', name: '助手', description: '处理日常事务、任务和计划', timeContext: 'full' },
+  { id: 'analyst', name: '分析师', description: '整理资料、比较信息和推导结论', timeContext: 'none' },
+  { id: 'auditor', name: '审计专家', description: '核验事实、证据和变更记录', timeContext: 'none' },
+];
+export const DEFAULT_AGENT_PROFILE_ID: AgentProfileId = 'assistant';
 export type BrowserUseConfig = { enabled: boolean };
 export type ComputerUseConfig = { enabled: boolean };
 export type ConversationProject = { id: string; name: string; position: number };
-export type Conversation = { id: string; projectId: string; title: string; updatedAt: string; archived: boolean; pinned: boolean };
+export type Conversation = { id: string; projectId: string; title: string; updatedAt: string; archived: boolean; pinned: boolean; providerId?: string; profileId: AgentProfileId };
 export type Message = { id: string; role: 'user' | 'assistant'; content: string; createdAt: string };
 export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
 export type RunArtifact = { id: string; kind: 'browser_screenshot' | 'computer_screenshot'; mimeType: string; size: number; url: string };
@@ -52,16 +61,23 @@ export type DesktopBridge = {
       delete: (projectId: string) => Promise<void>;
     };
     messages: (conversationId: string) => Promise<Message[]>;
-    create: (title?: string, projectId?: string) => Promise<Conversation>;
+    create: (title?: string, projectId?: string, providerId?: string, profileId?: AgentProfileId) => Promise<Conversation>;
+    setProvider: (conversationId: string, providerId: string) => Promise<Conversation>;
+    setProfile: (conversationId: string, profileId: AgentProfileId) => Promise<Conversation>;
     rename: (conversationId: string, title: string) => Promise<Conversation>;
     move: (conversationId: string, projectId: string) => Promise<Conversation>;
     archive: (conversationId: string, archived: boolean) => Promise<Conversation>;
     pin: (conversationId: string, pinned: boolean) => Promise<Conversation>;
     delete: (conversationId: string) => Promise<void>;
+    export: (conversationId: string) => Promise<string | null>;
+    import: () => Promise<Conversation | null>;
   };
   provider: {
     get: () => Promise<ProviderConfig | null>;
-    save: (config: { protocol: ProviderProtocol; baseUrl: string; model: string; displayName: string; contextWindow: number; apiKey: string }) => Promise<ProviderConfig>;
+    list: () => Promise<ProviderConfig[]>;
+    save: (config: { id?: string; protocol: ProviderProtocol; baseUrl: string; model: string; displayName: string; contextWindow: number; apiKey: string }) => Promise<ProviderConfig>;
+    delete: (providerId: string) => Promise<void>;
+    test: (config: { id?: string; protocol: ProviderProtocol; baseUrl: string; model: string; displayName?: string; contextWindow?: number; apiKey?: string }) => Promise<ProviderTestResult>;
   };
   browserUse: {
     get: () => Promise<BrowserUseConfig>;
@@ -84,6 +100,8 @@ export type DesktopBridge = {
       list: () => Promise<TaskBoard[]>;
       create: (name: string) => Promise<TaskBoard>;
       rename: (id: string, name: string) => Promise<TaskBoard>;
+      reorder: (id: string, targetId: string) => Promise<TaskBoard[]>;
+      delete: (id: string) => Promise<void>;
     };
     list: (boardId: string) => Promise<Task[]>;
     takeOpenRequest: () => Promise<{ boardId: string; taskId: string } | null>;
@@ -94,6 +112,10 @@ export type DesktopBridge = {
     };
     create: (boardId: string, input: CreateTaskInput) => Promise<Task>;
     update: (id: string, patch: UpdateTaskInput) => Promise<Task>;
+    reorder: (id: string, targetId: string) => Promise<Task[]>;
+    moveToBoard: (id: string, boardId: string) => Promise<Task>;
+    copyToBoard: (id: string, boardId: string) => Promise<Task>;
+    delete: (id: string) => Promise<void>;
     onEvent: (listener: (event: TaskEvent) => void) => () => void;
     assets: {
       import: (input: { name: string; mimeType: string; data: ArrayBuffer }) => Promise<TaskAsset>;

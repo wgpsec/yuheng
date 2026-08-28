@@ -9,25 +9,42 @@ export class SecretStore {
     this.filePath = path.join(dataDir, 'secrets.json');
   }
 
-  getProviderKey(): string | null {
+  getProviderKey(providerId = 'default'): string | null {
     if (!fs.existsSync(this.filePath)) return null;
     try {
-      const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf8')) as { providerKey?: string };
-      if (!raw.providerKey || !safeStorage.isEncryptionAvailable()) return null;
-      return safeStorage.decryptString(Buffer.from(raw.providerKey, 'base64'));
+      const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf8')) as { providerKey?: string; providerKeys?: Record<string, string> };
+      const encoded = raw.providerKeys?.[providerId] ?? (providerId === 'default' ? raw.providerKey : undefined);
+      if (!encoded || !safeStorage.isEncryptionAvailable()) return null;
+      return safeStorage.decryptString(Buffer.from(encoded, 'base64'));
     } catch {
       return null;
     }
   }
 
-  hasProviderKey(): boolean {
-    return Boolean(this.getProviderKey());
+  hasProviderKey(providerId = 'default'): boolean {
+    return Boolean(this.getProviderKey(providerId));
   }
 
-  saveProviderKey(key: string): void {
+  saveProviderKey(providerId: string, key: string): void {
     if (!safeStorage.isEncryptionAvailable()) throw new Error('macOS Keychain encryption is unavailable.');
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    const encrypted = safeStorage.encryptString(key).toString('base64');
-    fs.writeFileSync(this.filePath, JSON.stringify({ providerKey: encrypted }), { mode: 0o600 });
+    let providerKeys: Record<string, string> = {};
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf8')) as { providerKey?: string; providerKeys?: Record<string, string> };
+      providerKeys = { ...(raw.providerKeys ?? {}), ...(raw.providerKey ? { default: raw.providerKey } : {}) };
+    } catch { /* first provider */ }
+    providerKeys[providerId] = safeStorage.encryptString(key).toString('base64');
+    fs.writeFileSync(this.filePath, JSON.stringify({ providerKeys }), { mode: 0o600 });
+  }
+
+  deleteProviderKey(providerId: string): void {
+    if (!fs.existsSync(this.filePath)) return;
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf8')) as { providerKey?: string; providerKeys?: Record<string, string> };
+      const providerKeys = { ...(raw.providerKeys ?? {}) };
+      delete providerKeys[providerId];
+      const legacyProviderKey = providerId === 'default' ? undefined : raw.providerKey;
+      fs.writeFileSync(this.filePath, JSON.stringify({ ...(legacyProviderKey ? { providerKey: legacyProviderKey } : {}), providerKeys }), { mode: 0o600 });
+    } catch { /* unreadable secrets are treated as absent */ }
   }
 }

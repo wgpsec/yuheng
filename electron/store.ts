@@ -1,8 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { DEFAULT_AGENT_PROFILE_ID, isAgentProfileId, type AgentProfileId } from './agent-profiles';
+import { toConversationBackup, type ConversationBackup } from './conversation-backup';
 
 export type ProviderConfig = {
+  id: string;
   protocol: 'openai' | 'anthropic';
   baseUrl: string;
   model: string;
@@ -15,11 +18,12 @@ export type ComputerUseConfig = { enabled: boolean };
 export type ReasoningSelection = 'default' | 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export const DEFAULT_CONVERSATION_PROJECT_ID = 'personal';
+export const DEFAULT_PROVIDER_ID = 'default';
 export const DEFAULT_PROVIDER_CONTEXT_WINDOW = 200_000;
 export const MIN_PROVIDER_CONTEXT_WINDOW = 4_096;
 export const MAX_PROVIDER_CONTEXT_WINDOW = 10_000_000;
 export type ConversationProject = { id: string; name: string; position: number };
-export type Conversation = { id: string; projectId: string; title: string; updatedAt: string; archived: boolean; pinned: boolean };
+export type Conversation = { id: string; projectId: string; title: string; updatedAt: string; archived: boolean; pinned: boolean; providerId?: string; profileId: AgentProfileId };
 export type Message = { id: string; role: 'user' | 'assistant'; content: string; createdAt: string };
 export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
 export type RunUsage = { inputTokens: number; outputTokens: number; totalTokens: number; contextTokens: number | null; contextWindow: number; contextPercent: number | null };
@@ -100,6 +104,8 @@ export class AppStore {
         archived INTEGER NOT NULL DEFAULT 0,
         pinned INTEGER NOT NULL DEFAULT 0,
         reasoning_level TEXT NOT NULL DEFAULT 'default',
+        provider_id TEXT,
+        profile_id TEXT NOT NULL DEFAULT '${DEFAULT_AGENT_PROFILE_ID}',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -147,7 +153,7 @@ export class AppStore {
         created_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS provider_profiles (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
+        id TEXT PRIMARY KEY,
         protocol TEXT NOT NULL CHECK (protocol IN ('openai', 'anthropic')),
         base_url TEXT NOT NULL,
         model TEXT NOT NULL,
@@ -175,6 +181,7 @@ export class AppStore {
         id TEXT PRIMARY KEY,
         board_id TEXT NOT NULL REFERENCES task_boards(id) ON DELETE CASCADE,
         title TEXT NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0,
         status TEXT NOT NULL REFERENCES task_types(id),
         priority TEXT NOT NULL CHECK (priority IN ('low', 'medium', 'high')),
         due_at TEXT,
@@ -185,6 +192,8 @@ export class AppStore {
         updated_at TEXT NOT NULL
       );
     `);
+    const providerSchema = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'provider_profiles'").get() as Row | undefined;
+    if (typeof providerSchema?.sql === 'string' && providerSchema.sql.includes('CHECK (id = 1)')) this.migrateProviderProfiles();
     const providerColumns = this.db.prepare('PRAGMA table_info(provider_profiles)').all() as Row[];
     if (!providerColumns.some((column) => column.name === 'context_window')) this.db.exec(`ALTER TABLE provider_profiles ADD COLUMN context_window INTEGER NOT NULL DEFAULT ${DEFAULT_PROVIDER_CONTEXT_WINDOW}`);
     const runColumns = this.db.prepare('PRAGMA table_info(runs)').all() as Row[];
@@ -203,8 +212,12 @@ export class AppStore {
     if (!conversationColumns.some((column) => column.name === 'archived')) this.db.exec('ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
     if (!conversationColumns.some((column) => column.name === 'pinned')) this.db.exec('ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0');
     if (!conversationColumns.some((column) => column.name === 'reasoning_level')) this.db.exec("ALTER TABLE conversations ADD COLUMN reasoning_level TEXT NOT NULL DEFAULT 'default'");
+    if (!conversationColumns.some((column) => column.name === 'provider_id')) this.db.exec('ALTER TABLE conversations ADD COLUMN provider_id TEXT');
+    if (!conversationColumns.some((column) => column.name === 'profile_id')) this.db.exec(`ALTER TABLE conversations ADD COLUMN profile_id TEXT NOT NULL DEFAULT '${DEFAULT_AGENT_PROFILE_ID}'`);
     if (!conversationColumns.some((column) => column.name === 'project_id')) this.db.exec('ALTER TABLE conversations ADD COLUMN project_id TEXT REFERENCES conversation_projects(id)');
     this.db.prepare('UPDATE conversations SET project_id = ? WHERE project_id IS NULL').run(DEFAULT_CONVERSATION_PROJECT_ID);
+    const migratedDefaultProviderId = this.defaultProviderId();
+    if (migratedDefaultProviderId) this.db.prepare('UPDATE conversations SET provider_id = ? WHERE provider_id IS NULL').run(migratedDefaultProviderId);
     this.migrateLegacyReasoningSelection();
     const taskColumns = this.db.prepare('PRAGMA table_info(tasks)').all() as Row[];
     if (!taskColumns.some((column) => column.name === 'description')) this.db.exec("ALTER TABLE tasks ADD COLUMN description TEXT NOT NULL DEFAULT ''");
@@ -298,6 +311,12 @@ export class AppStore {
       this.searchIndexAvailable = true;
     } catch (error) {
       if (!(error instanceof Error) || !error.message.includes('no such module: fts5')) throw error;
+      // A database created with FTS5 can be opened by a runtime without the
+      // extension, but its triggers would still make every entity update fail.
+      // Remove those triggers and keep the LIKE-based search fallback usable.
+      for (const trigger of ['search_conversations_insert', 'search_conversations_update', 'search_conversations_delete', 'search_messages_insert', 'search_messages_update', 'search_messages_delete', 'search_boards_insert', 'search_boards_update', 'search_boards_delete', 'search_tasks_insert', 'search_tasks_update', 'search_tasks_delete']) {
+        this.db.exec(`DROP TRIGGER IF EXISTS ${trigger}`);
+      }
       this.searchIndexAvailable = false;
     }
   }
@@ -433,6 +452,28 @@ export class AppStore {
     this.db.prepare("UPDATE conversations SET reasoning_level = ? WHERE reasoning_level = 'default'").run(value);
   }
 
+  private migrateProviderProfiles(): void {
+    const columns = this.db.prepare('PRAGMA table_info(provider_profiles)').all() as Row[];
+    const hasContextWindow = columns.some((column) => column.name === 'context_window');
+    this.db.exec(`
+      BEGIN;
+      ALTER TABLE provider_profiles RENAME TO provider_profiles_legacy;
+      CREATE TABLE provider_profiles (
+        id TEXT PRIMARY KEY,
+        protocol TEXT NOT NULL CHECK (protocol IN ('openai', 'anthropic')),
+        base_url TEXT NOT NULL,
+        model TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        context_window INTEGER NOT NULL DEFAULT ${DEFAULT_PROVIDER_CONTEXT_WINDOW},
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO provider_profiles (id, protocol, base_url, model, display_name, context_window, updated_at)
+        SELECT '${DEFAULT_PROVIDER_ID}', protocol, base_url, model, display_name, ${hasContextWindow ? 'context_window' : DEFAULT_PROVIDER_CONTEXT_WINDOW}, updated_at FROM provider_profiles_legacy;
+      DROP TABLE provider_profiles_legacy;
+      COMMIT;
+    `);
+  }
+
   private seedTaskBoard(): void {
     this.db.prepare('INSERT OR IGNORE INTO task_boards (id, name, position) VALUES (?, ?, ?)').run(DEFAULT_TASK_BOARD_ID, '默认看板', 0);
   }
@@ -442,6 +483,13 @@ export class AppStore {
     if (!typeColumns.some((column) => column.name === 'board_id')) this.db.exec(`ALTER TABLE task_types ADD COLUMN board_id TEXT NOT NULL DEFAULT '${DEFAULT_TASK_BOARD_ID}'`);
     const taskColumns = this.db.prepare('PRAGMA table_info(tasks)').all() as Row[];
     if (!taskColumns.some((column) => column.name === 'board_id')) this.db.exec(`ALTER TABLE tasks ADD COLUMN board_id TEXT NOT NULL DEFAULT '${DEFAULT_TASK_BOARD_ID}'`);
+    if (!taskColumns.some((column) => column.name === 'position')) this.db.exec('ALTER TABLE tasks ADD COLUMN position INTEGER NOT NULL DEFAULT 0');
+    const groups = this.db.prepare('SELECT DISTINCT board_id AS boardId, status FROM tasks ORDER BY board_id, status').all() as Row[];
+    const update = this.db.prepare('UPDATE tasks SET position = ? WHERE id = ?');
+    for (const group of groups) {
+      const rows = this.db.prepare('SELECT id FROM tasks WHERE board_id = ? AND status = ? ORDER BY updated_at ASC, id ASC').all(String(group.boardId), String(group.status)) as Row[];
+      rows.forEach((row, index) => update.run(index, String(row.id)));
+    }
   }
 
   private seedTaskTypes(): void {
@@ -542,18 +590,21 @@ export class AppStore {
   }
 
   listConversations(includeArchived = false): Conversation[] {
-    const rows = this.db.prepare(`SELECT id, project_id AS projectId, title, updated_at AS updatedAt, archived, pinned FROM conversations ${includeArchived ? '' : 'WHERE archived = 0'} ORDER BY pinned DESC, updated_at DESC`).all() as Row[];
+    const rows = this.db.prepare(`SELECT id, project_id AS projectId, title, provider_id AS providerId, profile_id AS profileId, updated_at AS updatedAt, archived, pinned FROM conversations ${includeArchived ? '' : 'WHERE archived = 0'} ORDER BY pinned DESC, updated_at DESC`).all() as Row[];
     return rows.map((row) => this.conversationFromRow(row));
   }
 
   getConversation(id: string): Conversation {
-    const row = this.db.prepare('SELECT id, project_id AS projectId, title, updated_at AS updatedAt, archived, pinned FROM conversations WHERE id = ?').get(id) as Row | undefined;
+    const row = this.db.prepare('SELECT id, project_id AS projectId, title, provider_id AS providerId, profile_id AS profileId, updated_at AS updatedAt, archived, pinned FROM conversations WHERE id = ?').get(id) as Row | undefined;
     if (!row) throw new Error('Conversation not found.');
     return this.conversationFromRow(row);
   }
 
   private conversationFromRow(row: Row): Conversation {
-    return { id: String(row.id), projectId: String(row.projectId), title: String(row.title), updatedAt: String(row.updatedAt), archived: Number(row.archived) === 1, pinned: Number(row.pinned) === 1 };
+    const profileId = isAgentProfileId(row.profileId) ? row.profileId : DEFAULT_AGENT_PROFILE_ID;
+    const conversation: Conversation = { id: String(row.id), projectId: String(row.projectId), title: String(row.title), updatedAt: String(row.updatedAt), archived: Number(row.archived) === 1, pinned: Number(row.pinned) === 1, profileId };
+    if (row.providerId != null) conversation.providerId = String(row.providerId);
+    return conversation;
   }
 
   listMessages(conversationId: string): Message[] {
@@ -561,13 +612,68 @@ export class AppStore {
     return rows.map((row) => ({ id: String(row.id), role: row.role as Message['role'], content: String(row.content), createdAt: String(row.createdAt) }));
   }
 
-  createConversation(title = '新会话', projectId = DEFAULT_CONVERSATION_PROJECT_ID): Conversation {
+  exportConversation(id: string): ConversationBackup {
+    const conversation = this.getConversation(id);
+    return toConversationBackup(conversation, this.listMessages(id));
+  }
+
+  importConversation(backup: ConversationBackup): Conversation {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const providerId = backup.conversation.providerId && this.getProvider(backup.conversation.providerId)
+      ? backup.conversation.providerId
+      : this.defaultProviderId();
+    if (!isAgentProfileId(backup.conversation.profileId)) throw new Error('Profile not found.');
+    this.db.exec('BEGIN');
+    try {
+      this.db.prepare('INSERT INTO conversations (id, project_id, title, provider_id, profile_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(id, DEFAULT_CONVERSATION_PROJECT_ID, backup.conversation.title, providerId, backup.conversation.profileId, now, now);
+      const insert = this.db.prepare('INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)');
+      for (const message of backup.messages) insert.run(crypto.randomUUID(), id, message.role, message.content, message.createdAt || now);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return this.getConversation(id);
+  }
+
+  createConversation(title = '新会话', projectId = DEFAULT_CONVERSATION_PROJECT_ID, providerId?: string, profileId: AgentProfileId = DEFAULT_AGENT_PROFILE_ID): Conversation {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     const project = this.db.prepare('SELECT id FROM conversation_projects WHERE id = ?').get(projectId);
     if (!project) throw new Error('Project not found.');
-    this.db.prepare('INSERT INTO conversations (id, project_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(id, projectId, title, now, now);
-    return { id, projectId, title, updatedAt: now, archived: false, pinned: false };
+    const selectedProviderId = providerId ?? this.defaultProviderId();
+    if (selectedProviderId && !this.getProvider(selectedProviderId)) throw new Error('Provider not found.');
+    if (!isAgentProfileId(profileId)) throw new Error('Profile not found.');
+    this.db.prepare('INSERT INTO conversations (id, project_id, title, provider_id, profile_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, projectId, title, selectedProviderId, profileId, now, now);
+    return { id, projectId, title, updatedAt: now, archived: false, pinned: false, profileId, ...(selectedProviderId ? { providerId: selectedProviderId } : {}) };
+  }
+
+  getConversationProviderId(conversationId: string): string | null {
+    const row = this.db.prepare('SELECT provider_id AS providerId FROM conversations WHERE id = ?').get(conversationId) as Row | undefined;
+    if (!row) throw new Error('Conversation not found.');
+    return row.providerId == null ? this.defaultProviderId() : String(row.providerId);
+  }
+
+  setConversationProvider(conversationId: string, providerId: string): string {
+    if (!this.getProvider(providerId)) throw new Error('Provider not found.');
+    const result = this.db.prepare('UPDATE conversations SET provider_id = ?, updated_at = ? WHERE id = ?').run(providerId, new Date().toISOString(), conversationId);
+    if (Number(result.changes) === 0) throw new Error('Conversation not found.');
+    return providerId;
+  }
+
+  getConversationProfile(conversationId: string): AgentProfileId {
+    const row = this.db.prepare('SELECT profile_id AS profileId FROM conversations WHERE id = ?').get(conversationId) as Row | undefined;
+    if (!row) throw new Error('Conversation not found.');
+    return isAgentProfileId(row.profileId) ? row.profileId : DEFAULT_AGENT_PROFILE_ID;
+  }
+
+  setConversationProfile(conversationId: string, profileId: AgentProfileId): AgentProfileId {
+    if (!isAgentProfileId(profileId)) throw new Error('Profile not found.');
+    const result = this.db.prepare('UPDATE conversations SET profile_id = ?, updated_at = ? WHERE id = ?').run(profileId, new Date().toISOString(), conversationId);
+    if (Number(result.changes) === 0) throw new Error('Conversation not found.');
+    return profileId;
   }
 
   moveConversation(id: string, projectId: string): Conversation {
@@ -651,11 +757,13 @@ export class AppStore {
     this.db.prepare('INSERT INTO runs (id, conversation_id, input_message_id, status, started_at) VALUES (?, ?, ?, ?, ?)').run(id, conversationId, inputMessageId, 'running', new Date().toISOString());
   }
 
-  finishRun(id: string, status: Exclude<RunStatus, 'running'>, error?: string, usage?: RunUsage): void {
-    this.db.prepare(`UPDATE runs SET status = ?, error = ?, finished_at = ?, input_tokens = ?, output_tokens = ?, total_tokens = ?, context_tokens = ?, context_window = ?, context_percent = ? WHERE id = ?`)
+  finishRun(id: string, status: Exclude<RunStatus, 'running'>, error?: string, usage?: RunUsage): boolean {
+    const result = this.db.prepare(`UPDATE runs SET status = ?, error = ?, finished_at = ?, input_tokens = ?, output_tokens = ?, total_tokens = ?, context_tokens = ?, context_window = ?, context_percent = ? WHERE id = ? AND status = 'running'`)
       .run(status, error ?? null, new Date().toISOString(), usage?.inputTokens ?? null, usage?.outputTokens ?? null, usage?.totalTokens ?? null, usage?.contextTokens ?? null, usage?.contextWindow ?? null, usage?.contextPercent ?? null, id);
+    if (Number(result.changes) === 0) return false;
     const activityStatus: RunActivityStatus = status === 'completed' ? 'completed' : status === 'cancelled' || status === 'interrupted' ? 'cancelled' : 'failed';
     this.db.prepare('UPDATE run_activities SET status = ?, finished_at = COALESCE(finished_at, ?) WHERE run_id = ? AND status = \'running\'').run(activityStatus, new Date().toISOString(), id);
+    return true;
   }
 
   recoverRunningRuns(): number {
@@ -752,10 +860,40 @@ export class AppStore {
     return { id: String(row.id), name: String(row.name), position: Number(row.position) };
   }
 
+  reorderTaskBoards(id: string, targetId: string): TaskBoard[] {
+    const boards = this.listTaskBoards();
+    const sourceIndex = boards.findIndex((board) => board.id === id);
+    const targetIndex = boards.findIndex((board) => board.id === targetId);
+    if (sourceIndex < 0 || targetIndex < 0) throw new Error('Task board not found.');
+    if (sourceIndex === targetIndex) return boards;
+    const [moved] = boards.splice(sourceIndex, 1);
+    boards.splice(targetIndex, 0, moved);
+    this.db.exec('BEGIN');
+    try {
+      const update = this.db.prepare('UPDATE task_boards SET position = ? WHERE id = ?');
+      boards.forEach((board, position) => update.run(position, board.id));
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return this.listTaskBoards();
+  }
+
+  deleteTaskBoard(id: string): void {
+    if (id === DEFAULT_TASK_BOARD_ID) throw new Error('默认看板不能删除。');
+    const row = this.db.prepare('SELECT position FROM task_boards WHERE id = ?').get(id) as Row | undefined;
+    if (!row) throw new Error('Task board not found.');
+    const position = Number(row.position);
+    const result = this.db.prepare('DELETE FROM task_boards WHERE id = ?').run(id);
+    if (Number(result.changes) === 0) throw new Error('Task board not found.');
+    this.db.prepare('UPDATE task_boards SET position = position - 1 WHERE position > ?').run(position);
+  }
+
   listTasks(boardId = DEFAULT_TASK_BOARD_ID): Task[] {
     const rows = this.db.prepare(`SELECT id, board_id AS boardId, title, description, status, priority, due_at AS dueAt, remind_at AS remindAt, reminder_fired_at AS reminderFiredAt,
       source_conversation_id AS sourceConversationId, created_at AS createdAt, updated_at AS updatedAt
-      FROM tasks WHERE board_id = ? ORDER BY updated_at DESC`).all(boardId) as Row[];
+      FROM tasks WHERE board_id = ? ORDER BY status ASC, position ASC, updated_at DESC`).all(boardId) as Row[];
     return rows.map((row) => this.taskFromRow(row));
   }
 
@@ -793,10 +931,11 @@ export class AppStore {
     const status = input.status ?? this.listTaskTypes(boardId)[0]?.id;
     if (!status) throw new Error('At least one task type is required.');
     this.assertTaskStatus(status, boardId);
+    const position = Number((this.db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM tasks WHERE board_id = ? AND status = ?').get(boardId, status) as Row).position);
     this.db.prepare(`INSERT INTO tasks
-      (id, board_id, title, description, status, priority, due_at, remind_at, source_conversation_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(id, boardId, input.title, input.description ?? '', status, input.priority ?? 'medium', input.dueAt ?? null, input.remindAt ?? null, input.sourceConversationId ?? null, now, now);
+      (id, board_id, title, description, position, status, priority, due_at, remind_at, source_conversation_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(id, boardId, input.title, input.description ?? '', position, status, input.priority ?? 'medium', input.dueAt ?? null, input.remindAt ?? null, input.sourceConversationId ?? null, now, now);
     return this.getTask(id);
   }
 
@@ -810,6 +949,11 @@ export class AppStore {
       assignments.push(`${column} = ?`);
       values.push(patch[key] ?? null);
     }
+    if (patch.status !== undefined && patch.status !== existing.status) {
+      const position = Number((this.db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM tasks WHERE board_id = ? AND status = ?').get(existing.boardId, patch.status) as Row).position);
+      assignments.push('position = ?');
+      values.push(String(position));
+    }
     if (assignments.length === 0) return this.getTask(id);
     if (patch.remindAt !== undefined && patch.remindAt !== existing.remindAt) assignments.push('reminder_fired_at = NULL');
     assignments.push('updated_at = ?');
@@ -817,6 +961,51 @@ export class AppStore {
     const result = this.db.prepare(`UPDATE tasks SET ${assignments.join(', ')} WHERE id = ?`).run(...values);
     if (Number(result.changes) === 0) throw new Error('Task not found.');
     return this.getTask(id);
+  }
+
+  reorderTask(id: string, targetId: string): Task[] {
+    const source = this.getTask(id);
+    const target = this.getTask(targetId);
+    if (source.boardId !== target.boardId || source.status !== target.status) throw new Error('Tasks must share a column to reorder.');
+    const rows = this.db.prepare('SELECT id FROM tasks WHERE board_id = ? AND status = ? ORDER BY position ASC, updated_at DESC, id ASC').all(source.boardId, source.status) as Row[];
+    const sourceIndex = rows.findIndex((row) => row.id === id);
+    const targetIndex = rows.findIndex((row) => row.id === targetId);
+    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return this.listTasks(source.boardId);
+    const [moved] = rows.splice(sourceIndex, 1);
+    rows.splice(targetIndex, 0, moved);
+    this.db.exec('BEGIN');
+    try {
+      const update = this.db.prepare('UPDATE tasks SET position = ? WHERE id = ?');
+      rows.forEach((row, position) => update.run(position, String(row.id)));
+      this.db.exec('COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    return this.listTasks(source.boardId);
+  }
+
+  moveTaskToBoard(id: string, boardId: string): Task {
+    const existing = this.getTask(id);
+    if (existing.boardId === boardId) return existing;
+    const board = this.db.prepare('SELECT id FROM task_boards WHERE id = ?').get(boardId);
+    if (!board) throw new Error('Task board not found.');
+    const targetStatus = this.db.prepare('SELECT id FROM task_types WHERE board_id = ? ORDER BY position ASC, id ASC LIMIT 1').get(boardId) as Row | undefined;
+    if (!targetStatus) throw new Error('Target task board has no task types.');
+    const position = Number((this.db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM tasks WHERE board_id = ? AND status = ?').get(boardId, String(targetStatus.id)) as Row).position);
+    const result = this.db.prepare('UPDATE tasks SET board_id = ?, status = ?, position = ?, updated_at = ? WHERE id = ?')
+      .run(boardId, String(targetStatus.id), position, new Date().toISOString(), id);
+    if (Number(result.changes) === 0) throw new Error('Task not found.');
+    return this.getTask(id);
+  }
+
+  copyTaskToBoard(id: string, boardId: string): Task {
+    const existing = this.getTask(id);
+    const targetStatus = this.db.prepare('SELECT id FROM task_types WHERE board_id = ? ORDER BY position ASC, id ASC LIMIT 1').get(boardId) as Row | undefined;
+    if (!targetStatus) throw new Error('Target task board has no task types.');
+    return this.createTask({ title: existing.title, description: existing.description, priority: existing.priority, dueAt: existing.dueAt, remindAt: existing.remindAt, status: String(targetStatus.id), sourceConversationId: existing.sourceConversationId }, boardId);
+  }
+
+  deleteTask(id: string): void {
+    const result = this.db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
+    if (Number(result.changes) === 0) throw new Error('Task not found.');
   }
 
   getTask(id: string): Task {
@@ -844,17 +1033,39 @@ export class AppStore {
     return Number(result.changes) === 0 ? null : this.getTask(id);
   }
 
-  getProvider(): ProviderConfig | null {
-    const row = this.db.prepare('SELECT protocol, base_url AS baseUrl, model, display_name AS displayName, context_window AS contextWindow FROM provider_profiles WHERE id = 1').get() as Row | undefined;
-    if (!row) return null;
-    return { protocol: row.protocol as ProviderConfig['protocol'], baseUrl: String(row.baseUrl), model: String(row.model), displayName: String(row.displayName), contextWindow: Number(row.contextWindow), hasApiKey: false };
+  listProviders(): ProviderConfig[] {
+    const rows = this.db.prepare("SELECT id, protocol, base_url AS baseUrl, model, display_name AS displayName, context_window AS contextWindow FROM provider_profiles ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, updated_at ASC, id ASC").all(DEFAULT_PROVIDER_ID) as Row[];
+    return rows.map((row) => ({ id: String(row.id), protocol: row.protocol as ProviderConfig['protocol'], baseUrl: String(row.baseUrl), model: String(row.model), displayName: String(row.displayName), contextWindow: Number(row.contextWindow), hasApiKey: false }));
   }
 
-  saveProvider(config: Omit<ProviderConfig, 'hasApiKey'>): ProviderConfig {
+  deleteProvider(id: string): void {
+    if (!this.getProvider(id)) throw new Error('Provider not found.');
+    const references = this.db.prepare('SELECT COUNT(*) AS count FROM conversations WHERE provider_id = ?').get(id) as Row;
+    if (Number(references.count) > 0) throw new Error('Provider is still used by conversations.');
+    this.db.prepare('DELETE FROM provider_profiles WHERE id = ?').run(id);
+  }
+
+  defaultProviderId(): string | null {
+    const row = this.db.prepare("SELECT id FROM provider_profiles ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, updated_at ASC, id ASC LIMIT 1").get(DEFAULT_PROVIDER_ID) as Row | undefined;
+    return row ? String(row.id) : null;
+  }
+
+  getProvider(id?: string): ProviderConfig | null {
+    const providerId = id ?? this.defaultProviderId();
+    if (!providerId) return null;
+    const row = this.db.prepare('SELECT id, protocol, base_url AS baseUrl, model, display_name AS displayName, context_window AS contextWindow FROM provider_profiles WHERE id = ?').get(providerId) as Row | undefined;
+    if (!row) return null;
+    return { id: String(row.id), protocol: row.protocol as ProviderConfig['protocol'], baseUrl: String(row.baseUrl), model: String(row.model), displayName: String(row.displayName), contextWindow: Number(row.contextWindow), hasApiKey: false };
+  }
+
+  saveProvider(config: Omit<ProviderConfig, 'hasApiKey' | 'id'> & { id?: string }): ProviderConfig {
+    const existingCount = Number((this.db.prepare('SELECT COUNT(*) AS count FROM provider_profiles').get() as Row).count);
+    const id = config.id?.trim() || (existingCount === 0 ? DEFAULT_PROVIDER_ID : crypto.randomUUID());
     const now = new Date().toISOString();
-    this.db.prepare(`INSERT INTO provider_profiles (id, protocol, base_url, model, display_name, context_window, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET protocol=excluded.protocol, base_url=excluded.base_url, model=excluded.model, display_name=excluded.display_name, context_window=excluded.context_window, updated_at=excluded.updated_at`).run(config.protocol, config.baseUrl, config.model, config.displayName, config.contextWindow, now);
-    return { ...config, hasApiKey: true };
+    this.db.prepare(`INSERT INTO provider_profiles (id, protocol, base_url, model, display_name, context_window, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET protocol=excluded.protocol, base_url=excluded.base_url, model=excluded.model, display_name=excluded.display_name, context_window=excluded.context_window, updated_at=excluded.updated_at`).run(id, config.protocol, config.baseUrl, config.model, config.displayName, config.contextWindow, now);
+    if (existingCount === 0) this.db.prepare('UPDATE conversations SET provider_id = ? WHERE provider_id IS NULL').run(id);
+    return { ...config, id, hasApiKey: true };
   }
 
   getBrowserUseConfig(): BrowserUseConfig {

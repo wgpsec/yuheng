@@ -54,7 +54,7 @@ type BrowserUseRuntimeOptions = {
   requestApproval: (toolCallId: string, toolName: BrowserToolName, args: Record<string, unknown>, signal?: AbortSignal) => Promise<boolean>;
 };
 type ComputerUseRuntimeOptions = { requestApproval: ComputerUseApproval };
-type PiSessionFactoryOptions = { agentDir: string; yuhengSystemPrompt?: string; thinkingLevel?: ReasoningLevel; browserUse?: BrowserUseRuntimeOptions; computerUse?: ComputerUseRuntimeOptions; taskService?: TaskToolService };
+type PiSessionFactoryOptions = { agentDir: string; yuhengSystemPrompt?: string; profilePrompt?: string; runtimeContext?: string; thinkingLevel?: ReasoningLevel; browserUse?: BrowserUseRuntimeOptions; computerUse?: ComputerUseRuntimeOptions; taskService?: TaskToolService };
 
 const loadPiSdk = (): Promise<PiSdk> => {
   // Keep the CommonJS Electron bundle compatible with Pi's ESM package.
@@ -124,7 +124,7 @@ export function createPiSessionFactory(config: ProviderConfig, apiKey: string, o
       noPromptTemplates: true,
       noThemes: true,
       noContextFiles: true,
-      appendSystemPromptOverride: (base) => options.yuhengSystemPrompt ? [...base, options.yuhengSystemPrompt] : base,
+      appendSystemPromptOverride: (base) => [...base, ...(options.yuhengSystemPrompt ? [options.yuhengSystemPrompt] : []), ...(options.profilePrompt ? [options.profilePrompt] : []), ...(options.runtimeContext ? [options.runtimeContext] : [])],
       additionalExtensionPaths: options.computerUse ? [computerUseExtensionPath()] : [],
       extensionFactories: options.computerUse ? [createComputerUseApprovalExtension(options.computerUse.requestApproval)] : [],
     });

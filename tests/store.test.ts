@@ -25,10 +25,12 @@ describe('AppStore run activities', () => {
         url: 'yuheng-browser-artifact://local/artifact-1.png',
       });
       store.finishRun('run-1', 'completed');
+      assert.equal(store.finishRun('run-1', 'failed', '迟到的失败'), false);
       store.close();
       store = new AppStore(dataDir);
 
       const [run] = store.listRuns(conversation.id);
+      assert.equal(run.status, 'completed');
       assert.equal(run.activities.length, 1);
       assert.deepEqual(run.activities[0], {
         id: 'tool-1',
@@ -101,6 +103,28 @@ describe('AppStore run activities', () => {
 });
 
 describe('AppStore provider settings', () => {
+  it('stores multiple providers and binds each conversation to its selected provider', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
+    const store = new AppStore(dataDir);
+    try {
+      const first = store.saveProvider({ protocol: 'openai', baseUrl: 'https://one.example/v1', model: 'one', displayName: '一个模型', contextWindow: 200_000 });
+      const second = store.saveProvider({ protocol: 'anthropic', baseUrl: 'https://two.example/v1', model: 'two', displayName: '另一个模型', contextWindow: 300_000 });
+      assert.equal(store.listProviders().length, 2);
+      // Editing a secondary profile must not silently change the default route for new conversations.
+      store.saveProvider({ id: second.id, protocol: 'anthropic', baseUrl: 'https://two.example/v2', model: 'two-v2', displayName: '另一个模型（更新）', contextWindow: 300_000 });
+      assert.equal(store.defaultProviderId(), first.id);
+      assert.equal(store.createConversation('默认路由').providerId, first.id);
+      const conversation = store.createConversation('绑定测试', undefined, second.id);
+      assert.equal(conversation.providerId, second.id);
+      assert.equal(store.getConversationProviderId(conversation.id), second.id);
+      store.setConversationProvider(conversation.id, first.id);
+      assert.equal(store.getConversation(conversation.id).providerId, first.id);
+    } finally {
+      store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('migrates legacy providers to the default context window and persists a custom value', () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
     const database = new DatabaseSync(path.join(dataDir, 'yuheng.sqlite'));
@@ -112,7 +136,7 @@ describe('AppStore provider settings', () => {
     let store = new AppStore(dataDir);
     try {
       assert.equal(store.getProvider()?.contextWindow, DEFAULT_PROVIDER_CONTEXT_WINDOW);
-      store.saveProvider({ protocol: 'openai', baseUrl: 'https://api.example.test/v1', model: 'test-model', displayName: '测试模型', contextWindow: 320_000 });
+      store.saveProvider({ id: 'default', protocol: 'openai', baseUrl: 'https://api.example.test/v1', model: 'test-model', displayName: '测试模型', contextWindow: 320_000 });
       store.close();
       store = new AppStore(dataDir);
       assert.equal(store.getProvider()?.contextWindow, 320_000);
@@ -124,6 +148,28 @@ describe('AppStore provider settings', () => {
 });
 
 describe('AppStore conversations', () => {
+  it('persists an independent agent profile per conversation', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
+    let store = new AppStore(dataDir);
+    try {
+      const assistant = store.createConversation('助手会话');
+      const analyst = store.createConversation('分析会话', undefined, undefined, 'analyst');
+      assert.equal(assistant.profileId, 'assistant');
+      assert.equal(analyst.profileId, 'analyst');
+      store.setConversationProfile(assistant.id, 'auditor');
+      assert.equal(store.getConversationProfile(assistant.id), 'auditor');
+      assert.equal(store.getConversationProfile(analyst.id), 'analyst');
+      store.close();
+      store = new AppStore(dataDir);
+      assert.equal(store.getConversation(assistant.id).profileId, 'auditor');
+      assert.equal(store.getConversation(analyst.id).profileId, 'analyst');
+      assert.throws(() => store.setConversationProfile(assistant.id, 'unknown' as never), /Profile not found/);
+    } finally {
+      store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('migrates existing conversations to the unarchived default', () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
     const database = new DatabaseSync(path.join(dataDir, 'yuheng.sqlite'));
@@ -138,7 +184,7 @@ describe('AppStore conversations', () => {
 
     const store = new AppStore(dataDir);
     try {
-      assert.deepEqual(store.listConversations(), [{ id: 'legacy', projectId: 'personal', title: '历史会话', updatedAt: '2026-08-01T00:00:00.000Z', archived: false, pinned: false }]);
+      assert.deepEqual(store.listConversations(), [{ id: 'legacy', projectId: 'personal', title: '历史会话', updatedAt: '2026-08-01T00:00:00.000Z', archived: false, pinned: false, profileId: 'assistant' }]);
     } finally {
       store.close();
       fs.rmSync(dataDir, { recursive: true, force: true });
@@ -373,6 +419,34 @@ describe('AppStore tasks', () => {
       assert.deepEqual(store.listTasks(workBoard.id).map((task) => task.id), [workTask.id]);
       assert.throws(() => store.createTask({ title: '错误归属', status: defaultType.id }, workBoard.id), /Task type not found/);
       assert.equal(store.renameTaskBoard(workBoard.id, '产品工作').name, '产品工作');
+      const personalBoard = store.createTaskBoard('个人');
+      assert.deepEqual(store.listTaskBoards().map((board) => board.id), [defaultBoard.id, workBoard.id, personalBoard.id]);
+      assert.deepEqual(store.reorderTaskBoards(personalBoard.id, defaultBoard.id).map((board) => board.id), [personalBoard.id, defaultBoard.id, workBoard.id]);
+      store.deleteTaskBoard(workBoard.id);
+      assert.deepEqual(store.listTaskBoards().map((board) => board.id), [personalBoard.id, defaultBoard.id]);
+      assert.throws(() => store.deleteTaskBoard(defaultBoard.id), /默认看板不能删除/);
+    } finally {
+      store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('moves a task into the target board and its first column', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
+    const store = new AppStore(dataDir);
+    try {
+      const [sourceBoard] = store.listTaskBoards();
+      const targetBoard = store.createTaskBoard('目标看板');
+      const sourceType = store.listTaskTypes(sourceBoard.id)[1];
+      const targetType = store.listTaskTypes(targetBoard.id)[0];
+      const task = store.createTask({ title: '需要移动', status: sourceType.id }, sourceBoard.id);
+
+      const moved = store.moveTaskToBoard(task.id, targetBoard.id);
+
+      assert.equal(moved.boardId, targetBoard.id);
+      assert.equal(moved.status, targetType.id);
+      assert.deepEqual(store.listTasks(sourceBoard.id), []);
+      assert.deepEqual(store.listTasks(targetBoard.id).map((item) => item.id), [task.id]);
     } finally {
       store.close();
       fs.rmSync(dataDir, { recursive: true, force: true });
@@ -497,6 +571,29 @@ describe('AppStore tasks', () => {
       assert.equal(store.getTask('legacy-task').boardId, defaultBoard.id);
       assert.equal(store.getTask('legacy-task').description, '保留说明');
       assert.equal(store.listTaskTypes(defaultBoard.id).find((type) => type.id === 'in_progress')?.name, '进行中');
+    } finally {
+      store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Conversation backups', () => {
+  it('exports messages and imports them with fresh identity and provider fallback', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-backup-'));
+    const store = new AppStore(dataDir);
+    try {
+      const original = store.createConversation('备份测试');
+      const message = store.addMessage(original.id, 'user', '保留这段内容');
+      store.addMessage(original.id, 'assistant', '已保留');
+      const backup = store.exportConversation(original.id);
+      assert.equal('runs' in backup, false);
+      backup.conversation.providerId = 'missing-provider';
+      const imported = store.importConversation(backup);
+      assert.notEqual(imported.id, original.id);
+      assert.equal(imported.title, '备份测试');
+      assert.equal(store.listMessages(imported.id).map(({ content }) => content).join('|'), '保留这段内容|已保留');
+      assert.notEqual(store.listMessages(imported.id)[0].id, message.id);
     } finally {
       store.close();
       fs.rmSync(dataDir, { recursive: true, force: true });

@@ -6,7 +6,7 @@ import { Maximize2, Pencil, RefreshCw, X } from 'lucide-react';
 
 export type TranscriptAttachment = { id: string; name: string; size: number };
 export type TranscriptMessage = { id: string; role: 'user' | 'assistant'; content: string; time: string; createdAt?: string; attachments?: TranscriptAttachment[] };
-export type RecoveryNotice = { message: string; onRetry: () => void };
+export type RecoveryNotice = { message: string; onRetry?: () => void; busy?: boolean };
 export type ToolArtifact = { id: string; kind: 'browser_screenshot' | 'computer_screenshot'; mimeType: string; size: number; url: string };
 export type ToolActivity = { id: string; toolName: string; status: 'running' | 'completed' | 'failed' | 'cancelled'; input?: string; output?: string; startedAt?: string; finishedAt?: string | null; artifacts?: ToolArtifact[] };
 export type RunUsageView = { inputTokens: number; outputTokens: number; totalTokens: number; contextTokens: number | null; contextWindow: number; contextPercent: number | null; durationMs: number };
@@ -138,7 +138,7 @@ export function Transcript({ messages, isThinking, activities = [], recoveryNoti
         </div>)}
       </div>}
       {latestUsage && <div className="run-usage" aria-label="最近一次运行用量"><span>输入 {latestUsage.inputTokens.toLocaleString()} tokens</span><span>输出 {latestUsage.outputTokens.toLocaleString()}</span><span>耗时 {(latestUsage.durationMs / 1000).toFixed(1)} 秒</span></div>}
-      {recoveryNotice && <div className="recovery-notice" role="status"><div><strong>上次运行已中断</strong><p>{recoveryNotice.message}</p></div><button type="button" onClick={recoveryNotice.onRetry}>重新发送</button></div>}
+      {recoveryNotice && <div className="recovery-notice" role="status"><div><strong>上次运行已中断</strong><p>{recoveryNotice.message}</p></div>{recoveryNotice.onRetry && <button type="button" onClick={recoveryNotice.onRetry} disabled={recoveryNotice.busy}>{recoveryNotice.busy ? '恢复中…' : '恢复运行'}</button>}</div>}
       {isThinking && (
         <div className="assistant-message pending-message">
           <ThinkingOrb state="working" size={20} theme="dark" />

@@ -1,4 +1,4 @@
-import { Bell, CalendarDays, ChevronsRight, CircleDot, Flag, GripVertical, LayoutDashboard, Pencil, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
+import { Bell, CalendarDays, ChevronsRight, CircleDot, Flag, GripVertical, LayoutDashboard, MoreHorizontal, Pencil, Plus, Search, SlidersHorizontal, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import type { CreateTaskInput, Task, TaskAsset, TaskPriority, TaskStatus, TaskType, UpdateTaskInput } from '../../contracts/desktop-bridge';
 import { MarkdownBlockEditor } from './markdown-block-editor';
@@ -19,6 +19,7 @@ const priorities: { value: TaskPriority; label: string }[] = [
 
 const editorMinWidth = 360;
 const editorMaxWidth = 760;
+const editorCloseDurationMs = 200;
 
 function editorWidthBounds(element: HTMLElement): { min: number; max: number } {
   const availableWidth = (element.closest<HTMLElement>('.task-page')?.getBoundingClientRect().width ?? window.innerWidth) - 72;
@@ -63,8 +64,10 @@ const filters: { value: TaskFilter; label: string }[] = [
   { value: 'reminder', label: '待提醒' },
 ];
 
-export function TaskBoard({ boardName, tasks, taskTypes, loading, headerControl, requestedOpenTaskId, onOpenTaskHandled, sourceConversations = [], onOpenConversation, onCreate, onUpdate, onCreateType, onRenameType, onImportAsset, onPickAssets, onOpenAsset }: {
+export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loading, headerControl, requestedOpenTaskId, onOpenTaskHandled, sourceConversations = [], onOpenConversation, onCreate, onUpdate, onDelete, onReorder, onMoveToBoard, onCopyToBoard, onCreateType, onRenameType, onImportAsset, onPickAssets, onOpenAsset }: {
+  boardId?: string;
   boardName: string;
+  boards: { id: string; name: string }[];
   tasks: Task[];
   taskTypes: TaskType[];
   loading: boolean;
@@ -75,6 +78,10 @@ export function TaskBoard({ boardName, tasks, taskTypes, loading, headerControl,
   onOpenConversation?: (conversationId: string) => void;
   onCreate: (input: CreateTaskInput) => Promise<Task>;
   onUpdate: (id: string, patch: UpdateTaskInput) => Promise<Task>;
+  onDelete: (id: string) => Promise<void>;
+  onReorder: (id: string, targetId: string) => Promise<void>;
+  onMoveToBoard: (id: string, boardId: string) => Promise<Task>;
+  onCopyToBoard: (id: string, boardId: string) => Promise<Task>;
   onCreateType: (name: string) => Promise<TaskType>;
   onRenameType: (id: string, name: string) => Promise<TaskType>;
   onImportAsset: (file: File) => Promise<TaskAsset>;
@@ -82,10 +89,12 @@ export function TaskBoard({ boardName, tasks, taskTypes, loading, headerControl,
   onOpenAsset: (url: string) => Promise<void>;
 }) {
   const [editingId, setEditingId] = useState<string | 'new' | null>(null);
+  const [editorClosing, setEditorClosing] = useState(false);
   const [draft, setDraft] = useState<Draft>(() => draftFor());
   const [editorSessionKey, setEditorSessionKey] = useState(0);
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<TaskStatus | null>(null);
+  const [dropTaskTarget, setDropTaskTarget] = useState<string | null>(null);
   const [editorWidth, setEditorWidth] = useState(480);
   const [resizingEditor, setResizingEditor] = useState(false);
   const [newTypeName, setNewTypeName] = useState('');
@@ -93,6 +102,8 @@ export function TaskBoard({ boardName, tasks, taskTypes, loading, headerControl,
   const [renamingTypeName, setRenamingTypeName] = useState('');
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<TaskFilter>('all');
+  const [taskMenuId, setTaskMenuId] = useState<string | null>(null);
+  const [boardAction, setBoardAction] = useState<'move' | 'copy' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const editingIdRef = useRef<string | 'new' | null>(null);
   const draftRef = useRef<Draft>(draft);
@@ -100,6 +111,9 @@ export function TaskBoard({ boardName, tasks, taskTypes, loading, headerControl,
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
   const mountedRef = useRef(true);
+  const editorSessionKeyRef = useRef(0);
+  const editorCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const editorCloseRequestRef = useRef<number | null>(null);
   const suppressCardClickRef = useRef<string | null>(null);
   const onCreateRef = useRef(onCreate);
   const onUpdateRef = useRef(onUpdate);
@@ -157,15 +171,44 @@ export function TaskBoard({ boardName, tasks, taskTypes, loading, headerControl,
     scheduleSave(next);
   };
 
+  const clearEditorCloseTimer = () => {
+    if (editorCloseTimerRef.current === null) return;
+    clearTimeout(editorCloseTimerRef.current);
+    editorCloseTimerRef.current = null;
+  };
+  const nextEditorSession = () => {
+    editorSessionKeyRef.current += 1;
+    setEditorSessionKey(editorSessionKeyRef.current);
+  };
+  const finishEditorClose = (sessionKey: number) => {
+    if (!mountedRef.current || editorSessionKeyRef.current !== sessionKey || !editingIdRef.current) return;
+    clearEditorCloseTimer();
+    editorCloseRequestRef.current = null;
+    editingIdRef.current = null;
+    setEditingId(null);
+    setEditorClosing(false);
+    setError(null);
+  };
+  const beginEditorClose = (sessionKey: number) => {
+    if (!mountedRef.current || editorSessionKeyRef.current !== sessionKey || !editingIdRef.current) return;
+    clearEditorCloseTimer();
+    editorCloseRequestRef.current = sessionKey;
+    setEditorClosing(true);
+    editorCloseTimerRef.current = setTimeout(() => finishEditorClose(sessionKey), editorCloseDurationMs);
+  };
+
   const openNew = (status: TaskStatus = 'todo') => {
     clearScheduledSave();
+    clearEditorCloseTimer();
+    editorCloseRequestRef.current = null;
+    setEditorClosing(false);
     const next = draftFor(undefined, status);
     editingIdRef.current = 'new';
     draftRef.current = next;
     savedSignatureRef.current = draftSignature(next);
     setEditingId('new');
     setDraft(next);
-    setEditorSessionKey((current) => current + 1);
+    nextEditorSession();
     setError(null);
   };
   const createType = async () => {
@@ -192,15 +235,47 @@ export function TaskBoard({ boardName, tasks, taskTypes, loading, headerControl,
     }
   };
   const openTask = (task: Task) => {
+    setTaskMenuId(null);
     clearScheduledSave();
+    clearEditorCloseTimer();
+    editorCloseRequestRef.current = null;
+    setEditorClosing(false);
     const next = draftFor(task);
     editingIdRef.current = task.id;
     draftRef.current = next;
     savedSignatureRef.current = draftSignature(next);
     setEditingId(task.id);
     setDraft(next);
-    setEditorSessionKey((current) => current + 1);
+    nextEditorSession();
     setError(null);
+  };
+  useEffect(() => {
+    if (!taskMenuId) return;
+    const closeMenu = (event: MouseEvent) => {
+      if ((event.target as Element | null)?.closest('.task-card-menu, .task-card-edit')) return;
+      setTaskMenuId(null); setBoardAction(null);
+    };
+    window.addEventListener('click', closeMenu);
+    return () => window.removeEventListener('click', closeMenu);
+  }, [taskMenuId]);
+  const deleteTask = async (task: Task) => {
+    if (!window.confirm(`删除任务“${task.title}”？此操作无法撤销。`)) return;
+    const editorSessionKey = editorSessionKeyRef.current;
+    try {
+      await onDelete(task.id);
+      if (editingIdRef.current === task.id && editorSessionKeyRef.current === editorSessionKey) beginEditorClose(editorSessionKey);
+      setTaskMenuId(null);
+      setError(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '删除任务失败。');
+    }
+  };
+  const moveOrCopyTask = async (task: Task, boardId: string) => {
+    try {
+      if (boardAction === 'move') await onMoveToBoard(task.id, boardId);
+      else await onCopyToBoard(task.id, boardId);
+      setTaskMenuId(null); setBoardAction(null); setError(null);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '操作任务失败。'); }
   };
   useEffect(() => {
     if (!requestedOpenTaskId || loading) return;
@@ -210,16 +285,21 @@ export function TaskBoard({ boardName, tasks, taskTypes, loading, headerControl,
     onOpenTaskHandled?.();
   }, [loading, requestedOpenTaskId, tasks]);
   const closeEditor = async () => {
+    const sessionKey = editorSessionKeyRef.current;
+    if (!editingIdRef.current || editorClosing || editorCloseRequestRef.current === sessionKey) return;
+    editorCloseRequestRef.current = sessionKey;
     const saved = await enqueueSave(draftRef.current);
-    if (!saved) return;
-    editingIdRef.current = null;
-    setEditingId(null);
-    setError(null);
+    if (!saved || !mountedRef.current || editorSessionKeyRef.current !== sessionKey) {
+      if (editorCloseRequestRef.current === sessionKey) editorCloseRequestRef.current = null;
+      return;
+    }
+    beginEditorClose(sessionKey);
   };
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      clearEditorCloseTimer();
       if (saveTimerRef.current !== null) void enqueueSave(draftRef.current);
     };
   }, []);
@@ -234,6 +314,20 @@ export function TaskBoard({ boardName, tasks, taskTypes, loading, headerControl,
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '移动任务失败。');
     }
+  };
+  const dropOnTask = async (event: DragEvent, target: Task) => {
+    event.preventDefault();
+    const sourceId = event.dataTransfer.getData('text/task-id') || draggedId;
+    setDraggedId(null);
+    setDropTaskTarget(null);
+    if (!sourceId || sourceId === target.id) return;
+    const source = tasks.find((task) => task.id === sourceId);
+    if (!source) return;
+    try {
+      if (source.status !== target.status) await onUpdate(sourceId, { status: target.status });
+      else await onReorder(sourceId, target.id);
+    }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '排序任务失败。'); }
   };
   const resizeEditor = (event: PointerEvent<HTMLDivElement>) => {
     if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
@@ -258,7 +352,16 @@ export function TaskBoard({ boardName, tasks, taskTypes, loading, headerControl,
   const editedTask = editingId && editingId !== 'new' ? tasks.find((task) => task.id === editingId) : undefined;
   const reminderWasDelivered = Boolean(editedTask?.reminderFiredAt && editedTask.remindAt === (draft.remindAt ? new Date(draft.remindAt).toISOString() : null));
 
-  return <section className="task-page" aria-label="任务看板">
+  return <section
+    className="task-page"
+    aria-label="任务看板"
+    onClick={(event) => {
+      if (!editingId || editorClosing) return;
+      const target = event.target as Element | null;
+      if (target?.closest('.task-editor-layer, .task-card, button, input, select, textarea, a, [role="button"]')) return;
+      void closeEditor();
+    }}
+  >
     <header className="task-page-header">
       {headerControl}
       <div><span className="task-page-kicker"><LayoutDashboard size={13} /> 看板</span><h1>{boardName}</h1><p>把需要推进的事项放到合适的阶段。</p></div>
@@ -285,10 +388,11 @@ export function TaskBoard({ boardName, tasks, taskTypes, loading, headerControl,
             <div className="task-card-list">
               {loading && <div className="task-column-empty">正在读取...</div>}
               {!loading && items.length === 0 && (filtering ? <div className="task-column-empty">没有匹配任务</div> : <button type="button" className="task-column-empty" onClick={() => openNew(taskType.id)}>添加一项</button>)}
-              {!loading && items.map((task) => <button
-                type="button"
+              {!loading && items.map((task) => <div
+                role="button"
+                tabIndex={0}
                 key={task.id}
-                className={`task-card ${draggedId === task.id ? 'is-dragging' : ''}`}
+                className={`task-card ${draggedId === task.id ? 'is-dragging' : ''} ${taskMenuId === task.id ? 'has-menu' : ''} ${dropTaskTarget === task.id ? 'is-drop-target' : ''}`}
                 draggable
                 onPointerDown={() => { suppressCardClickRef.current = null; }}
                 onClick={() => {
@@ -298,18 +402,26 @@ export function TaskBoard({ boardName, tasks, taskTypes, loading, headerControl,
                   }
                   openTask(task);
                 }}
+                onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openTask(task); } }}
                 onDragStart={(event) => {
                   event.dataTransfer.effectAllowed = 'move';
                   event.dataTransfer.setData('text/task-id', task.id);
+                  event.dataTransfer.setData('text/plain', task.id);
                   suppressCardClickRef.current = task.id;
                   setDraggedId(task.id);
                 }}
-                onDragEnd={() => { setDraggedId(null); setDropTarget(null); }}
+                onDragOver={(event) => { const sourceId = event.dataTransfer.getData('text/task-id') || draggedId; const source = tasks.find((item) => item.id === sourceId); if (!source || source.status !== task.status || source.id === task.id) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTaskTarget(task.id); }}
+                onDragLeave={() => setDropTaskTarget(null)}
+                onDrop={(event) => { event.stopPropagation(); void dropOnTask(event, task); }}
+                onDragEnd={() => { setDraggedId(null); setDropTarget(null); setDropTaskTarget(null); }}
+                onContextMenu={(event) => { event.preventDefault(); setTaskMenuId((current) => current === task.id ? null : task.id); }}
               >
                 <span
                   className="task-card-grip"
                   aria-hidden="true"
                 ><GripVertical size={13} /></span>
+                <button type="button" className="task-card-edit" onClick={(event) => { event.stopPropagation(); openTask(task); }} aria-label={`编辑${task.title}`} title="编辑"><Pencil size={13} /></button>
+                {taskMenuId === task.id && <div className="task-card-menu"><button type="button" onClick={(event) => { event.stopPropagation(); openTask(task); }}><Pencil size={13} />编辑</button><button type="button" onClick={(event) => { event.stopPropagation(); setBoardAction('move'); }}><LayoutDashboard size={13} />移动到</button><button type="button" onClick={(event) => { event.stopPropagation(); setBoardAction('copy'); }}><LayoutDashboard size={13} />复制到</button>{boardAction && <div className="task-board-action-list">{boards.filter((board) => board.id !== (boardId ?? task.boardId)).map((board) => <button type="button" key={board.id} onClick={(event) => { event.stopPropagation(); void moveOrCopyTask(task, board.id); }}>{board.name}</button>)}</div>}<button type="button" className="is-destructive" onClick={(event) => { event.stopPropagation(); void deleteTask(task); }}><Trash2 size={13} />删除</button></div>}
                 <strong>{task.title}</strong>
                 <span className="task-card-meta">
                   <span className={`task-priority is-${task.priority}`}>{priorities.find((item) => item.value === task.priority)?.label}优先级</span>
@@ -317,16 +429,16 @@ export function TaskBoard({ boardName, tasks, taskTypes, loading, headerControl,
                   {task.remindAt && !task.reminderFiredAt && <span className="task-due"><Bell size={12} />{dateTimeLabel(task.remindAt)}</span>}
                   {task.reminderFiredAt && <span className="task-reminder-delivered"><Bell size={12} />已提醒</span>}
                 </span>
-              </button>)}
+              </div>)}
             </div>
           </section>;
         })}
         <section className="task-add-type" aria-label="添加任务类型"><Plus size={15} /><input value={newTypeName} onChange={(event) => setNewTypeName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void createType(); } }} placeholder="添加任务类型" aria-label="新任务类型名称" /><button type="button" onClick={() => void createType()} disabled={!newTypeName.trim()}>添加</button></section>
       </div>
     </div>
-    {editingId && <>
-      <button type="button" className="task-editor-backdrop" onClick={() => void closeEditor()} aria-label="关闭任务编辑器" />
-      <aside className={`task-editor ${resizingEditor ? 'is-resizing' : ''}`} style={{ width: editorWidth }} aria-label={editingId === 'new' ? '新建任务' : '编辑任务'}>
+    {editingId && <div className="task-editor-layer">
+      <button type="button" tabIndex={-1} aria-hidden="true" className={`task-editor-backdrop ${editorClosing ? 'is-closing' : ''}`} />
+      <aside className={`task-editor ${resizingEditor ? 'is-resizing' : ''} ${editorClosing ? 'is-closing' : ''}`} style={{ width: editorWidth }} aria-label={editingId === 'new' ? '新建任务' : '编辑任务'} onAnimationEnd={(event) => { if (editorClosing && event.currentTarget === event.target && event.animationName === 'task-editor-slide-out') finishEditorClose(editorSessionKeyRef.current); }}>
       <div
         className="task-editor-resize-handle"
         role="separator"
@@ -369,6 +481,6 @@ export function TaskBoard({ boardName, tasks, taskTypes, loading, headerControl,
         {error && <p className="form-error" role="alert">{error}</p>}
       </form>
       </aside>
-    </>}
+    </div>}
   </section>;
 }

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { loadYuhengSystemPrompt, YUHENG_SYSTEM_PROMPT_RELATIVE_PATH } from '../electron/system-prompt';
+import { formatRuntimeContext, loadAgentProfilePrompt } from '../electron/agent-profiles';
 
 describe('Yuheng system prompt', () => {
   it('loads the versioned product prompt from the application root', () => {
@@ -28,5 +29,14 @@ describe('Yuheng system prompt', () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it('loads each profile prompt and formats a deterministic runtime context', () => {
+    assert.match(loadAgentProfilePrompt(process.cwd(), 'assistant'), /日常事务助手/);
+    assert.match(loadAgentProfilePrompt(path.join(process.cwd(), 'dist-electron'), 'analyst'), /分析师/);
+    const context = formatRuntimeContext(new Date('2026-08-28T04:05:06.000Z'), 'Asia/Shanghai');
+    assert.match(context, /当前本地日期：2026-08-28/);
+    assert.match(context, /当前本地时间：12:05:06/);
+    assert.match(context, /时区：Asia\/Shanghai/);
   });
 });

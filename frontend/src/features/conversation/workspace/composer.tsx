@@ -17,7 +17,7 @@ export interface ComposerPrefill {
   value: string;
 }
 
-export function Composer({ busy, attachments, variant = 'default', prefill, reasoningSelection = 'default', onReasoningSelectionChange, onAttach, onRemoveAttachment, onSubmit, onCancel }: { busy: boolean; attachments: Attachment[]; variant?: 'default' | 'start'; prefill?: ComposerPrefill | null; reasoningSelection?: ReasoningSelection; onReasoningSelectionChange?: (selection: ReasoningSelection) => void; onAttach: () => Promise<void>; onRemoveAttachment: (id: string) => void; onSubmit: (value: string, attachments: Attachment[], reasoningLevel?: ReasoningLevel) => void; onCancel: () => void }) {
+export function Composer({ busy, attachments, variant = 'default', prefill, editing = false, onCancelEdit, reasoningSelection = 'default', onReasoningSelectionChange, onAttach, onRemoveAttachment, onSubmit, onCancel }: { busy: boolean; attachments: Attachment[]; variant?: 'default' | 'start'; prefill?: ComposerPrefill | null; editing?: boolean; onCancelEdit?: () => void; reasoningSelection?: ReasoningSelection; onReasoningSelectionChange?: (selection: ReasoningSelection) => void; onAttach: () => Promise<void>; onRemoveAttachment: (id: string) => void; onSubmit: (value: string, attachments: Attachment[], reasoningLevel?: ReasoningLevel) => void; onCancel: () => void }) {
   const [value, setValue] = useState('');
   const [reasoningLevel, setReasoningLevel] = useState<ReasoningSelection>(reasoningSelection);
   const [reasoningOpen, setReasoningOpen] = useState(false);
@@ -51,6 +51,7 @@ export function Composer({ busy, attachments, variant = 'default', prefill, reas
     window.requestAnimationFrame(() => {
       textareaRef.current?.focus();
       textareaRef.current?.setSelectionRange(prefill.value.length, prefill.value.length);
+      textareaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
   }, [prefill]);
 
@@ -63,7 +64,8 @@ export function Composer({ busy, attachments, variant = 'default', prefill, reas
   };
 
   return (
-    <form className={`composer ${variant === 'start' ? 'composer-start' : ''}`} onSubmit={submit}>
+    <form className={`composer ${variant === 'start' ? 'composer-start' : ''} ${editing ? 'is-editing' : ''}`} onSubmit={submit}>
+      {editing && <div className="composer-editing-state"><span>正在编辑消息，发送后将替换原消息及后续回复</span>{onCancelEdit && <button type="button" onClick={onCancelEdit}>取消</button>}</div>}
       <textarea
         ref={textareaRef}
         value={value}
@@ -82,11 +84,13 @@ export function Composer({ busy, attachments, variant = 'default', prefill, reas
       {attachments.length > 0 && <div className="attachment-list" aria-label="待发送附件">{attachments.map((attachment) => <span className="attachment-chip" key={attachment.id}><span className="attachment-chip-name">{attachment.name}</span><small>{Math.max(1, Math.round(attachment.size / 1024))} KB</small><button type="button" onClick={() => onRemoveAttachment(attachment.id)} aria-label={`移除附件 ${attachment.name}`}>×</button></span>)}</div>}
       <div className="composer-actions">
         <div className="composer-tools"><button type="button" className="tool-button" onClick={() => void onAttach()} disabled={busy} aria-label="添加附件">＋ 附件</button><div className="reasoning-picker" ref={reasoningPickerRef}><button type="button" className="reasoning-trigger" onClick={() => setReasoningOpen((open) => !open)} disabled={busy} aria-label={`推理级别：${reasoningOptions.find((option) => option.value === reasoningLevel)?.label}`} aria-haspopup="menu" aria-expanded={reasoningOpen}><BrainCircuit size={14} aria-hidden="true" /><span>{reasoningOptions.find((option) => option.value === reasoningLevel)?.label}</span><ChevronDown size={13} aria-hidden="true" /></button>{reasoningOpen && <div className="reasoning-menu" role="menu" aria-label="选择推理级别">{reasoningOptions.map((option) => <button type="button" key={option.value} className={reasoningLevel === option.value ? 'is-selected' : ''} role="menuitemradio" aria-checked={reasoningLevel === option.value} onClick={() => { setReasoningLevel(option.value); setReasoningOpen(false); }}><span>{option.label}</span>{reasoningLevel === option.value && <Check size={13} aria-hidden="true" />}</button>)}</div>}</div></div>
+        <div className="composer-submit-actions">
         {busy ? (
           <button type="button" className="send-button stop" onClick={onCancel} aria-label="停止处理">停止</button>
         ) : (
           <button type="submit" className="send-button" aria-label="发送消息">发送</button>
         )}
+        </div>
       </div>
     </form>
   );

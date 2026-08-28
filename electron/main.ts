@@ -13,6 +13,9 @@ import { TaskReminderScheduler } from './task-reminders';
 import { BROWSER_ARTIFACT_SCHEME, BrowserArtifactStore, browserImagesFromToolResult, type BrowserArtifact } from './browser-artifacts';
 import { ComputerUseLease, redactComputerUseToolInput, type ComputerUseToolName } from './computer-use';
 import { applicationVersion } from './app-info';
+import { getAgentProfile, isAgentProfileId, loadAgentProfilePrompt, formatRuntimeContext } from './agent-profiles';
+import { MAX_CONVERSATION_BACKUP_BYTES, conversationBackupMarkdown, parseConversationBackup } from './conversation-backup';
+import { testProviderConnection, type ProviderTestResult } from './provider-test';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: TASK_ASSET_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
@@ -31,6 +34,9 @@ let taskReminders: TaskReminderScheduler;
 let pendingTaskOpen: { boardId: string; taskId: string } | null = null;
 const activeRuns = new Map<string, { controller: AbortController; conversationId: string; inputMessageId: string; replayUser?: { ordinal: number; content: string } }>();
 const pendingApprovals = new Map<string, { runId: string; senderId: number; finish: (approved: boolean) => void }>();
+let shutdownRequested = false;
+let shutdownReady = false;
+let resourcesClosed = false;
 type StoredAttachment = Attachment & { data: Uint8Array };
 type Attachment = { id: string; name: string; mimeType: string; size: number };
 const attachments = new Map<string, StoredAttachment>();
@@ -291,6 +297,8 @@ async function executeRun(sender: WebContents, runId: string, conversationId: st
   let runUsage: RunUsage | undefined;
   const browserUseConfig = store.getBrowserUseConfig();
   const computerUseConfig = store.getComputerUseConfig();
+  const profileId = store.getConversationProfile(conversationId);
+  const profile = getAgentProfile(profileId);
   let releaseComputerUse: (() => void) | undefined;
   let runtime: ReturnType<typeof createPiRuntime> | undefined;
   try {
@@ -298,6 +306,8 @@ async function executeRun(sender: WebContents, runId: string, conversationId: st
     runtime = createPiRuntime({ sessionFactory: createPiSessionFactory(config, apiKey, {
     agentDir: path.join(app.getPath('userData'), 'pi-agent'),
     yuhengSystemPrompt: loadYuhengSystemPrompt(app.getAppPath()),
+    profilePrompt: loadAgentProfilePrompt(app.getAppPath(), profileId),
+    runtimeContext: profile.timeContext === 'full' ? formatRuntimeContext() : undefined,
     thinkingLevel: reasoningLevel,
     taskService: {
       listBoards: () => store.listTaskBoards(),
@@ -380,7 +390,8 @@ async function executeRun(sender: WebContents, runId: string, conversationId: st
       store.finishRun(runId, 'cancelled');
       emit(sender, { type: 'cancelled', runId, conversationId });
     } else {
-      const message = error instanceof Error ? error.message : 'Provider request failed.';
+      const rawMessage = error instanceof Error ? error.message : 'Provider request failed.';
+      const message = (apiKey ? rawMessage.replaceAll(apiKey, '[redacted]') : rawMessage).slice(0, 2_000);
       store.finishRun(runId, cancelled ? 'cancelled' : 'failed', message);
       if (cancelled) emit(sender, { type: 'cancelled', runId, conversationId });
       else emit(sender, { type: 'failed', runId, conversationId, error: message });
@@ -394,6 +405,31 @@ async function executeRun(sender: WebContents, runId: string, conversationId: st
       activeRuns.delete(runId);
     }
   }
+}
+
+function closeResources(): void {
+  if (resourcesClosed) return;
+  // A timed-out run may still be unwinding in executeRun. Keep SQLite open so
+  // its final cancellation write cannot race a closed connection; process exit
+  // will reclaim the handle if the worker never responds.
+  if (activeRuns.size > 0) return;
+  resourcesClosed = true;
+  taskReminders?.dispose();
+  void browserUse?.dispose();
+  store?.close();
+}
+
+function waitForActiveRuns(timeoutMs: number): Promise<void> {
+  if (activeRuns.size === 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const timer = setInterval(() => {
+      if (activeRuns.size === 0 || Date.now() - started >= timeoutMs) {
+        clearInterval(timer);
+        resolve();
+      }
+    }, 25);
+  });
 }
 
 function createWindow(): BrowserWindow {
@@ -506,7 +542,21 @@ app.whenReady().then(() => {
   ipcMain.handle('conversation-projects:rename', (_event, projectId: unknown, name: unknown): ConversationProject => store.renameConversationProject(assertText(projectId, 'projectId'), assertText(name, 'name')));
   ipcMain.handle('conversation-projects:delete', (_event, projectId: unknown) => store.deleteConversationProject(assertText(projectId, 'projectId')));
   ipcMain.handle('conversations:messages', (_event, conversationId: unknown) => store.listMessages(assertText(conversationId, 'conversationId')));
-  ipcMain.handle('conversations:create', (_event, title: unknown, projectId: unknown) => store.createConversation(typeof title === 'string' && title.trim() ? title.trim() : undefined, typeof projectId === 'string' && projectId.trim() ? projectId.trim() : undefined));
+  ipcMain.handle('conversations:create', (_event, title: unknown, projectId: unknown, providerId: unknown, profileId: unknown) => {
+    const selectedProfile = profileId == null ? undefined : (isAgentProfileId(profileId) ? profileId : (() => { throw new Error('Profile not found.'); })());
+    return store.createConversation(typeof title === 'string' && title.trim() ? title.trim() : undefined, typeof projectId === 'string' && projectId.trim() ? projectId.trim() : undefined, typeof providerId === 'string' && providerId.trim() ? providerId.trim() : undefined, selectedProfile);
+  });
+  ipcMain.handle('conversations:set-provider', (_event, conversationId: unknown, providerId: unknown) => {
+    const id = assertText(conversationId, 'conversationId');
+    store.setConversationProvider(id, assertText(providerId, 'providerId'));
+    return store.getConversation(id);
+  });
+  ipcMain.handle('conversations:set-profile', (_event, conversationId: unknown, profileId: unknown) => {
+    const id = assertText(conversationId, 'conversationId');
+    if (!isAgentProfileId(profileId)) throw new Error('Profile not found.');
+    store.setConversationProfile(id, profileId);
+    return store.getConversation(id);
+  });
   ipcMain.handle('conversations:rename', (_event, conversationId: unknown, title: unknown) => store.renameConversation(assertText(conversationId, 'conversationId'), assertText(title, 'title')));
   ipcMain.handle('conversations:move', (_event, conversationId: unknown, projectId: unknown) => store.moveConversation(assertText(conversationId, 'conversationId'), assertText(projectId, 'projectId')));
   ipcMain.handle('conversations:archive', (_event, conversationId: unknown, archived: unknown) => store.setConversationArchived(assertText(conversationId, 'conversationId'), archived === true));
@@ -516,6 +566,30 @@ app.whenReady().then(() => {
     for (const run of activeRuns.values()) if (run.conversationId === id) throw new Error('该会话仍在处理中，请先停止运行。');
     store.deleteConversation(id);
     void fs.rm(path.join(app.getPath('userData'), 'pi-agent', 'sessions', id), { recursive: true, force: true });
+  });
+  ipcMain.handle('conversations:export', async (event, conversationId: unknown) => {
+    const id = assertText(conversationId, 'conversationId');
+    const backup = store.exportConversation(id);
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const result = owner
+      ? await dialog.showSaveDialog(owner, { defaultPath: `${backup.conversation.title || '会话'}.json`, filters: [{ name: '玉衡会话备份', extensions: ['json'] }, { name: 'Markdown', extensions: ['md'] }] })
+      : await dialog.showSaveDialog({ defaultPath: `${backup.conversation.title || '会话'}.json`, filters: [{ name: '玉衡会话备份', extensions: ['json'] }, { name: 'Markdown', extensions: ['md'] }] });
+    if (result.canceled || !result.filePath) return null;
+    const content = result.filePath.toLowerCase().endsWith('.md') ? conversationBackupMarkdown(backup) : JSON.stringify(backup, null, 2);
+    await fs.writeFile(result.filePath, content, 'utf8');
+    return result.filePath;
+  });
+  ipcMain.handle('conversations:import', async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const result = owner
+      ? await dialog.showOpenDialog(owner, { properties: ['openFile'], filters: [{ name: '玉衡会话备份', extensions: ['json'] }] })
+      : await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: '玉衡会话备份', extensions: ['json'] }] });
+    if (result.canceled || !result.filePaths[0]) return null;
+    const filePath = result.filePaths[0];
+    const stat = await fs.stat(filePath);
+    if (stat.size > MAX_CONVERSATION_BACKUP_BYTES) throw new Error('会话备份超过 5 MB。');
+    const parsed = parseConversationBackup(JSON.parse(await fs.readFile(filePath, 'utf8')));
+    return store.importConversation(parsed);
   });
   ipcMain.handle('tasks:boards:list', (): TaskBoard[] => store.listTaskBoards());
   ipcMain.handle('tasks:boards:create', (_event, rawName: unknown): TaskBoard => {
@@ -527,6 +601,15 @@ app.whenReady().then(() => {
     const board = store.renameTaskBoard(assertText(boardId, 'boardId'), taskBoardName(rawName));
     emitTaskBoardsChanged();
     return board;
+  });
+  ipcMain.handle('tasks:boards:reorder', (_event, boardId: unknown, targetBoardId: unknown): TaskBoard[] => {
+    const boards = store.reorderTaskBoards(assertText(boardId, 'boardId'), assertText(targetBoardId, 'targetBoardId'));
+    emitTaskBoardsChanged();
+    return boards;
+  });
+  ipcMain.handle('tasks:boards:delete', (_event, boardId: unknown) => {
+    store.deleteTaskBoard(assertText(boardId, 'boardId'));
+    emitTaskBoardsChanged();
   });
   ipcMain.handle('tasks:list', (_event, boardId: unknown) => store.listTasks(assertText(boardId, 'boardId')));
   ipcMain.handle('tasks:open-request:take', () => {
@@ -555,6 +638,25 @@ app.whenReady().then(() => {
     handleTaskChanged(task);
     return task;
   });
+  ipcMain.handle('tasks:reorder', (_event, taskId: unknown, targetTaskId: unknown) => {
+    const tasks = store.reorderTask(assertText(taskId, 'taskId'), assertText(targetTaskId, 'targetTaskId'));
+    emitTaskBoardsChanged();
+    return tasks;
+  });
+  ipcMain.handle('tasks:move-board', (_event, taskId: unknown, boardId: unknown) => {
+    const task = store.moveTaskToBoard(assertText(taskId, 'taskId'), assertText(boardId, 'boardId'));
+    handleTaskChanged(task);
+    return task;
+  });
+  ipcMain.handle('tasks:copy-board', (_event, taskId: unknown, boardId: unknown) => {
+    const task = store.copyTaskToBoard(assertText(taskId, 'taskId'), assertText(boardId, 'boardId'));
+    handleTaskChanged(task);
+    return task;
+  });
+  ipcMain.handle('tasks:delete', (_event, taskId: unknown) => {
+    store.deleteTask(assertText(taskId, 'taskId'));
+    emitTaskBoardsChanged();
+  });
   ipcMain.handle('tasks:assets:import', (_event, raw: unknown) => importTaskAsset(raw));
   ipcMain.handle('tasks:assets:pick', async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender);
@@ -582,7 +684,13 @@ app.whenReady().then(() => {
   ipcMain.handle('runs:list', (_event, conversationId: unknown) => store.listRuns(assertText(conversationId, 'conversationId')));
   ipcMain.handle('provider:get', () => {
     const provider = store.getProvider();
-    return provider ? { ...provider, hasApiKey: secrets.hasProviderKey() } : null;
+    return provider ? { ...provider, hasApiKey: secrets.hasProviderKey(provider.id ?? 'default') } : null;
+  });
+  ipcMain.handle('provider:list', () => store.listProviders().map((provider) => ({ ...provider, hasApiKey: secrets.hasProviderKey(provider.id ?? 'default') })));
+  ipcMain.handle('provider:delete', (_event, providerId: unknown) => {
+    const id = assertText(providerId, 'providerId');
+    store.deleteProvider(id);
+    secrets.deleteProviderKey(id);
   });
   ipcMain.handle('provider:save', (_event, raw: unknown) => {
     if (!raw || typeof raw !== 'object') throw new Error('Provider configuration is required.');
@@ -591,17 +699,32 @@ app.whenReady().then(() => {
     if (!protocol) throw new Error('Unsupported provider protocol.');
     const contextWindow = input.contextWindow == null ? DEFAULT_PROVIDER_CONTEXT_WINDOW : Number(input.contextWindow);
     if (!Number.isInteger(contextWindow) || contextWindow < MIN_PROVIDER_CONTEXT_WINDOW || contextWindow > MAX_PROVIDER_CONTEXT_WINDOW) throw new Error(`上下文窗口必须是 ${MIN_PROVIDER_CONTEXT_WINDOW.toLocaleString()} 到 ${MAX_PROVIDER_CONTEXT_WINDOW.toLocaleString()} 之间的整数。`);
+    const providerId = typeof input.id === 'string' && input.id.trim() ? input.id.trim() : undefined;
     const config = {
+      ...(providerId ? { id: providerId } : {}),
       protocol,
       baseUrl: assertText(input.baseUrl, 'baseUrl').replace(/\/$/, ''),
       model: assertText(input.model, 'model'),
       displayName: assertText(input.displayName, 'displayName'),
       contextWindow,
-    } satisfies Omit<ProviderConfig, 'hasApiKey'>;
+    } satisfies Omit<ProviderConfig, 'hasApiKey' | 'id'> & { id?: string };
     const apiKey = typeof input.apiKey === 'string' ? input.apiKey.trim() : '';
-    if (apiKey) secrets.saveProviderKey(apiKey);
-    else if (!secrets.hasProviderKey()) throw new Error('API key is required.');
-    return { ...store.saveProvider(config), hasApiKey: secrets.hasProviderKey() };
+    if (!apiKey && (!providerId || !secrets.hasProviderKey(providerId))) throw new Error('API key is required.');
+    const saved = store.saveProvider(config);
+    const savedId = assertText(saved.id, 'providerId');
+    if (apiKey) secrets.saveProviderKey(savedId, apiKey);
+    return { ...saved, id: savedId, hasApiKey: secrets.hasProviderKey(savedId) };
+  });
+  ipcMain.handle('provider:test', async (_event, raw: unknown): Promise<ProviderTestResult> => {
+    if (!raw || typeof raw !== 'object') throw new Error('Provider configuration is required.');
+    const input = raw as Record<string, unknown>;
+    const protocol = input.protocol === 'anthropic' ? 'anthropic' : input.protocol === 'openai' ? 'openai' : null;
+    if (!protocol) throw new Error('Unsupported provider protocol.');
+    const providerId = typeof input.id === 'string' && input.id.trim() ? input.id.trim() : undefined;
+    const apiKey = typeof input.apiKey === 'string' && input.apiKey.trim() ? input.apiKey.trim() : providerId ? secrets.getProviderKey(providerId) : null;
+    if (!apiKey) throw new Error('API key is required.');
+    const config: ProviderConfig = { id: providerId ?? 'test', protocol, baseUrl: assertText(input.baseUrl, 'baseUrl').replace(/\/$/, ''), model: assertText(input.model, 'model'), displayName: typeof input.displayName === 'string' ? input.displayName : '测试 Provider', contextWindow: Number(input.contextWindow) || DEFAULT_PROVIDER_CONTEXT_WINDOW, hasApiKey: true };
+    return testProviderConnection(config, apiKey);
   });
   ipcMain.handle('browser-use:get', (): BrowserUseConfig => store.getBrowserUseConfig());
   ipcMain.handle('browser-use:save', async (_event, raw: unknown): Promise<BrowserUseConfig> => {
@@ -653,8 +776,9 @@ app.whenReady().then(() => {
   ipcMain.handle('runs:start', (event, conversationId: unknown, content: unknown, attachmentIds: unknown, rawReasoningLevel: unknown) => {
     const id = assertText(conversationId, 'conversationId');
     const text = typeof content === 'string' ? content.trim() : '';
-    const config = store.getProvider();
-    const apiKey = secrets.getProviderKey();
+    const providerId = store.getConversationProviderId(id);
+    const config = providerId ? store.getProvider(providerId) : null;
+    const apiKey = providerId ? secrets.getProviderKey(providerId) : null;
     if (!config || !apiKey) throw new Error('请先配置 Provider 和 API Key。');
     const ids = Array.isArray(attachmentIds) ? attachmentIds.filter((id): id is string => typeof id === 'string') : [];
     const runAttachments = ids.map((id) => attachments.get(id)).filter((attachment): attachment is StoredAttachment => Boolean(attachment));
@@ -680,8 +804,9 @@ app.whenReady().then(() => {
     const id = assertText(conversationId, 'conversationId');
     const messageId = assertText(inputMessageId, 'inputMessageId');
     const text = assertText(content, 'content');
-    const config = store.getProvider();
-    const apiKey = secrets.getProviderKey();
+    const providerId = store.getConversationProviderId(id);
+    const config = providerId ? store.getProvider(providerId) : null;
+    const apiKey = providerId ? secrets.getProviderKey(providerId) : null;
     if (!config || !apiKey) throw new Error('请先配置 Provider 和 API Key。');
     for (const run of activeRuns.values()) if (run.conversationId === id) throw new Error('该会话仍在处理中。');
     const reasoningLevel = rawReasoningLevel == null ? undefined : (() => {
@@ -725,10 +850,26 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  if (shutdownReady) {
+    closeResources();
+    return;
+  }
+  if (shutdownRequested) {
+    event.preventDefault();
+    return;
+  }
+  if (activeRuns.size === 0) {
+    for (const approval of pendingApprovals.values()) approval.finish(false);
+    closeResources();
+    return;
+  }
+  event.preventDefault();
+  shutdownRequested = true;
   for (const run of activeRuns.values()) run.controller.abort();
   for (const approval of pendingApprovals.values()) approval.finish(false);
-  taskReminders?.dispose();
-  void browserUse?.dispose();
-  store?.close();
+  void waitForActiveRuns(5_000).then(() => {
+    shutdownReady = true;
+    app.quit();
+  });
 });

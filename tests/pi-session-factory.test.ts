@@ -72,7 +72,7 @@ describe('Pi SDK session factory', () => {
     const port = (server.address() as { port: number }).port;
     const events: string[] = [];
     try {
-      const session = await createPiSessionFactory({ protocol: 'openai', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', contextWindow: 200_000, hasApiKey: false }, 'test-key', { agentDir: path.join(root, 'agent'), yuhengSystemPrompt: 'YUHENG_SYSTEM_PROMPT_SENTINEL' })({ prompt: 'hello', images: [], sessionId: 'session-test', cwd: root, emit: () => undefined });
+      const session = await createPiSessionFactory({ protocol: 'openai', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', contextWindow: 200_000, hasApiKey: false }, 'test-key', { agentDir: path.join(root, 'agent'), yuhengSystemPrompt: 'YUHENG_SYSTEM_PROMPT_SENTINEL', profilePrompt: 'PROFILE_PROMPT_SENTINEL', runtimeContext: '<runtime_context>NOW</runtime_context>' })({ prompt: 'hello', images: [], sessionId: 'session-test', cwd: root, emit: () => undefined });
       session.subscribe((event) => { if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') events.push(event.assistantMessageEvent.delta); });
       await session.prompt('hello');
       session.dispose();
@@ -86,6 +86,8 @@ describe('Pi SDK session factory', () => {
       const systemPrompt = payload.messages.find((message: { role: string }) => message.role === 'system')?.content ?? '';
       assert.match(systemPrompt, /You are an expert coding assistant/);
       assert.match(systemPrompt, /YUHENG_SYSTEM_PROMPT_SENTINEL/);
+      assert.match(systemPrompt, /PROFILE_PROMPT_SENTINEL/);
+      assert.match(systemPrompt, /<runtime_context>NOW<\/runtime_context>/);
       assert.equal(JSON.stringify(payload).includes('DO NOT SEND THIS HIDDEN INSTRUCTION'), false);
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));

@@ -38,7 +38,7 @@ npm install
 npm run dev
 ```
 
-会话运行需要先在应用设置中配置 OpenAI-compatible 或 Anthropic Provider 与 API Key。Pi 默认启用 `read`、`write`、`edit`、`bash` 工具，工作目录位于应用数据目录。
+会话运行需要先在应用设置中配置 OpenAI-compatible 或 Anthropic Provider 与 API Key。设置支持保存多个 Provider；新会话可在左侧选择 Provider，已有会话可在标题栏切换，后续运行和重试都会使用该会话绑定的配置。Pi 默认启用 `read`、`write`、`edit`、`bash` 工具，工作目录位于应用数据目录。
 
 玉衡的产品级系统提示词维护在 [`electron/prompts/yuheng-system.md`](electron/prompts/yuheng-system.md)。运行时会把它追加到 Pi 根据当前工具动态生成的基础系统提示词中，使玉衡身份、个人秘书行为和安全边界保持版本可追踪，同时保留 Browser Use、Computer Use 与任务工具各自的动态说明。
 

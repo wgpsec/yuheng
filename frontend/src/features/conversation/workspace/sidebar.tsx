@@ -1,8 +1,9 @@
 import { Archive, ArchiveRestore, Check, ChevronDown, Folder, FolderOpen, LayoutDashboard, ListTodo, MessageSquare, MessageSquarePlus, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, PinOff, Plus, Search, Settings, Trash2 } from 'lucide-react';
 import { useEffect, useState, type KeyboardEvent } from 'react';
-import type { ConversationProject, TaskBoard } from '../../../contracts/desktop-bridge';
+import type { AgentProfileId, ConversationProject, TaskBoard } from '../../../contracts/desktop-bridge';
+import type { ProviderConfig } from '../../../contracts/desktop-bridge';
 
-export type Conversation = { id: string; projectId: string; title: string; updatedAt?: string; time?: string; archived?: boolean; pinned?: boolean };
+export type Conversation = { id: string; projectId: string; title: string; providerId?: string; profileId?: AgentProfileId; updatedAt?: string; time?: string; archived?: boolean; pinned?: boolean };
 type WorkspaceMode = 'conversation' | 'tasks';
 type ConversationSection = 'pinned' | 'projects' | 'recent';
 type SidebarSort = 'priority' | 'recent' | 'manual';
@@ -35,10 +36,13 @@ export function conversationMenuKey(conversationId: string, placement: string) {
   return `${placement}:${conversationId}`;
 }
 
-export function Sidebar({ conversations, projects, boards, activeId, activeProjectId, activeBoardId, mode, settingsOpen, collapsed, appVersion, onSearch, onSelect, onSelectProject, onSelectBoard, onModeChange, onNew, onRenameConversation, onMoveConversation, onArchiveConversation, onPinConversation, onDeleteConversation, onCreateProject, onRenameProject, onDeleteProject, onCreateBoard, onRenameBoard, onSettings, onToggle }: {
+ export function Sidebar({ conversations, projects, boards, providers, newProviderId, onNewProviderChange, activeId, activeProjectId, activeBoardId, mode, settingsOpen, collapsed, appVersion, onSearch, onSelect, onSelectProject, onSelectBoard, onModeChange, onNew, onRenameConversation, onMoveConversation, onArchiveConversation, onPinConversation, onDeleteConversation, onCreateProject, onRenameProject, onDeleteProject, onCreateBoard, onRenameBoard, onDeleteBoard, onReorderBoard, onMoveTaskToBoard, onSettings, onToggle }: {
   conversations: Conversation[];
   projects: ConversationProject[];
   boards: TaskBoard[];
+  providers: ProviderConfig[];
+  newProviderId: string;
+  onNewProviderChange: (providerId: string) => void;
   activeId: string;
   activeProjectId: string;
   activeBoardId: string;
@@ -51,7 +55,7 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
   onSelectProject: (id: string) => void;
   onSelectBoard: (id: string) => void;
   onModeChange: (mode: WorkspaceMode) => void;
-  onNew: (projectId?: string) => void;
+  onNew: (projectId?: string, providerId?: string) => void;
   onRenameConversation: (id: string, title: string) => Promise<void>;
   onMoveConversation: (id: string, projectId: string) => Promise<void>;
   onArchiveConversation: (id: string, archived: boolean) => Promise<void>;
@@ -62,6 +66,9 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
   onDeleteProject: (id: string) => Promise<void>;
   onCreateBoard: (name: string) => Promise<void>;
   onRenameBoard: (id: string, name: string) => Promise<void>;
+  onDeleteBoard: (id: string) => Promise<void>;
+  onReorderBoard: (id: string, targetId: string) => Promise<void>;
+  onMoveTaskToBoard: (id: string, boardId: string) => Promise<void>;
   onSettings: () => void;
   onToggle: () => void;
 }) {
@@ -70,6 +77,9 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
   const [renamingBoardId, setRenamingBoardId] = useState<string | null>(null);
   const [renamingBoardName, setRenamingBoardName] = useState('');
   const [boardError, setBoardError] = useState<string | null>(null);
+  const [boardMenuId, setBoardMenuId] = useState<string | null>(null);
+  const [draggedBoardId, setDraggedBoardId] = useState<string | null>(null);
+  const [dragOverBoardId, setDragOverBoardId] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [renamingConversation, setRenamingConversation] = useState<RenamingConversation | null>(null);
   const [renamingConversationTitle, setRenamingConversationTitle] = useState('');
@@ -100,6 +110,9 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
     catch { return []; }
   });
   const [sidebarOrganization, setSidebarOrganization] = useState<SidebarOrganization>(() => localStorage.getItem('yuheng-sidebar-organization') === 'list' ? 'list' : 'projects');
+  const [draggedConversationId, setDraggedConversationId] = useState<string | null>(null);
+  const [dragOverProjectId, setDragOverProjectId] = useState<string | null>(null);
+  const [newProviderMenuOpen, setNewProviderMenuOpen] = useState(false);
 
   useEffect(() => { localStorage.setItem('yuheng-expanded-projects', JSON.stringify(expandedProjects)); }, [expandedProjects]);
   useEffect(() => { localStorage.setItem('yuheng-collapsed-sections', JSON.stringify(collapsedSections)); }, [collapsedSections]);
@@ -108,11 +121,13 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
   useEffect(() => { localStorage.setItem('yuheng-sidebar-organization', sidebarOrganization); }, [sidebarOrganization]);
   useEffect(() => {
     const closeMenus = (event: MouseEvent) => {
-      if ((event.target as Element | null)?.closest('.sidebar-section-menu, .sidebar-section-action, .project-menu, .project-menu-button, .conversation-menu, .conversation-menu-button, .project-create-row')) return;
+      if ((event.target as Element | null)?.closest('.sidebar-section-menu, .sidebar-section-action, .project-menu, .project-menu-button, .conversation-menu, .conversation-menu-button, .project-create-row, .task-board-menu, .task-board-nav-rename, .sidebar-provider-picker')) return;
       setSectionMenu(null);
       setProjectMenuId(null);
       setOpenConversationMenu(null);
       setCreatingProject(false);
+      setBoardMenuId(null);
+      setNewProviderMenuOpen(false);
     };
     window.addEventListener('click', closeMenus);
     return () => window.removeEventListener('click', closeMenus);
@@ -144,6 +159,26 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
       setBoardError(null);
     } catch (reason) {
       setBoardError(reason instanceof Error ? reason.message : '修改看板名称失败。');
+    }
+  };
+  const deleteBoard = async (board: TaskBoard) => {
+    if (board.id === 'default') { setBoardError('默认看板不能删除。'); setBoardMenuId(null); return; }
+    if (!window.confirm(`删除看板“${board.name}”？其中的任务也会被删除。此操作无法撤销。`)) return;
+    try { await onDeleteBoard(board.id); setBoardMenuId(null); setBoardError(null); }
+    catch (reason) { setBoardError(reason instanceof Error ? reason.message : '删除任务看板失败。'); }
+  };
+  const reorderBoard = async (sourceId: string, targetId: string) => {
+    if (!sourceId || sourceId === targetId) return;
+    try { await onReorderBoard(sourceId, targetId); setBoardError(null); }
+    catch (reason) { setBoardError(reason instanceof Error ? reason.message : '排序任务看板失败。'); }
+  };
+  const moveTaskToBoard = async (taskId: string, boardId: string) => {
+    if (!taskId || !boardId) return;
+    try {
+      await onMoveTaskToBoard(taskId, boardId);
+      setBoardError(null);
+    } catch (reason) {
+      setBoardError(reason instanceof Error ? reason.message : '移动任务失败。');
     }
   };
   const submitOnEnter = (event: KeyboardEvent<HTMLInputElement>, action: () => Promise<void>) => {
@@ -179,6 +214,7 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
     catch (reason) { setConversationError(reason instanceof Error ? reason.message : '置顶会话失败。'); }
   };
   const moveConversation = async (conversation: Conversation, projectId: string) => {
+    if (conversation.projectId === projectId) return;
     try { await onMoveConversation(conversation.id, projectId); setExpandedProjects((current) => ({ ...current, [projectId]: true })); setOpenConversationMenu(null); setConversationError(null); }
     catch (reason) { setConversationError(reason instanceof Error ? reason.message : '移动会话失败。'); }
   };
@@ -239,7 +275,7 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
   const renderConversation = (conversation: Conversation, placement: string, section: ConversationSection) => {
     const menuKey = conversationMenuKey(conversation.id, placement);
     return (
-    <div className={`conversation-row ${!settingsOpen && activeId === conversation.id ? 'is-selected' : ''} ${sidebarSort === 'manual' ? 'is-sortable' : ''}`} key={conversation.id} draggable={sidebarSort === 'manual'} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/yuheng-conversation', conversation.id); }} onDragOver={(event) => { if (sidebarSort === 'manual') event.preventDefault(); }} onDrop={(event) => { event.preventDefault(); reorderConversation(event.dataTransfer.getData('text/yuheng-conversation'), conversation.id); }}>
+    <div className={`conversation-row ${!settingsOpen && activeId === conversation.id ? 'is-selected' : ''} ${sidebarSort === 'manual' ? 'is-sortable' : ''} ${draggedConversationId === conversation.id ? 'is-dragging' : ''}`} key={conversation.id} draggable={!collapsed} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/yuheng-conversation', conversation.id); setDraggedConversationId(conversation.id); }} onDragEnd={() => { setDraggedConversationId(null); setDragOverProjectId(null); }} onDragOver={(event) => { if (sidebarSort === 'manual') { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }} onDrop={(event) => { event.preventDefault(); reorderConversation(event.dataTransfer.getData('text/yuheng-conversation'), conversation.id); setDraggedConversationId(null); setDragOverProjectId(null); }}>
       {renamingConversation?.key === menuKey && !collapsed ? <input className="conversation-rename-input" autoFocus value={renamingConversationTitle} onChange={(event) => setRenamingConversationTitle(event.target.value)} onBlur={() => void renameConversation()} onKeyDown={(event) => submitOnEnter(event, renameConversation)} aria-label="会话名称" /> : <><button type="button" className="conversation-item" onClick={() => onSelect(conversation.id)} title={conversation.title}><span className="conversation-title">{collapsed ? conversation.title.slice(0, 1) : conversation.title}</span>{!collapsed && <time>{conversation.time ?? (conversation.updatedAt ? new Date(conversation.updatedAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) : '')}</time>}</button>{!collapsed && <button type="button" className="conversation-menu-button" onClick={() => setOpenConversationMenu((current) => current?.key === menuKey ? null : { key: menuKey, section })} aria-expanded={openConversationMenu?.key === menuKey} aria-label={`管理${conversation.title}`} title="管理会话"><MoreHorizontal size={15} /></button>}{openConversationMenu?.key === menuKey && !collapsed && <div className="conversation-menu"><button type="button" onClick={() => { setRenamingConversation({ id: conversation.id, key: menuKey }); setRenamingConversationTitle(conversation.title); setOpenConversationMenu(null); }}><Pencil size={13} />重命名</button><button type="button" onClick={() => void pinConversation(conversation)}>{conversation.pinned ? <PinOff size={13} /> : <Pin size={13} />}{conversation.pinned ? '取消置顶' : '置顶'}</button>{projects.filter((item) => item.id !== conversation.projectId).map((item) => <button type="button" key={item.id} onClick={() => void moveConversation(conversation, item.id)}><Folder size={13} />移至 {item.name}</button>)}<button type="button" onClick={() => void archiveConversation(conversation)}>{conversation.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}{conversation.archived ? '恢复归档' : '归档'}</button><button type="button" className="is-destructive" onClick={() => void deleteConversation(conversation)}><Trash2 size={13} />删除</button></div>}</>}
     </div>
     );
@@ -254,8 +290,8 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
       setExpandedProjects((current) => ({ ...current, [project.id]: !isExpanded }));
       setProjectConversationLimits((current) => ({ ...current, [project.id]: INITIAL_PROJECT_CONVERSATION_LIMIT }));
     };
-    return <div className={`project-group ${project.id === activeProjectId && !settingsOpen ? 'is-active' : ''}`} key={project.id}>
-      <div className="project-row">
+    return <div className={`project-group ${project.id === activeProjectId && !settingsOpen ? 'is-active' : ''} ${dragOverProjectId === project.id ? 'is-drop-target' : ''}`} key={project.id} onDragOver={(event) => { if (!draggedConversationId) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDragOverProjectId(project.id); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragOverProjectId(null); }} onDrop={(event) => { event.preventDefault(); const conversationId = event.dataTransfer.getData('text/yuheng-conversation'); const conversation = conversations.find((item) => item.id === conversationId); setDragOverProjectId(null); setDraggedConversationId(null); if (conversation) void moveConversation(conversation, project.id); }}>
+      <div className="project-row" title={draggedConversationId ? `移至${project.name}` : undefined}>
         {renamingProjectId === project.id && !collapsed ? <input className="project-rename-input" autoFocus value={renamingProjectName} onChange={(event) => setRenamingProjectName(event.target.value)} onBlur={() => void renameProject()} onKeyDown={(event) => submitOnEnter(event, renameProject)} aria-label="项目名称" /> : <>
           <button type="button" className="project-select" onClick={toggleProject} title={project.name} aria-expanded={isExpanded}>{isExpanded ? <FolderOpen size={15} /> : <Folder size={15} />} {!collapsed && <span>{project.name}</span>}</button>
           {!collapsed && <button type="button" className="project-menu-button" onClick={() => setProjectMenuId((current) => current === project.id ? null : project.id)} aria-expanded={projectMenuId === project.id} aria-label={`管理${project.name}`} title="管理项目"><MoreHorizontal size={15} /></button>}
@@ -312,13 +348,14 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
           <button type="button" onClick={() => { if (collapsed) onToggle(); setCreatingBoard(true); }} aria-label="新建任务看板" title="新建任务看板"><Plus size={14} /></button>
         </div>
         <nav className="task-board-list" aria-label="任务看板">
-          {boards.map((board) => <div className={`task-board-nav-row ${!settingsOpen && activeBoardId === board.id ? 'is-selected' : ''}`} key={board.id}>
+          {boards.map((board) => <div className={`task-board-nav-row ${!settingsOpen && activeBoardId === board.id ? 'is-selected' : ''} ${dragOverBoardId === board.id ? 'is-drop-target' : ''} ${draggedBoardId === board.id ? 'is-dragging' : ''}`} key={board.id} draggable={!collapsed} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/yuheng-board', board.id); setDraggedBoardId(board.id); }} onDragEnd={() => { setDraggedBoardId(null); setDragOverBoardId(null); }} onDragOver={(event) => { const taskDrag = event.dataTransfer.types.includes('text/task-id') || event.dataTransfer.types.includes('text/plain'); if (taskDrag) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDragOverBoardId(board.id); return; } if (!draggedBoardId) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDragOverBoardId(board.id); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragOverBoardId(null); }} onDrop={(event) => { event.preventDefault(); const taskId = event.dataTransfer.getData('text/task-id') || event.dataTransfer.getData('text/plain'); const sourceId = event.dataTransfer.getData('text/yuheng-board'); setDraggedBoardId(null); setDragOverBoardId(null); if (taskId) { void moveTaskToBoard(taskId, board.id); return; } void reorderBoard(sourceId, board.id); }} onContextMenu={(event) => { if (collapsed) return; event.preventDefault(); setBoardMenuId((current) => current === board.id ? null : board.id); }}>
             {renamingBoardId === board.id && !collapsed ? <input autoFocus value={renamingBoardName} onChange={(event) => setRenamingBoardName(event.target.value)} onBlur={() => void renameBoard()} onKeyDown={(event) => submitOnEnter(event, renameBoard)} aria-label="任务看板名称" /> : <>
               <button type="button" className="task-board-nav-select" onClick={() => onSelectBoard(board.id)} title={board.name}>
                 <LayoutDashboard size={15} aria-hidden="true" />
                 {!collapsed && <span>{board.name}</span>}
               </button>
-              {!collapsed && <button type="button" className="task-board-nav-rename" onClick={() => { setRenamingBoardId(board.id); setRenamingBoardName(board.name); }} aria-label={`修改${board.name}名称`} title="修改看板名称"><Pencil size={12} /></button>}
+              {!collapsed && <button type="button" className="task-board-nav-rename" onClick={(event) => { event.stopPropagation(); setBoardMenuId((current) => current === board.id ? null : board.id); }} aria-expanded={boardMenuId === board.id} aria-label={`编辑${board.name}`} title="编辑看板"><Pencil size={12} /></button>}
+              {boardMenuId === board.id && !collapsed && <div className="task-board-menu"><button type="button" onClick={() => { setRenamingBoardId(board.id); setRenamingBoardName(board.name); setBoardMenuId(null); }}><Pencil size={13} />重命名</button><button type="button" className="is-destructive" onClick={() => void deleteBoard(board)}><Trash2 size={13} />删除看板</button></div>}
             </>}
           </div>)}
           {creatingBoard && !collapsed && <div className="task-board-create-row"><LayoutDashboard size={15} /><input autoFocus value={newBoardName} onChange={(event) => setNewBoardName(event.target.value)} onBlur={() => { if (!newBoardName.trim()) setCreatingBoard(false); }} onKeyDown={(event) => submitOnEnter(event, createBoard)} placeholder="看板名称" aria-label="新任务看板名称" /><button type="button" onClick={() => void createBoard()} disabled={!newBoardName.trim()}>添加</button></div>}
@@ -329,6 +366,7 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
 
       <div className="sidebar-bottom">
         {mode === 'conversation' && <div className="sidebar-new-chat">
+          {!collapsed && providers.length > 0 && <div className="sidebar-provider-picker"><span>新会话使用</span><span className="sidebar-provider-control"><button type="button" className="sidebar-provider-trigger" aria-haspopup="listbox" aria-expanded={newProviderMenuOpen} aria-label={`新会话使用的 Provider：${providers.find((provider) => provider.id === newProviderId)?.displayName ?? '未选择'}`} onClick={() => setNewProviderMenuOpen((current) => !current)}><span>{providers.find((provider) => provider.id === newProviderId)?.displayName ?? '未选择'}</span><ChevronDown size={13} aria-hidden="true" /></button>{newProviderMenuOpen && <span className="sidebar-provider-menu" role="listbox" aria-label="选择新会话 Provider">{providers.map((provider) => <button type="button" role="option" aria-selected={provider.id === newProviderId} className={`${provider.id === newProviderId ? 'is-selected' : ''} ${provider.hasApiKey ? '' : 'is-disabled'}`} key={provider.id} disabled={!provider.hasApiKey} onClick={() => { setNewProviderMenuOpen(false); onNewProviderChange(provider.id); }}><span>{provider.displayName}</span>{provider.id === newProviderId && <span aria-hidden="true">✓</span>}</button>)}</span>}</span></div>}
           <button type="button" className="primary-action" onClick={() => onNew(activeProjectId)} aria-label="新会话" title="新会话">
             <MessageSquarePlus size={17} aria-hidden="true" />
             {!collapsed && <span>新会话</span>}
