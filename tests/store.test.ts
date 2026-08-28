@@ -70,6 +70,34 @@ describe('AppStore run activities', () => {
       fs.rmSync(dataDir, { recursive: true, force: true });
     }
   });
+
+  it('persists provider usage and replaces the visible branch from a user message', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
+    const store = new AppStore(dataDir);
+    try {
+      const conversation = store.createConversation();
+      const first = store.addMessage(conversation.id, 'user', '第一问');
+      store.startRun('run-1', conversation.id, first.id);
+      store.addMessage(conversation.id, 'assistant', '第一答');
+      store.finishRun('run-1', 'completed', undefined, { inputTokens: 120, outputTokens: 30, totalTokens: 150, contextTokens: 900, contextWindow: 128000, contextPercent: 0.7 });
+      const second = store.addMessage(conversation.id, 'user', '第二问');
+      store.startRun('run-2', conversation.id, second.id);
+      store.addMessage(conversation.id, 'assistant', '旧的第二答');
+      store.finishRun('run-2', 'completed');
+
+      const replacement = store.replaceFromUserMessage(conversation.id, second.id, '修改后的第二问');
+
+      assert.deepEqual(store.listMessages(conversation.id).map(({ role, content }) => [role, content]), [
+        ['user', '第一问'], ['assistant', '第一答'], ['user', '修改后的第二问'],
+      ]);
+      assert.equal(store.listRuns(conversation.id).some((run) => run.id === 'run-2'), false);
+      assert.deepEqual(store.listRuns(conversation.id).find((run) => run.id === 'run-1')?.usage, { inputTokens: 120, outputTokens: 30, totalTokens: 150, contextTokens: 900, contextWindow: 128000, contextPercent: 0.7 });
+      assert.equal(replacement.role, 'user');
+    } finally {
+      store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('AppStore conversations', () => {
@@ -77,6 +105,8 @@ describe('AppStore conversations', () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
     const database = new DatabaseSync(path.join(dataDir, 'yuheng.sqlite'));
     try {
+      database.exec("CREATE TABLE conversation_projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)");
+      database.prepare('INSERT INTO conversation_projects (id, name, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run('personal', '个人事务', 0, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z');
       database.exec("CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)");
       database.prepare('INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)').run('legacy', '历史会话', '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z');
     } finally {
@@ -85,7 +115,7 @@ describe('AppStore conversations', () => {
 
     const store = new AppStore(dataDir);
     try {
-      assert.deepEqual(store.listConversations(), [{ id: 'legacy', title: '历史会话', updatedAt: '2026-08-01T00:00:00.000Z', archived: false, pinned: false }]);
+      assert.deepEqual(store.listConversations(), [{ id: 'legacy', projectId: 'personal', title: '历史会话', updatedAt: '2026-08-01T00:00:00.000Z', archived: false, pinned: false }]);
     } finally {
       store.close();
       fs.rmSync(dataDir, { recursive: true, force: true });
@@ -146,6 +176,29 @@ describe('AppStore conversations', () => {
       assert.equal(store.listConversations(true)[0].id, first.id);
       assert.equal(store.setConversationPinned(first.id, false).pinned, false);
       assert.equal(store.listConversations(true).slice(0, 2).some((item) => item.pinned), false);
+    } finally {
+      store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('groups conversations into persistent projects and returns them to the default project on deletion', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
+    let store = new AppStore(dataDir);
+    try {
+      const project = store.createConversationProject('玉衡开发');
+      const conversation = store.createConversation('侧栏设计', project.id);
+      assert.equal(conversation.projectId, project.id);
+      assert.equal(store.renameConversationProject(project.id, '玉衡桌面端').name, '玉衡桌面端');
+
+      store.close();
+      store = new AppStore(dataDir);
+      assert.equal(store.listConversationProjects().find((item) => item.id === project.id)?.name, '玉衡桌面端');
+      assert.equal(store.getConversation(conversation.id).projectId, project.id);
+
+      store.deleteConversationProject(project.id);
+      assert.equal(store.getConversation(conversation.id).projectId, 'personal');
+      assert.equal(store.listConversationProjects().some((item) => item.id === project.id), false);
     } finally {
       store.close();
       fs.rmSync(dataDir, { recursive: true, force: true });

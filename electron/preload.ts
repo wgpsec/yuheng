@@ -9,9 +9,16 @@ contextBridge.exposeInMainWorld('desktopBridge', {
   },
   conversations: {
     list: (includeArchived?: boolean) => ipcRenderer.invoke('conversations:list', includeArchived),
+    projects: {
+      list: () => ipcRenderer.invoke('conversation-projects:list'),
+      create: (name: string) => ipcRenderer.invoke('conversation-projects:create', name),
+      rename: (projectId: string, name: string) => ipcRenderer.invoke('conversation-projects:rename', projectId, name),
+      delete: (projectId: string) => ipcRenderer.invoke('conversation-projects:delete', projectId),
+    },
     messages: (conversationId: string) => ipcRenderer.invoke('conversations:messages', conversationId),
-    create: (title?: string) => ipcRenderer.invoke('conversations:create', title),
+    create: (title?: string, projectId?: string) => ipcRenderer.invoke('conversations:create', title, projectId),
     rename: (conversationId: string, title: string) => ipcRenderer.invoke('conversations:rename', conversationId, title),
+    move: (conversationId: string, projectId: string) => ipcRenderer.invoke('conversations:move', conversationId, projectId),
     archive: (conversationId: string, archived: boolean) => ipcRenderer.invoke('conversations:archive', conversationId, archived),
     pin: (conversationId: string, pinned: boolean) => ipcRenderer.invoke('conversations:pin', conversationId, pinned),
     delete: (conversationId: string) => ipcRenderer.invoke('conversations:delete', conversationId),
@@ -65,6 +72,7 @@ contextBridge.exposeInMainWorld('desktopBridge', {
   runs: {
     list: (conversationId: string) => ipcRenderer.invoke('runs:list', conversationId),
     start: (conversationId: string, content: string, attachmentIds?: string[], reasoningLevel?: 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max') => ipcRenderer.invoke('runs:start', conversationId, content, attachmentIds, reasoningLevel),
+    retry: (conversationId: string, inputMessageId: string, content: string, reasoningLevel?: 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max') => ipcRenderer.invoke('runs:retry', conversationId, inputMessageId, content, reasoningLevel),
     cancel: (runId: string) => ipcRenderer.invoke('runs:cancel', runId),
     approve: (approvalId: string, approved: boolean) => ipcRenderer.invoke('runs:approve', approvalId, approved),
     onEvent: (listener: (event: unknown) => void) => {

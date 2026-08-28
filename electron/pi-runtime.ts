@@ -18,9 +18,12 @@ export type PiRuntimeEvent =
   | { type: 'text_delta'; delta: string }
   | { type: 'tool_start'; toolCallId: string; toolName: string; args?: unknown }
   | { type: 'tool_end'; toolCallId: string; toolName: string; isError: boolean; result?: unknown }
-  | { type: 'completed' }
+  | { type: 'completed'; usage?: PiRunUsage }
   | { type: 'failed'; error: string }
   | { type: 'cancelled' };
+
+export type PiHistoryMessage = { role: 'user' | 'assistant'; content: string; createdAt: string };
+export type PiRunUsage = { inputTokens: number; outputTokens: number; totalTokens: number; contextTokens: number | null; contextWindow: number; contextPercent: number | null };
 
 export type PiRuntimeInput = {
   prompt: string;
@@ -29,6 +32,8 @@ export type PiRuntimeInput = {
   cwd: string;
   signal?: AbortSignal;
   emit: (event: PiRuntimeEvent) => void;
+  history?: PiHistoryMessage[];
+  replayUser?: { ordinal: number; content: string };
 };
 
 export type PiSession = {
@@ -37,6 +42,7 @@ export type PiSession = {
   abort: () => Promise<void>;
   dispose: () => void;
   shutdown?: () => Promise<void>;
+  stats?: () => { tokens: { input: number; output: number; total: number }; contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null } };
 };
 
 export type PiSessionFactory = (input: PiRuntimeInput) => Promise<PiSession>;
@@ -70,6 +76,17 @@ function providerBaseUrl(config: ProviderConfig): string {
   return config.protocol === 'anthropic' ? baseUrl.replace(/\/v1$/, '') : baseUrl;
 }
 
+function messageText(content: unknown): string | null {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return null;
+  const parts = content.map((part) => {
+    if (!part || typeof part !== 'object') return '';
+    const value = (part as { type?: unknown; text?: unknown });
+    return value.type === 'text' && typeof value.text === 'string' ? value.text : '';
+  });
+  return parts.join('');
+}
+
 /** Builds a Pi session using only the explicitly configured provider and tools. */
 export function createPiSessionFactory(config: ProviderConfig, apiKey: string, options: PiSessionFactoryOptions): PiSessionFactory {
   if (options.browserUse && options.computerUse) throw new Error('Browser Use and Computer Use cannot be enabled together.');
@@ -97,7 +114,7 @@ export function createPiSessionFactory(config: ProviderConfig, apiKey: string, o
     });
     const model = modelRuntime.getModel(providerId, config.model);
     if (!model) throw new Error(`无法加载模型配置：${config.model}`);
-    const settingsManager = sdk.SettingsManager.inMemory({ compaction: { enabled: false } });
+    const settingsManager = sdk.SettingsManager.inMemory({ compaction: { enabled: true } });
     const resourceLoader = new sdk.DefaultResourceLoader({
       cwd: input.cwd,
       agentDir: path.join(options.agentDir, 'resources'),
@@ -177,13 +194,35 @@ export function createPiSessionFactory(config: ProviderConfig, apiKey: string, o
     })() : [];
     const customTools = [...browserTools, ...taskTools];
     const tools = ['read', 'write', 'edit', 'bash', ...(options.browserUse ? BROWSER_TOOL_NAMES : []), ...(options.computerUse ? COMPUTER_USE_TOOL_NAMES : []), ...(options.taskService ? TASK_TOOL_NAMES : [])];
+    const sessionDir = path.join(options.agentDir, 'sessions', input.sessionId);
+    const sessionManager = sdk.SessionManager.continueRecent(input.cwd, sessionDir);
+    if (input.replayUser) {
+      const userEntries = sessionManager.getBranch().filter((entry) => entry.type === 'message' && entry.message.role === 'user');
+      const currentEntry = userEntries[input.replayUser.ordinal];
+      if (currentEntry && currentEntry.type === 'message' && currentEntry.message.role === 'user' && messageText((currentEntry.message as { content: unknown }).content) === input.replayUser.content) {
+        if (currentEntry.parentId) sessionManager.branch(currentEntry.parentId);
+        else sessionManager.resetLeaf();
+      }
+    }
+    if (input.history && sessionManager.getEntries().length === 0) {
+      for (const message of input.history) {
+        if (message.role === 'user') {
+          sessionManager.appendMessage({ role: 'user', content: message.content, timestamp: Date.parse(message.createdAt) || Date.now() });
+        } else {
+          sessionManager.appendMessage({
+            role: 'assistant', content: [{ type: 'text', text: message.content }], api: providerApi(config.protocol), provider: providerId,
+            model: config.model, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: 'stop', timestamp: Date.parse(message.createdAt) || Date.now(),
+          });
+        }
+      }
+    }
     const { session } = await sdk.createAgentSession({
       cwd: input.cwd,
       model,
       modelRuntime,
       settingsManager,
       resourceLoader,
-      sessionManager: sdk.SessionManager.inMemory(input.cwd, { id: input.sessionId }),
+      sessionManager,
       thinkingLevel: options.thinkingLevel,
       tools,
       customTools,
@@ -209,6 +248,10 @@ export function createPiSessionFactory(config: ProviderConfig, apiKey: string, o
       prompt: (text, promptOptions) => session.prompt(text, promptOptions),
       abort: () => session.abort(),
       shutdown,
+      stats: () => {
+        const stats = session.getSessionStats();
+        return { tokens: { input: stats.tokens.input, output: stats.tokens.output, total: stats.tokens.total }, contextUsage: stats.contextUsage };
+      },
       dispose: () => session.dispose(),
     };
   };
@@ -223,11 +266,25 @@ export function createPiRuntime(options: { sessionFactory: PiSessionFactory }): 
   let unsubscribe: (() => void) | undefined;
   let removeAbortListener: (() => void) | undefined;
   let terminal = false;
+  let startedStats: ReturnType<NonNullable<PiSession['stats']>> | undefined;
 
   const emitTerminal = (input: PiRuntimeInput, event: PiRuntimeEvent): void => {
     if (terminal) return;
     terminal = true;
     input.emit(event);
+  };
+
+  const completedEvent = (): PiRuntimeEvent => {
+    const stats = session?.stats?.();
+    if (!stats) return { type: 'completed' };
+    return { type: 'completed', usage: {
+      inputTokens: Math.max(0, stats.tokens.input - (startedStats?.tokens.input ?? 0)),
+      outputTokens: Math.max(0, stats.tokens.output - (startedStats?.tokens.output ?? 0)),
+      totalTokens: Math.max(0, stats.tokens.total - (startedStats?.tokens.total ?? 0)),
+      contextTokens: stats.contextUsage?.tokens ?? null,
+      contextWindow: stats.contextUsage?.contextWindow ?? 0,
+      contextPercent: stats.contextUsage?.percent ?? null,
+    } };
   };
 
   const dispose = async (): Promise<void> => {
@@ -250,6 +307,7 @@ export function createPiRuntime(options: { sessionFactory: PiSessionFactory }): 
       }
       try {
         session = await options.sessionFactory(input);
+        startedStats = session.stats?.();
         if (input.signal?.aborted) {
           await session.abort();
           emitTerminal(input, { type: 'cancelled' });
@@ -259,7 +317,7 @@ export function createPiRuntime(options: { sessionFactory: PiSessionFactory }): 
           if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') input.emit({ type: 'text_delta', delta: event.assistantMessageEvent.delta });
           else if (event.type === 'tool_execution_start') input.emit({ type: 'tool_start', toolCallId: event.toolCallId ?? event.toolName, toolName: event.toolName, args: event.args });
           else if (event.type === 'tool_execution_end') input.emit({ type: 'tool_end', toolCallId: event.toolCallId ?? event.toolName, toolName: event.toolName, isError: event.isError, result: event.result });
-          else if (event.type === 'agent_end' && !event.willRetry) emitTerminal(input, { type: 'completed' });
+          else if (event.type === 'agent_end' && !event.willRetry) emitTerminal(input, completedEvent());
         });
         if (input.signal) {
           const onAbort = () => { void this.abort(); };
@@ -267,7 +325,8 @@ export function createPiRuntime(options: { sessionFactory: PiSessionFactory }): 
           removeAbortListener = () => input.signal?.removeEventListener('abort', onAbort);
         }
         await session.prompt(input.prompt, input.images.length > 0 ? { images: input.images } : undefined);
-        emitTerminal(input, input.signal?.aborted ? { type: 'cancelled' } : { type: 'completed' });
+        if (input.signal?.aborted) emitTerminal(input, { type: 'cancelled' });
+        else emitTerminal(input, completedEvent());
       } catch (error) {
         if (input.signal?.aborted) emitTerminal(input, { type: 'cancelled' });
         else emitTerminal(input, { type: 'failed', error: error instanceof Error ? error.message : 'Pi runtime failed.' });

@@ -5,12 +5,14 @@ export type ReasoningSelection = 'default' | ReasoningLevel;
 export type ProviderConfig = { protocol: ProviderProtocol; baseUrl: string; model: string; displayName: string; hasApiKey: boolean };
 export type BrowserUseConfig = { enabled: boolean };
 export type ComputerUseConfig = { enabled: boolean };
-export type Conversation = { id: string; title: string; updatedAt: string; archived: boolean; pinned: boolean };
+export type ConversationProject = { id: string; name: string; position: number };
+export type Conversation = { id: string; projectId: string; title: string; updatedAt: string; archived: boolean; pinned: boolean };
 export type Message = { id: string; role: 'user' | 'assistant'; content: string; createdAt: string };
 export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
 export type RunArtifact = { id: string; kind: 'browser_screenshot' | 'computer_screenshot'; mimeType: string; size: number; url: string };
 export type RunActivity = { id: string; toolName: string; status: 'running' | 'completed' | 'failed' | 'cancelled'; input: string | null; output: string | null; startedAt: string; finishedAt: string | null; artifacts: RunArtifact[] };
-export type RunSummary = { id: string; conversationId: string; status: RunStatus; error: string | null; startedAt: string; finishedAt: string | null; inputMessageId: string | null; activities: RunActivity[] };
+export type RunUsage = { inputTokens: number; outputTokens: number; totalTokens: number; contextTokens: number | null; contextWindow: number; contextPercent: number | null };
+export type RunSummary = { id: string; conversationId: string; status: RunStatus; error: string | null; startedAt: string; finishedAt: string | null; inputMessageId: string | null; usage: RunUsage | null; activities: RunActivity[] };
 export type Attachment = { id: string; name: string; mimeType: string; size: number };
 export type TaskBoard = { id: string; name: string; position: number };
 export type TaskStatus = string;
@@ -43,9 +45,16 @@ export type DesktopBridge = {
   };
   conversations: {
     list: (includeArchived?: boolean) => Promise<Conversation[]>;
+    projects: {
+      list: () => Promise<ConversationProject[]>;
+      create: (name: string) => Promise<ConversationProject>;
+      rename: (projectId: string, name: string) => Promise<ConversationProject>;
+      delete: (projectId: string) => Promise<void>;
+    };
     messages: (conversationId: string) => Promise<Message[]>;
-    create: (title?: string) => Promise<Conversation>;
+    create: (title?: string, projectId?: string) => Promise<Conversation>;
     rename: (conversationId: string, title: string) => Promise<Conversation>;
+    move: (conversationId: string, projectId: string) => Promise<Conversation>;
     archive: (conversationId: string, archived: boolean) => Promise<Conversation>;
     pin: (conversationId: string, pinned: boolean) => Promise<Conversation>;
     delete: (conversationId: string) => Promise<void>;
@@ -95,6 +104,7 @@ export type DesktopBridge = {
   runs: {
     list: (conversationId: string) => Promise<RunSummary[]>;
     start: (conversationId: string, content: string, attachmentIds?: string[], reasoningLevel?: ReasoningLevel) => Promise<{ runId: string; userMessage: Message; conversation: Conversation }>;
+    retry: (conversationId: string, inputMessageId: string, content: string, reasoningLevel?: ReasoningLevel) => Promise<{ runId: string; userMessage: Message; conversation: Conversation }>;
     cancel: (runId: string) => Promise<void>;
     approve: (approvalId: string, approved: boolean) => Promise<void>;
     onEvent: (listener: (event: RunEvent) => void) => () => void;

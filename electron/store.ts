@@ -13,13 +13,16 @@ export type BrowserUseConfig = { enabled: boolean };
 export type ComputerUseConfig = { enabled: boolean };
 export type ReasoningSelection = 'default' | 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
-export type Conversation = { id: string; title: string; updatedAt: string; archived: boolean; pinned: boolean };
+export const DEFAULT_CONVERSATION_PROJECT_ID = 'personal';
+export type ConversationProject = { id: string; name: string; position: number };
+export type Conversation = { id: string; projectId: string; title: string; updatedAt: string; archived: boolean; pinned: boolean };
 export type Message = { id: string; role: 'user' | 'assistant'; content: string; createdAt: string };
 export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
+export type RunUsage = { inputTokens: number; outputTokens: number; totalTokens: number; contextTokens: number | null; contextWindow: number; contextPercent: number | null };
 export type RunActivityStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 export type RunArtifact = { id: string; kind: 'browser_screenshot' | 'computer_screenshot'; mimeType: string; size: number; url: string };
 export type RunActivity = { id: string; toolName: string; status: RunActivityStatus; input: string | null; output: string | null; startedAt: string; finishedAt: string | null; artifacts: RunArtifact[] };
-export type RunSummary = { id: string; conversationId: string; status: RunStatus; error: string | null; startedAt: string; finishedAt: string | null; inputMessageId: string | null; activities: RunActivity[] };
+export type RunSummary = { id: string; conversationId: string; status: RunStatus; error: string | null; startedAt: string; finishedAt: string | null; inputMessageId: string | null; usage: RunUsage | null; activities: RunActivity[] };
 export const DEFAULT_TASK_BOARD_ID = 'default';
 export type TaskBoard = { id: string; name: string; position: number };
 export type TaskStatus = string;
@@ -78,8 +81,16 @@ export class AppStore {
     this.db = new DatabaseSync(path.join(dataDir, 'yuheng.sqlite'));
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS conversation_projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS conversations (
         id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT '${DEFAULT_CONVERSATION_PROJECT_ID}' REFERENCES conversation_projects(id),
         title TEXT NOT NULL,
         description TEXT NOT NULL DEFAULT '',
         archived INTEGER NOT NULL DEFAULT 0,
@@ -102,7 +113,13 @@ export class AppStore {
         status TEXT NOT NULL,
         error TEXT,
         started_at TEXT NOT NULL,
-        finished_at TEXT
+        finished_at TEXT,
+        input_tokens INTEGER,
+        output_tokens INTEGER,
+        total_tokens INTEGER,
+        context_tokens INTEGER,
+        context_window INTEGER,
+        context_percent REAL
       );
       CREATE TABLE IF NOT EXISTS run_activities (
         id TEXT PRIMARY KEY,
@@ -165,11 +182,22 @@ export class AppStore {
     `);
     const runColumns = this.db.prepare('PRAGMA table_info(runs)').all() as Row[];
     if (!runColumns.some((column) => column.name === 'input_message_id')) this.db.exec('ALTER TABLE runs ADD COLUMN input_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL');
+    for (const [name, sql] of [
+      ['input_tokens', 'ALTER TABLE runs ADD COLUMN input_tokens INTEGER'],
+      ['output_tokens', 'ALTER TABLE runs ADD COLUMN output_tokens INTEGER'],
+      ['total_tokens', 'ALTER TABLE runs ADD COLUMN total_tokens INTEGER'],
+      ['context_tokens', 'ALTER TABLE runs ADD COLUMN context_tokens INTEGER'],
+      ['context_window', 'ALTER TABLE runs ADD COLUMN context_window INTEGER'],
+      ['context_percent', 'ALTER TABLE runs ADD COLUMN context_percent REAL'],
+    ] as const) if (!runColumns.some((column) => column.name === name)) this.db.exec(sql);
+    this.seedConversationProject();
     const conversationColumns = this.db.prepare('PRAGMA table_info(conversations)').all() as Row[];
     if (!conversationColumns.some((column) => column.name === 'description')) this.db.exec("ALTER TABLE conversations ADD COLUMN description TEXT NOT NULL DEFAULT ''");
     if (!conversationColumns.some((column) => column.name === 'archived')) this.db.exec('ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
     if (!conversationColumns.some((column) => column.name === 'pinned')) this.db.exec('ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0');
     if (!conversationColumns.some((column) => column.name === 'reasoning_level')) this.db.exec("ALTER TABLE conversations ADD COLUMN reasoning_level TEXT NOT NULL DEFAULT 'default'");
+    if (!conversationColumns.some((column) => column.name === 'project_id')) this.db.exec('ALTER TABLE conversations ADD COLUMN project_id TEXT REFERENCES conversation_projects(id)');
+    this.db.prepare('UPDATE conversations SET project_id = ? WHERE project_id IS NULL').run(DEFAULT_CONVERSATION_PROJECT_ID);
     this.migrateLegacyReasoningSelection();
     const taskColumns = this.db.prepare('PRAGMA table_info(tasks)').all() as Row[];
     if (!taskColumns.some((column) => column.name === 'description')) this.db.exec("ALTER TABLE tasks ADD COLUMN description TEXT NOT NULL DEFAULT ''");
@@ -181,6 +209,7 @@ export class AppStore {
     this.seedTaskTypes();
     this.migrateTaskTypeSchema();
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_board_status_updated ON tasks(board_id, status, updated_at DESC)');
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_conversations_project_updated ON conversations(project_id, updated_at DESC)');
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_run_artifacts_activity ON run_artifacts(run_id, tool_call_id, created_at ASC)');
     this.seed();
     this.setupSearchIndex();
@@ -450,10 +479,10 @@ export class AppStore {
     const count = (this.db.prepare('SELECT COUNT(*) AS count FROM conversations').get() as Row).count;
     if (Number(count) > 0) return;
     const now = new Date().toISOString();
-    const insert = this.db.prepare('INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)');
-    insert.run('inbox', '收件箱', now, now);
-    insert.run('weekly-plan', '本周计划', now, now);
-    insert.run('research', '资料整理', now, now);
+    const insert = this.db.prepare('INSERT INTO conversations (id, project_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)');
+    insert.run('inbox', DEFAULT_CONVERSATION_PROJECT_ID, '收件箱', now, now);
+    insert.run('weekly-plan', DEFAULT_CONVERSATION_PROJECT_ID, '本周计划', now, now);
+    insert.run('research', DEFAULT_CONVERSATION_PROJECT_ID, '资料整理', now, now);
     const message = this.db.prepare('INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)');
     message.run('weekly-1', 'weekly-plan', 'user', '帮我整理一下本周最重要的三件事。', now);
     message.run('weekly-2', 'weekly-plan', 'assistant', '可以。先从已经确认的事项开始：项目发布、供应商跟进和周五的复盘。', now);
@@ -461,19 +490,63 @@ export class AppStore {
     message.run('research-2', 'research', 'assistant', '我先按“产品、技术、待确认”三个主题归类，待确认的内容单独列出。', now);
   }
 
+  private seedConversationProject(): void {
+    const now = new Date().toISOString();
+    this.db.prepare('INSERT OR IGNORE INTO conversation_projects (id, name, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .run(DEFAULT_CONVERSATION_PROJECT_ID, '个人事务', 0, now, now);
+  }
+
+  listConversationProjects(): ConversationProject[] {
+    const rows = this.db.prepare('SELECT id, name, position FROM conversation_projects ORDER BY position ASC, created_at ASC').all() as Row[];
+    return rows.map((row) => ({ id: String(row.id), name: String(row.name), position: Number(row.position) }));
+  }
+
+  createConversationProject(name: string): ConversationProject {
+    const normalized = name.trim();
+    if (!normalized) throw new Error('Project name is required.');
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const position = Number((this.db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM conversation_projects').get() as Row).position);
+    this.db.prepare('INSERT INTO conversation_projects (id, name, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(id, normalized, position, now, now);
+    return { id, name: normalized, position };
+  }
+
+  renameConversationProject(id: string, name: string): ConversationProject {
+    const normalized = name.trim();
+    if (!normalized) throw new Error('Project name is required.');
+    const result = this.db.prepare('UPDATE conversation_projects SET name = ?, updated_at = ? WHERE id = ?').run(normalized, new Date().toISOString(), id);
+    if (Number(result.changes) === 0) throw new Error('Project not found.');
+    return this.listConversationProjects().find((project) => project.id === id)!;
+  }
+
+  deleteConversationProject(id: string): void {
+    if (id === DEFAULT_CONVERSATION_PROJECT_ID) throw new Error('The default project cannot be deleted.');
+    this.db.exec('BEGIN');
+    try {
+      const result = this.db.prepare('UPDATE conversations SET project_id = ? WHERE project_id = ?').run(DEFAULT_CONVERSATION_PROJECT_ID, id);
+      void result;
+      const deleted = this.db.prepare('DELETE FROM conversation_projects WHERE id = ?').run(id);
+      if (Number(deleted.changes) === 0) throw new Error('Project not found.');
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
   listConversations(includeArchived = false): Conversation[] {
-    const rows = this.db.prepare(`SELECT id, title, updated_at AS updatedAt, archived, pinned FROM conversations ${includeArchived ? '' : 'WHERE archived = 0'} ORDER BY pinned DESC, updated_at DESC`).all() as Row[];
+    const rows = this.db.prepare(`SELECT id, project_id AS projectId, title, updated_at AS updatedAt, archived, pinned FROM conversations ${includeArchived ? '' : 'WHERE archived = 0'} ORDER BY pinned DESC, updated_at DESC`).all() as Row[];
     return rows.map((row) => this.conversationFromRow(row));
   }
 
   getConversation(id: string): Conversation {
-    const row = this.db.prepare('SELECT id, title, updated_at AS updatedAt, archived, pinned FROM conversations WHERE id = ?').get(id) as Row | undefined;
+    const row = this.db.prepare('SELECT id, project_id AS projectId, title, updated_at AS updatedAt, archived, pinned FROM conversations WHERE id = ?').get(id) as Row | undefined;
     if (!row) throw new Error('Conversation not found.');
     return this.conversationFromRow(row);
   }
 
   private conversationFromRow(row: Row): Conversation {
-    return { id: String(row.id), title: String(row.title), updatedAt: String(row.updatedAt), archived: Number(row.archived) === 1, pinned: Number(row.pinned) === 1 };
+    return { id: String(row.id), projectId: String(row.projectId), title: String(row.title), updatedAt: String(row.updatedAt), archived: Number(row.archived) === 1, pinned: Number(row.pinned) === 1 };
   }
 
   listMessages(conversationId: string): Message[] {
@@ -481,11 +554,19 @@ export class AppStore {
     return rows.map((row) => ({ id: String(row.id), role: row.role as Message['role'], content: String(row.content), createdAt: String(row.createdAt) }));
   }
 
-  createConversation(title = '新会话'): Conversation {
+  createConversation(title = '新会话', projectId = DEFAULT_CONVERSATION_PROJECT_ID): Conversation {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
-    this.db.prepare('INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)').run(id, title, now, now);
-    return { id, title, updatedAt: now, archived: false, pinned: false };
+    const project = this.db.prepare('SELECT id FROM conversation_projects WHERE id = ?').get(projectId);
+    if (!project) throw new Error('Project not found.');
+    this.db.prepare('INSERT INTO conversations (id, project_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(id, projectId, title, now, now);
+    return { id, projectId, title, updatedAt: now, archived: false, pinned: false };
+  }
+
+  moveConversation(id: string, projectId: string): Conversation {
+    const result = this.db.prepare('UPDATE conversations SET project_id = ?, updated_at = ? WHERE id = ?').run(projectId, new Date().toISOString(), id);
+    if (Number(result.changes) === 0) throw new Error('Conversation not found.');
+    return this.getConversation(id);
   }
 
   renameConversation(id: string, title: string): Conversation {
@@ -539,12 +620,33 @@ export class AppStore {
     this.db.prepare('DELETE FROM messages WHERE id = ?').run(id);
   }
 
+  replaceFromUserMessage(conversationId: string, messageId: string, content: string): Message {
+    const normalized = content.trim();
+    if (!normalized) throw new Error('Message content is required.');
+    const target = this.db.prepare("SELECT id, rowid AS rowId, created_at AS createdAt FROM messages WHERE id = ? AND conversation_id = ? AND role = 'user'").get(messageId, conversationId) as Row | undefined;
+    if (!target) throw new Error('User message not found.');
+    this.db.exec('BEGIN');
+    try {
+      this.db.prepare(`DELETE FROM runs WHERE conversation_id = ? AND input_message_id IN
+        (SELECT id FROM messages WHERE conversation_id = ? AND rowid >= ?)`).run(conversationId, conversationId, Number(target.rowId));
+      this.db.prepare('DELETE FROM messages WHERE conversation_id = ? AND rowid > ?').run(conversationId, Number(target.rowId));
+      this.db.prepare('UPDATE messages SET content = ? WHERE id = ?').run(normalized, messageId);
+      this.db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(new Date().toISOString(), conversationId);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return { id: messageId, role: 'user', content: normalized, createdAt: String(target.createdAt) };
+  }
+
   startRun(id: string, conversationId: string, inputMessageId: string): void {
     this.db.prepare('INSERT INTO runs (id, conversation_id, input_message_id, status, started_at) VALUES (?, ?, ?, ?, ?)').run(id, conversationId, inputMessageId, 'running', new Date().toISOString());
   }
 
-  finishRun(id: string, status: Exclude<RunStatus, 'running'>, error?: string): void {
-    this.db.prepare('UPDATE runs SET status = ?, error = ?, finished_at = ? WHERE id = ?').run(status, error ?? null, new Date().toISOString(), id);
+  finishRun(id: string, status: Exclude<RunStatus, 'running'>, error?: string, usage?: RunUsage): void {
+    this.db.prepare(`UPDATE runs SET status = ?, error = ?, finished_at = ?, input_tokens = ?, output_tokens = ?, total_tokens = ?, context_tokens = ?, context_window = ?, context_percent = ? WHERE id = ?`)
+      .run(status, error ?? null, new Date().toISOString(), usage?.inputTokens ?? null, usage?.outputTokens ?? null, usage?.totalTokens ?? null, usage?.contextTokens ?? null, usage?.contextWindow ?? null, usage?.contextPercent ?? null, id);
     const activityStatus: RunActivityStatus = status === 'completed' ? 'completed' : status === 'cancelled' || status === 'interrupted' ? 'cancelled' : 'failed';
     this.db.prepare('UPDATE run_activities SET status = ?, finished_at = COALESCE(finished_at, ?) WHERE run_id = ? AND status = \'running\'').run(activityStatus, new Date().toISOString(), id);
   }
@@ -586,8 +688,10 @@ export class AppStore {
   }
 
   listRuns(conversationId: string): RunSummary[] {
-    const rows = this.db.prepare('SELECT id, conversation_id AS conversationId, status, error, started_at AS startedAt, finished_at AS finishedAt, input_message_id AS inputMessageId FROM runs WHERE conversation_id = ? ORDER BY started_at DESC').all(conversationId) as Row[];
-    return rows.map((row) => ({ id: String(row.id), conversationId: String(row.conversationId), status: row.status as RunStatus, error: row.error == null ? null : String(row.error), startedAt: String(row.startedAt), finishedAt: row.finishedAt == null ? null : String(row.finishedAt), inputMessageId: row.inputMessageId == null ? null : String(row.inputMessageId), activities: this.listRunActivities(String(row.id)) }));
+    const rows = this.db.prepare(`SELECT id, conversation_id AS conversationId, status, error, started_at AS startedAt, finished_at AS finishedAt, input_message_id AS inputMessageId,
+      input_tokens AS inputTokens, output_tokens AS outputTokens, total_tokens AS totalTokens, context_tokens AS contextTokens, context_window AS contextWindow, context_percent AS contextPercent
+      FROM runs WHERE conversation_id = ? ORDER BY started_at DESC`).all(conversationId) as Row[];
+    return rows.map((row) => ({ id: String(row.id), conversationId: String(row.conversationId), status: row.status as RunStatus, error: row.error == null ? null : String(row.error), startedAt: String(row.startedAt), finishedAt: row.finishedAt == null ? null : String(row.finishedAt), inputMessageId: row.inputMessageId == null ? null : String(row.inputMessageId), usage: row.totalTokens == null ? null : { inputTokens: Number(row.inputTokens), outputTokens: Number(row.outputTokens), totalTokens: Number(row.totalTokens), contextTokens: row.contextTokens == null ? null : Number(row.contextTokens), contextWindow: Number(row.contextWindow), contextPercent: row.contextPercent == null ? null : Number(row.contextPercent) }, activities: this.listRunActivities(String(row.id)) }));
   }
 
   private taskFromRow(row: Row): Task {

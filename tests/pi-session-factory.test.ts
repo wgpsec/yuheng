@@ -91,6 +91,122 @@ describe('Pi SDK session factory', () => {
     }
   });
 
+  it('restores structured conversation history across separate runtime instances', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'yuheng-pi-'));
+    const requestBodies: string[] = [];
+    const server = http.createServer(async (request, response) => {
+      let body = '';
+      for await (const chunk of request) body += chunk;
+      requestBodies.push(body);
+      const answer = requestBodies.length === 1 ? '第一轮回答' : '第二轮回答';
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.end(`data: ${JSON.stringify({ id: 'mock', choices: [{ index: 0, delta: { role: 'assistant', content: answer }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as { port: number }).port;
+    const config = { protocol: 'openai' as const, baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', hasApiKey: false };
+    const options = { agentDir: path.join(root, 'agent') };
+    const input = { images: [], sessionId: 'conversation-one', cwd: root, emit: () => undefined };
+    try {
+      const first = await createPiSessionFactory(config, 'test-key', options)({ ...input, prompt: '第一轮问题' });
+      await first.prompt('第一轮问题');
+      await first.shutdown?.();
+
+      const second = await createPiSessionFactory(config, 'test-key', options)({ ...input, prompt: '第二轮问题' });
+      await second.prompt('第二轮问题');
+      await second.shutdown?.();
+
+      const messages = JSON.parse(requestBodies[1] ?? '{}').messages as Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>;
+      const text = (content: string | Array<{ type: string; text?: string }>) => typeof content === 'string' ? content : content.filter((part) => part.type === 'text').map((part) => part.text ?? '').join('');
+      assert.deepEqual(messages.filter((message) => message.role !== 'system').map((message) => [message.role, text(message.content)]), [
+        ['user', '第一轮问题'],
+        ['assistant', '第一轮回答'],
+        ['user', '第二轮问题'],
+      ]);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('seeds an upgraded conversation once without duplicating the current prompt', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'yuheng-pi-'));
+    let requestBody = '';
+    const server = http.createServer(async (request, response) => {
+      for await (const chunk of request) requestBody += chunk;
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.end(`data: ${JSON.stringify({ id: 'mock', choices: [{ index: 0, delta: { role: 'assistant', content: '继续回答' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const session = await createPiSessionFactory({ protocol: 'openai', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', hasApiKey: false }, 'test-key', {
+        agentDir: path.join(root, 'agent'),
+      })({ prompt: '新问题', images: [], sessionId: 'upgraded-conversation', cwd: root, emit: () => undefined,
+        history: [
+          { role: 'user', content: '旧问题', createdAt: '2026-08-28T01:00:00.000Z' },
+          { role: 'assistant', content: '旧回答', createdAt: '2026-08-28T01:00:01.000Z' },
+        ],
+      });
+      await session.prompt('新问题');
+      await session.shutdown?.();
+
+      const messages = JSON.parse(requestBody || '{}').messages as Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>;
+      const text = (content: string | Array<{ type: string; text?: string }>) => typeof content === 'string' ? content : content.map((part) => part.text ?? '').join('');
+      assert.deepEqual(messages.filter((message) => message.role !== 'system').map((message) => [message.role, text(message.content)]), [
+        ['user', '旧问题'],
+        ['assistant', '旧回答'],
+        ['user', '新问题'],
+      ]);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not branch from an unrelated user message when replay identity does not match', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'yuheng-pi-'));
+    const requestBodies: string[] = [];
+    const server = http.createServer(async (request, response) => {
+      let body = '';
+      for await (const chunk of request) body += chunk;
+      requestBodies.push(body);
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.end(`data: ${JSON.stringify({ id: 'mock', choices: [{ index: 0, delta: { role: 'assistant', content: '回答' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as { port: number }).port;
+    const config = { protocol: 'openai' as const, baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', hasApiKey: false };
+    const options = { agentDir: path.join(root, 'agent') };
+    const input = { images: [], sessionId: 'replay-mismatch', cwd: root, emit: () => undefined };
+    try {
+      const first = await createPiSessionFactory(config, 'test-key', options)({ ...input, prompt: '第一问' });
+      await first.prompt('第一问');
+      await first.shutdown?.();
+
+      const second = await createPiSessionFactory(config, 'test-key', options)({ ...input, prompt: '第二问' });
+      await second.prompt('第二问');
+      await second.shutdown?.();
+
+      const replay = await createPiSessionFactory(config, 'test-key', options)({
+        ...input,
+        prompt: '重试问题',
+        replayUser: { ordinal: 0, content: '已经不存在的原文' },
+      });
+      await replay.prompt('重试问题');
+      await replay.shutdown?.();
+
+      const messages = JSON.parse(requestBodies[2] ?? '{}').messages as Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>;
+      const text = (content: string | Array<{ type: string; text?: string }>) => typeof content === 'string' ? content : content.filter((part) => part.type === 'text').map((part) => part.text ?? '').join('');
+      assert.deepEqual(messages.filter((message) => message.role !== 'system').map((message) => [message.role, text(message.content)]), [
+        ['user', '第一问'], ['assistant', '回答'], ['user', '第二问'], ['assistant', '回答'], ['user', '重试问题'],
+      ]);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('sends an explicitly selected extended reasoning level to an OpenAI-compatible provider', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'yuheng-pi-'));
     let requestBody = '';

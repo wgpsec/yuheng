@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ThinkingOrb } from 'thinking-orbs';
-import { Maximize2, X } from 'lucide-react';
+import { Maximize2, Pencil, RefreshCw, X } from 'lucide-react';
 
 export type TranscriptAttachment = { id: string; name: string; size: number };
 export type TranscriptMessage = { id: string; role: 'user' | 'assistant'; content: string; time: string; createdAt?: string; attachments?: TranscriptAttachment[] };
 export type RecoveryNotice = { message: string; onRetry: () => void };
 export type ToolArtifact = { id: string; kind: 'browser_screenshot' | 'computer_screenshot'; mimeType: string; size: number; url: string };
 export type ToolActivity = { id: string; toolName: string; status: 'running' | 'completed' | 'failed' | 'cancelled'; input?: string; output?: string; startedAt?: string; finishedAt?: string | null; artifacts?: ToolArtifact[] };
+export type RunUsageView = { inputTokens: number; outputTokens: number; totalTokens: number; contextTokens: number | null; contextWindow: number; contextPercent: number | null; durationMs: number };
 
 export function taskIdentityFromToolActivity(activity: Pick<ToolActivity, 'toolName' | 'output'>): { boardId: string; taskId: string } | null {
   if (activity.toolName !== 'task_create' && activity.toolName !== 'task_update' || !activity.output) return null;
@@ -102,10 +103,12 @@ function messageTimestamps(messages: TranscriptMessage[]): number[] {
   return timestamps as number[];
 }
 
-export function Transcript({ messages, isThinking, activities = [], recoveryNotice, requestedMessageId, onRequestedMessageHandled, onOpenTask }: { messages: TranscriptMessage[]; isThinking: boolean; activities?: ToolActivity[]; recoveryNotice?: RecoveryNotice | null; requestedMessageId?: string | null; onRequestedMessageHandled?: () => void; onOpenTask?: (boardId: string, taskId: string) => void }) {
+export function Transcript({ messages, isThinking, activities = [], recoveryNotice, latestUsage, requestedMessageId, onRequestedMessageHandled, onOpenTask, onEditLastUser, onRegenerate }: { messages: TranscriptMessage[]; isThinking: boolean; activities?: ToolActivity[]; recoveryNotice?: RecoveryNotice | null; latestUsage?: RunUsageView | null; requestedMessageId?: string | null; onRequestedMessageHandled?: () => void; onOpenTask?: (boardId: string, taskId: string) => void; onEditLastUser?: (message: TranscriptMessage) => void; onRegenerate?: () => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const timestamps = messageTimestamps(messages);
+  const lastUserId = [...messages].reverse().find((message) => message.role === 'user')?.id;
+  const lastAssistantId = [...messages].reverse().find((message) => message.role === 'assistant')?.id;
   const timeline = [
     ...messages.map((message, index) => ({ kind: 'message' as const, value: message, timestamp: timestamps[index], order: index })),
     ...activities.map((activity, index) => ({ kind: 'activity' as const, value: activity, timestamp: activity.startedAt ? Date.parse(activity.startedAt) : Number.MAX_SAFE_INTEGER, order: messages.length + index })),
@@ -130,10 +133,11 @@ export function Transcript({ messages, isThinking, activities = [], recoveryNoti
           {item.kind === 'activity' && (index === 0 || timeline[index - 1].kind !== 'activity') && <div className="tool-activity-heading">执行记录</div>}
           {item.kind === 'activity' ? <ToolActivityCard activity={item.value} onOpenTask={onOpenTask} /> : <article data-message-id={item.value.id} className={`message ${item.value.role} ${highlightedMessageId === item.value.id ? 'is-search-target' : ''}`}>
             <div className="message-avatar">{item.value.role === 'assistant' ? <ThinkingOrb state="breathing" size={20} theme="dark" /> : '你'}</div>
-            <div className="message-body"><div className="message-meta"><strong>{item.value.role === 'assistant' ? '玉衡' : '你'}</strong><time>{item.value.time}</time></div>{item.value.role === 'assistant' ? <AssistantContent content={item.value.content} /> : <p>{item.value.content}</p>}{item.value.attachments && item.value.attachments.length > 0 && <div className="message-attachments" aria-label="消息附件">{item.value.attachments.map((attachment) => <span className="message-attachment" key={attachment.id}><span className="message-attachment-icon">↗</span><span className="message-attachment-name">{attachment.name}</span><small>{Math.max(1, Math.round(attachment.size / 1024))} KB</small></span>)}</div>}</div>
+            <div className="message-body"><div className="message-meta"><strong>{item.value.role === 'assistant' ? '玉衡' : '你'}</strong><time>{item.value.time}</time></div>{item.value.role === 'assistant' ? <AssistantContent content={item.value.content} /> : <p>{item.value.content}</p>}{item.value.attachments && item.value.attachments.length > 0 && <div className="message-attachments" aria-label="消息附件">{item.value.attachments.map((attachment) => <span className="message-attachment" key={attachment.id}><span className="message-attachment-icon">↗</span><span className="message-attachment-name">{attachment.name}</span><small>{Math.max(1, Math.round(attachment.size / 1024))} KB</small></span>)}</div>}{!isThinking && (item.value.id === lastUserId || item.value.id === lastAssistantId) && <div className="message-actions">{item.value.role === 'assistant' && item.value.id === lastAssistantId && onRegenerate && <button type="button" onClick={onRegenerate}><RefreshCw size={13} />重新生成</button>}{item.value.role === 'user' && item.value.id === lastUserId && lastAssistantId !== messages.at(-1)?.id && onRegenerate && <button type="button" onClick={onRegenerate}><RefreshCw size={13} />重新生成</button>}{item.value.role === 'user' && item.value.id === lastUserId && onEditLastUser && <button type="button" onClick={() => onEditLastUser(item.value)}><Pencil size={13} />编辑后重发</button>}</div>}</div>
           </article>}
         </div>)}
       </div>}
+      {latestUsage && <div className="run-usage" aria-label="最近一次运行用量"><span>输入 {latestUsage.inputTokens.toLocaleString()} tokens</span><span>输出 {latestUsage.outputTokens.toLocaleString()}</span><span>耗时 {(latestUsage.durationMs / 1000).toFixed(1)} 秒</span><span>上下文 {latestUsage.contextTokens == null ? '不可用' : `${latestUsage.contextTokens.toLocaleString()} / ${latestUsage.contextWindow.toLocaleString()} (${Math.round(latestUsage.contextPercent ?? 0)}%)`}</span></div>}
       {recoveryNotice && <div className="recovery-notice" role="status"><div><strong>上次运行已中断</strong><p>{recoveryNotice.message}</p></div><button type="button" onClick={recoveryNotice.onRetry}>重新发送</button></div>}
       {isThinking && (
         <div className="assistant-message pending-message">

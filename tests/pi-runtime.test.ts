@@ -57,6 +57,29 @@ describe('PiRuntime', () => {
     ]);
   });
 
+  it('reports the current turn usage separately from earlier session usage', async () => {
+    const events: PiRuntimeEvent[] = [];
+    let sessionListener: ((event: PiSessionEvent) => void) | undefined;
+    let statsCall = 0;
+    const session: PiSession = {
+      subscribe(listener) { sessionListener = listener; return () => { sessionListener = undefined; }; },
+      async prompt() { sessionListener?.({ type: 'agent_end' }); },
+      async abort() {},
+      dispose() {},
+      stats() {
+        statsCall += 1;
+        return statsCall === 1
+          ? { tokens: { input: 100, output: 20, total: 120 }, contextUsage: { tokens: 700, contextWindow: 128000, percent: 0.55 } }
+          : { tokens: { input: 180, output: 45, total: 225 }, contextUsage: { tokens: 1100, contextWindow: 128000, percent: 0.86 } };
+      },
+    };
+    const runtime = createPiRuntime({ sessionFactory: async () => session });
+
+    await runtime.start(input({ emit: (event) => events.push(event) }));
+
+    assert.deepEqual(events, [{ type: 'completed', usage: { inputTokens: 80, outputTokens: 25, totalTokens: 105, contextTokens: 1100, contextWindow: 128000, contextPercent: 0.86 } }]);
+  });
+
   it('does not finish on an agent_end event that schedules a retry', async () => {
     const events: string[] = [];
     let sessionListener: ((event: PiSessionEvent) => void) | undefined;

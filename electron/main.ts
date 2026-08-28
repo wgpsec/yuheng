@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { AppStore, type BrowserUseConfig, type ComputerUseConfig, type CreateTaskInput, type ProviderConfig, type ReasoningSelection, type Task, type TaskBoard, type TaskPriority, type TaskStatus, type TaskType, type UpdateTaskInput } from './store';
+import { AppStore, type BrowserUseConfig, type ComputerUseConfig, type ConversationProject, type CreateTaskInput, type ProviderConfig, type ReasoningSelection, type RunUsage, type Task, type TaskBoard, type TaskPriority, type TaskStatus, type TaskType, type UpdateTaskInput } from './store';
 import { SecretStore } from './secrets';
 import { createPiRuntime, createPiSessionFactory, type ReasoningLevel } from './pi-runtime';
 import { loadYuhengSystemPrompt } from './system-prompt';
@@ -27,7 +27,7 @@ let browserArtifacts: BrowserArtifactStore;
 const computerUseLease = new ComputerUseLease();
 let taskReminders: TaskReminderScheduler;
 let pendingTaskOpen: { boardId: string; taskId: string } | null = null;
-const activeRuns = new Map<string, { controller: AbortController; conversationId: string }>();
+const activeRuns = new Map<string, { controller: AbortController; conversationId: string; inputMessageId: string; replayUser?: { ordinal: number; content: string } }>();
 const pendingApprovals = new Map<string, { runId: string; senderId: number; finish: (approved: boolean) => void }>();
 type StoredAttachment = Attachment & { data: Uint8Array };
 type Attachment = { id: string; name: string; mimeType: string; size: number };
@@ -286,6 +286,7 @@ async function executeRun(sender: WebContents, runId: string, conversationId: st
   let assistantCreated = false;
   let assistantCreatedAt: string | null = null;
   let assistantContent = '';
+  let runUsage: RunUsage | undefined;
   const browserUseConfig = store.getBrowserUseConfig();
   const computerUseConfig = store.getComputerUseConfig();
   let releaseComputerUse: (() => void) | undefined;
@@ -314,8 +315,10 @@ async function executeRun(sender: WebContents, runId: string, conversationId: st
   }) });
     const workspaceDir = path.join(app.getPath('userData'), 'workspace');
     await fs.mkdir(workspaceDir, { recursive: true });
-    const messages = store.listMessages(conversationId).map(({ role, content }) => ({ role, content }));
-    const prompt = messages.map((message) => `${message.role === 'user' ? '用户' : '玉衡'}：${message.content}`).join('\n\n');
+    const messages = store.listMessages(conversationId);
+    const inputIndex = messages.findIndex((message) => message.id === run.inputMessageId);
+    if (inputIndex < 0 || messages[inputIndex].role !== 'user') throw new Error('运行输入消息已不存在。');
+    const prompt = messages[inputIndex].content;
     const images = runAttachments.filter((attachment) => attachment.mimeType.startsWith('image/')).map((attachment) => ({ type: 'image' as const, data: Buffer.from(attachment.data).toString('base64'), mimeType: attachment.mimeType }));
     const textAttachments = runAttachments.filter((attachment) => !attachment.mimeType.startsWith('image/')).map((attachment) => `\n[附件：${attachment.name}]\n${Buffer.from(attachment.data).toString('utf8')}\n[/附件]`).join('');
     await runtime.start({
@@ -323,6 +326,8 @@ async function executeRun(sender: WebContents, runId: string, conversationId: st
       images,
       sessionId: conversationId,
       cwd: workspaceDir,
+      history: messages.slice(0, inputIndex).map(({ role, content, createdAt }) => ({ role, content, createdAt })),
+      replayUser: run.replayUser,
       signal: run.controller.signal,
       emit: (event) => {
         if (event.type === 'tool_start') {
@@ -343,6 +348,10 @@ async function executeRun(sender: WebContents, runId: string, conversationId: st
           emit(sender, { type: 'tool_end', runId, conversationId, toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError, output, artifacts });
           return;
         }
+        if (event.type === 'completed') {
+          runUsage = event.usage;
+          return;
+        }
         if (event.type !== 'text_delta') return;
         const delta = event.delta;
         if (!assistantCreated) {
@@ -361,7 +370,7 @@ async function executeRun(sender: WebContents, runId: string, conversationId: st
       return;
     }
     if (!assistantCreated) store.addMessage(conversationId, 'assistant', '', assistantMessageId);
-    store.finishRun(runId, 'completed');
+    store.finishRun(runId, 'completed', undefined, runUsage);
     emit(sender, { type: 'completed', runId, conversationId, messageId: assistantMessageId });
   } catch (error) {
     const cancelled = run.controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError');
@@ -490,15 +499,21 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('conversations:list', (_event, includeArchived: unknown) => store.listConversations(includeArchived === true));
+  ipcMain.handle('conversation-projects:list', () => store.listConversationProjects());
+  ipcMain.handle('conversation-projects:create', (_event, name: unknown): ConversationProject => store.createConversationProject(assertText(name, 'name')));
+  ipcMain.handle('conversation-projects:rename', (_event, projectId: unknown, name: unknown): ConversationProject => store.renameConversationProject(assertText(projectId, 'projectId'), assertText(name, 'name')));
+  ipcMain.handle('conversation-projects:delete', (_event, projectId: unknown) => store.deleteConversationProject(assertText(projectId, 'projectId')));
   ipcMain.handle('conversations:messages', (_event, conversationId: unknown) => store.listMessages(assertText(conversationId, 'conversationId')));
-  ipcMain.handle('conversations:create', (_event, title: unknown) => store.createConversation(typeof title === 'string' && title.trim() ? title.trim() : undefined));
+  ipcMain.handle('conversations:create', (_event, title: unknown, projectId: unknown) => store.createConversation(typeof title === 'string' && title.trim() ? title.trim() : undefined, typeof projectId === 'string' && projectId.trim() ? projectId.trim() : undefined));
   ipcMain.handle('conversations:rename', (_event, conversationId: unknown, title: unknown) => store.renameConversation(assertText(conversationId, 'conversationId'), assertText(title, 'title')));
+  ipcMain.handle('conversations:move', (_event, conversationId: unknown, projectId: unknown) => store.moveConversation(assertText(conversationId, 'conversationId'), assertText(projectId, 'projectId')));
   ipcMain.handle('conversations:archive', (_event, conversationId: unknown, archived: unknown) => store.setConversationArchived(assertText(conversationId, 'conversationId'), archived === true));
   ipcMain.handle('conversations:pin', (_event, conversationId: unknown, pinned: unknown) => store.setConversationPinned(assertText(conversationId, 'conversationId'), pinned === true));
   ipcMain.handle('conversations:delete', (_event, conversationId: unknown) => {
     const id = assertText(conversationId, 'conversationId');
     for (const run of activeRuns.values()) if (run.conversationId === id) throw new Error('该会话仍在处理中，请先停止运行。');
     store.deleteConversation(id);
+    void fs.rm(path.join(app.getPath('userData'), 'pi-agent', 'sessions', id), { recursive: true, force: true });
   });
   ipcMain.handle('tasks:boards:list', (): TaskBoard[] => store.listTaskBoards());
   ipcMain.handle('tasks:boards:create', (_event, rawName: unknown): TaskBoard => {
@@ -651,9 +666,37 @@ app.whenReady().then(() => {
     const userMessage = store.addMessage(id, 'user', text);
     store.startRun(runId, id, userMessage.id);
     const controller = new AbortController();
-    activeRuns.set(runId, { controller, conversationId: id });
+    activeRuns.set(runId, { controller, conversationId: id, inputMessageId: userMessage.id });
     emit(event.sender, { type: 'accepted', runId, conversationId: id });
     setImmediate(() => { void executeRun(event.sender, runId, id, config, apiKey, runAttachments, reasoningLevel); });
+    return { runId, userMessage, conversation: store.getConversation(id) };
+  });
+  ipcMain.handle('runs:retry', (event, conversationId: unknown, inputMessageId: unknown, content: unknown, rawReasoningLevel: unknown) => {
+    const id = assertText(conversationId, 'conversationId');
+    const messageId = assertText(inputMessageId, 'inputMessageId');
+    const text = assertText(content, 'content');
+    const config = store.getProvider();
+    const apiKey = secrets.getProviderKey();
+    if (!config || !apiKey) throw new Error('请先配置 Provider 和 API Key。');
+    for (const run of activeRuns.values()) if (run.conversationId === id) throw new Error('该会话仍在处理中。');
+    const reasoningLevel = rawReasoningLevel == null ? undefined : (() => {
+      if (rawReasoningLevel === 'off' || rawReasoningLevel === 'low' || rawReasoningLevel === 'medium' || rawReasoningLevel === 'high' || rawReasoningLevel === 'xhigh' || rawReasoningLevel === 'max') return rawReasoningLevel;
+      throw new Error('不支持的推理级别。');
+    })();
+    const existingMessages = store.listMessages(id);
+    const inputIndex = existingMessages.findIndex((message) => message.id === messageId && message.role === 'user');
+    if (inputIndex < 0) throw new Error('User message not found.');
+    const replayUser = {
+      ordinal: existingMessages.slice(0, inputIndex).filter((message) => message.role === 'user').length,
+      content: existingMessages[inputIndex].content,
+    };
+    const userMessage = store.replaceFromUserMessage(id, messageId, text);
+    const runId = crypto.randomUUID();
+    store.startRun(runId, id, userMessage.id);
+    const controller = new AbortController();
+    activeRuns.set(runId, { controller, conversationId: id, inputMessageId: userMessage.id, replayUser });
+    emit(event.sender, { type: 'accepted', runId, conversationId: id });
+    setImmediate(() => { void executeRun(event.sender, runId, id, config, apiKey, [], reasoningLevel); });
     return { runId, userMessage, conversation: store.getConversation(id) };
   });
   ipcMain.handle('runs:cancel', (_event, runId: unknown) => {
