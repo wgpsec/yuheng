@@ -3,7 +3,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ThinkingOrb } from 'thinking-orbs';
 import { Maximize2, Pencil, RefreshCw, X } from 'lucide-react';
-import type { DesktopBridge } from '../../../contracts/desktop-bridge';
+import type { DesktopBridge, RunSummary } from '../../../contracts/desktop-bridge';
 
 export type TranscriptAttachment = { id: string; name: string; size: number };
 export type TranscriptMessage = { id: string; role: 'user' | 'assistant'; content: string; time: string; createdAt?: string; attachments?: TranscriptAttachment[] };
@@ -125,12 +125,61 @@ function messageTimestamps(messages: TranscriptMessage[]): number[] {
   return timestamps as number[];
 }
 
-export function Transcript({ messages, isThinking, activities = [], recoveryNotice, latestUsage, requestedMessageId, onRequestedMessageHandled, onOpenTask, onEditLastUser, onRegenerate }: { messages: TranscriptMessage[]; isThinking: boolean; activities?: ToolActivity[]; recoveryNotice?: RecoveryNotice | null; latestUsage?: RunUsageView | null; requestedMessageId?: string | null; onRequestedMessageHandled?: () => void; onOpenTask?: (boardId: string, taskId: string) => void; onEditLastUser?: (message: TranscriptMessage) => void; onRegenerate?: () => void }) {
+function formatRunDuration(run: RunSummary): string | null {
+  const startedAt = Date.parse(run.startedAt);
+  if (!Number.isFinite(startedAt)) return null;
+  if (run.status === 'running') return '处理中';
+  if (!run.finishedAt) return null;
+  const finishedAt = Date.parse(run.finishedAt);
+  if (!Number.isFinite(finishedAt)) return null;
+  const durationMs = Math.max(0, finishedAt - startedAt);
+  if (durationMs < 1000) return `用时 ${(durationMs / 1000).toFixed(1)} 秒`;
+  const seconds = Math.round(durationMs / 1000);
+  if (seconds < 60) return `用时 ${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return `用时 ${minutes} 分${remainder > 0 ? ` ${remainder} 秒` : ''}`;
+}
+
+function runStatusLabel(run: RunSummary): string | null {
+  if (run.status === 'failed') return ' · 失败';
+  if (run.status === 'cancelled') return ' · 已取消';
+  if (run.status === 'interrupted') return ' · 已中断';
+  return null;
+}
+
+function RunDuration({ run, pending }: { run?: RunSummary; pending: boolean }) {
+  if (!run && !pending) return null;
+  const duration = run ? formatRunDuration(run) : '处理中';
+  const status = run ? runStatusLabel(run) : null;
+  if (!duration && !status) return null;
+  return <div className="message-duration" aria-label="本轮运行耗时">{duration ?? '耗时未知'}{status && <span>{status}</span>}</div>;
+}
+
+export function Transcript({ messages, isThinking, activities = [], runs = [], recoveryNotice, latestUsage, requestedMessageId, onRequestedMessageHandled, onOpenTask, onEditLastUser, onRegenerate }: { messages: TranscriptMessage[]; isThinking: boolean; activities?: ToolActivity[]; runs?: RunSummary[]; recoveryNotice?: RecoveryNotice | null; latestUsage?: RunUsageView | null; requestedMessageId?: string | null; onRequestedMessageHandled?: () => void; onOpenTask?: (boardId: string, taskId: string) => void; onEditLastUser?: (message: TranscriptMessage) => void; onRegenerate?: () => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const timestamps = messageTimestamps(messages);
   const lastUserId = [...messages].reverse().find((message) => message.role === 'user')?.id;
   const lastAssistantId = [...messages].reverse().find((message) => message.role === 'assistant')?.id;
+  const runByInputMessageId = new Map<string, RunSummary>();
+  for (const run of runs) {
+    if (!run.inputMessageId) continue;
+    const existing = runByInputMessageId.get(run.inputMessageId);
+    if (!existing || Date.parse(run.startedAt) >= Date.parse(existing.startedAt)) runByInputMessageId.set(run.inputMessageId, run);
+  }
+  const durationMessageIds = new Set<string>();
+  const durationRunByMessageId = new Map<string, RunSummary>();
+  messages.forEach((message, index) => {
+    if (message.role !== 'user') return;
+    const run = runByInputMessageId.get(message.id);
+    if (!run) return;
+    const nextUserIndex = messages.findIndex((candidate, candidateIndex) => candidateIndex > index && candidate.role === 'user');
+    const assistant = messages.slice(index + 1, nextUserIndex < 0 ? messages.length : nextUserIndex).find((candidate) => candidate.role === 'assistant');
+    const targetId = assistant?.id ?? message.id;
+    durationMessageIds.add(targetId);
+    durationRunByMessageId.set(targetId, run);
+  });
   const timeline = [
     ...messages.map((message, index) => ({ kind: 'message' as const, value: message, timestamp: timestamps[index], order: index })),
     ...activities.map((activity, index) => ({ kind: 'activity' as const, value: activity, timestamp: activity.startedAt ? Date.parse(activity.startedAt) : Number.MAX_SAFE_INTEGER, order: messages.length + index })),
@@ -151,15 +200,20 @@ export function Transcript({ messages, isThinking, activities = [], recoveryNoti
   return (
     <div className="transcript" aria-live="polite" ref={containerRef}>
       {timeline.length > 0 && <div className="message-list">
-        {timeline.map((item, index) => <div key={`${item.kind}-${item.value.id}`}>
-          {item.kind === 'activity' && (index === 0 || timeline[index - 1].kind !== 'activity') && <div className="tool-activity-heading">执行记录</div>}
-          {item.kind === 'activity' ? <ToolActivityCard activity={item.value} onOpenTask={onOpenTask} /> : <article data-message-id={item.value.id} className={`message ${item.value.role} ${highlightedMessageId === item.value.id ? 'is-search-target' : ''}`}>
+        {timeline.map((item, index) => {
+          const activityGroup = item.kind === 'activity' && (index === 0 || timeline[index - 1].kind !== 'activity')
+            ? timeline.slice(index).reduce<ToolActivity[]>((group, candidate) => candidate.kind === 'activity' ? [...group, candidate.value] : group, [])
+            : null;
+          if (item.kind === 'activity' && !activityGroup) return null;
+          return <div key={`${item.kind}-${item.value.id}`}>
+          {item.kind === 'activity' ? (activityGroup ? <details className="tool-activity-group"><summary><span>执行记录</span><span>{activityGroup.length} 项</span></summary><div className="tool-activity-list">{activityGroup.map((activity) => <ToolActivityCard key={activity.id} activity={activity} onOpenTask={onOpenTask} />)}</div></details> : null) : <article data-message-id={item.value.id} className={['message', item.value.role, highlightedMessageId === item.value.id ? 'is-search-target' : ''].filter(Boolean).join(' ')}>
             <div className="message-avatar">{item.value.role === 'assistant' ? <ThinkingOrb state="breathing" size={20} theme="dark" /> : '你'}</div>
-            <div className="message-body"><div className="message-meta"><strong>{item.value.role === 'assistant' ? '玉衡' : '你'}</strong><time>{item.value.time}</time></div>{item.value.role === 'assistant' ? <AssistantContent content={item.value.content} /> : <p>{item.value.content}</p>}{item.value.attachments && item.value.attachments.length > 0 && <div className="message-attachments" aria-label="消息附件">{item.value.attachments.map((attachment) => <span className="message-attachment" key={attachment.id}><span className="message-attachment-icon">↗</span><span className="message-attachment-name">{attachment.name}</span><small>{Math.max(1, Math.round(attachment.size / 1024))} KB</small></span>)}</div>}{!isThinking && (item.value.id === lastUserId || item.value.id === lastAssistantId) && <div className="message-actions">{item.value.role === 'assistant' && item.value.id === lastAssistantId && onRegenerate && <button type="button" onClick={onRegenerate}><RefreshCw size={13} />重新生成</button>}{item.value.role === 'user' && item.value.id === lastUserId && lastAssistantId !== messages.at(-1)?.id && onRegenerate && <button type="button" onClick={onRegenerate}><RefreshCw size={13} />重新生成</button>}{item.value.role === 'user' && item.value.id === lastUserId && onEditLastUser && <button type="button" onClick={() => onEditLastUser(item.value)}><Pencil size={13} />编辑后重发</button>}</div>}</div>
+            <div className="message-body"><div className="message-meta"><strong>{item.value.role === 'assistant' ? '玉衡' : '你'}</strong><time>{item.value.time}</time></div>{item.value.role === 'assistant' ? <AssistantContent content={item.value.content} /> : <p>{item.value.content}</p>}{item.value.attachments && item.value.attachments.length > 0 && <div className="message-attachments" aria-label="消息附件">{item.value.attachments.map((attachment) => <span className="message-attachment" key={attachment.id}><span className="message-attachment-icon">↗</span><span className="message-attachment-name">{attachment.name}</span><small>{Math.max(1, Math.round(attachment.size / 1024))} KB</small></span>)}</div>}<RunDuration run={durationMessageIds.has(item.value.id) ? durationRunByMessageId.get(item.value.id) : undefined} pending={isThinking && item.value.id === lastUserId && !durationMessageIds.has(item.value.id)} />{!isThinking && (item.value.id === lastUserId || item.value.id === lastAssistantId) && <div className="message-actions">{item.value.role === 'assistant' && item.value.id === lastAssistantId && onRegenerate && <button type="button" onClick={onRegenerate}><RefreshCw size={13} />重新生成</button>}{item.value.role === 'user' && item.value.id === lastUserId && lastAssistantId !== messages.at(-1)?.id && onRegenerate && <button type="button" onClick={onRegenerate}><RefreshCw size={13} />重新生成</button>}{item.value.role === 'user' && item.value.id === lastUserId && onEditLastUser && <button type="button" onClick={() => onEditLastUser(item.value)}><Pencil size={13} />编辑后重发</button>}</div>}</div>
           </article>}
-        </div>)}
+        </div>;
+        })}
       </div>}
-      {latestUsage && <div className="run-usage" aria-label="最近一次运行用量"><span>输入 {latestUsage.inputTokens.toLocaleString()} tokens</span><span>输出 {latestUsage.outputTokens.toLocaleString()}</span><span>耗时 {(latestUsage.durationMs / 1000).toFixed(1)} 秒</span></div>}
+      {latestUsage && <div className="run-usage" aria-label="最近一次运行用量"><span>输入 {latestUsage.inputTokens.toLocaleString()} tokens</span><span>输出 {latestUsage.outputTokens.toLocaleString()}</span></div>}
       {recoveryNotice && <div className="recovery-notice" role="status"><div><strong>上次运行已中断</strong><p>{recoveryNotice.message}</p></div>{recoveryNotice.onRetry && <button type="button" onClick={recoveryNotice.onRetry} disabled={recoveryNotice.busy}>{recoveryNotice.busy ? '恢复中…' : '恢复运行'}</button>}</div>}
       {isThinking && (
         <div className="assistant-message pending-message">

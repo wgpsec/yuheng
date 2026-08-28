@@ -695,6 +695,11 @@ app.whenReady().then(() => {
     emitTaskTypesChanged(taskType.boardId);
     return taskType;
   });
+  ipcMain.handle('tasks:types:delete', (_event, taskTypeId: unknown) => {
+    const id = assertText(taskTypeId, 'taskTypeId');
+    const taskType = store.deleteTaskType(id);
+    emitTaskTypesChanged(taskType.boardId);
+  });
   ipcMain.handle('tasks:create', (_event, boardId: unknown, raw: unknown) => {
     const task = store.createTask(taskInput(raw), assertText(boardId, 'boardId'));
     handleTaskChanged(task);

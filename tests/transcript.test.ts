@@ -36,6 +36,33 @@ describe('Transcript timeline', () => {
     assert.ok(html.indexOf('second-question') < html.indexOf('second-answer'));
   });
 
+  it('aligns user and assistant messages with distinct role classes', () => {
+    const html = renderToStaticMarkup(createElement(Transcript, {
+      messages: [
+        { id: 'user-role', role: 'user' as const, content: '右侧消息', time: '10:00' },
+        { id: 'assistant-role', role: 'assistant' as const, content: '左侧回复', time: '10:01' },
+      ],
+      isThinking: false,
+    }));
+
+    assert.match(html, /class="message user"/);
+    assert.match(html, /class="message assistant"/);
+  });
+
+  it('renders one duration for the run associated with a user turn', () => {
+    const html = renderToStaticMarkup(createElement(Transcript, {
+      messages: [
+        { id: 'user-duration', role: 'user' as const, content: '耗时问题', time: '10:00' },
+        { id: 'assistant-duration', role: 'assistant' as const, content: '已完成', time: '10:00' },
+      ],
+      runs: [{ id: 'run-duration', conversationId: 'conversation-1', inputMessageId: 'user-duration', status: 'completed' as const, error: null, startedAt: '2026-08-28T10:00:00.000Z', finishedAt: '2026-08-28T10:00:02.400Z', usage: null, activities: [] }],
+      isThinking: false,
+    }));
+
+    assert.equal((html.match(/本轮运行耗时/g) ?? []).length, 1);
+    assert.match(html, /用时 2 秒/);
+  });
+
   it('marks persisted messages as global-search navigation targets', () => {
     const html = renderToStaticMarkup(createElement(Transcript, {
       messages: [{ id: 'message-target-1', role: 'user' as const, content: '定位正文', time: '10:00' }],
@@ -66,6 +93,23 @@ describe('Transcript timeline', () => {
 
     assert.match(html, /<img[^>]+src="yuheng-browser-artifact:\/\/local\/artifact-1\.png"/);
     assert.match(html, /页面截图/);
+  });
+
+  it('collapses consecutive tool activities into a closed execution group', () => {
+    const html = renderToStaticMarkup(createElement(Transcript, {
+      messages: [],
+      isThinking: false,
+      activities: [
+        { id: 'tool-1', toolName: 'task_list', status: 'completed' as const },
+        { id: 'tool-2', toolName: 'task_list', status: 'completed' as const },
+      ],
+    }));
+
+    assert.match(html, /class="tool-activity-group"/);
+    assert.match(html, />执行记录</);
+    assert.match(html, />2 项</);
+    assert.doesNotMatch(html, /<details class="tool-activity-group" open/);
+    assert.equal((html.match(/class="tool-activity is-completed"/g) ?? []).length, 2);
   });
 
   it('renders assistant links as external, non-navigating links', () => {

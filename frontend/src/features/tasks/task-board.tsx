@@ -20,6 +20,13 @@ const priorities: { value: TaskPriority; label: string }[] = [
 const editorMinWidth = 360;
 const editorMaxWidth = 760;
 const editorCloseDurationMs = 200;
+export const TASK_EDITOR_WIDTH_STORAGE_KEY = 'yuheng-task-editor-width';
+
+export function loadTaskEditorWidth(defaultWidth = 480): number {
+  if (typeof localStorage === 'undefined') return defaultWidth;
+  const parsed = Number(localStorage.getItem(TASK_EDITOR_WIDTH_STORAGE_KEY));
+  return Number.isFinite(parsed) ? Math.max(editorMinWidth, Math.min(editorMaxWidth, Math.round(parsed))) : defaultWidth;
+}
 
 function editorWidthBounds(element: HTMLElement): { min: number; max: number } {
   const availableWidth = (element.closest<HTMLElement>('.task-page')?.getBoundingClientRect().width ?? window.innerWidth) - 72;
@@ -97,7 +104,7 @@ function taskDescriptionPreview(value: string): string {
     .trim();
 }
 
-export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loading, headerControl, requestedOpenTaskId, onOpenTaskHandled, sourceConversations = [], onOpenConversation, onCreate, onUpdate, onDelete, onReorder, onMoveToBoard, onCopyToBoard, onCreateType, onRenameType, onImportAsset, onPickAssets, onOpenAsset }: {
+export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loading, headerControl, requestedOpenTaskId, onOpenTaskHandled, sourceConversations = [], onOpenConversation, onCreate, onUpdate, onDelete, onReorder, onMoveToBoard, onCopyToBoard, onCreateType, onRenameType, onDeleteType, onImportAsset, onPickAssets, onOpenAsset }: {
   boardId?: string;
   boardName: string;
   boards: { id: string; name: string }[];
@@ -117,6 +124,7 @@ export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loadin
   onCopyToBoard: (id: string, boardId: string) => Promise<Task>;
   onCreateType: (name: string) => Promise<TaskType>;
   onRenameType: (id: string, name: string) => Promise<TaskType>;
+  onDeleteType: (id: string) => Promise<void>;
   onImportAsset: (file: File) => Promise<TaskAsset>;
   onPickAssets: () => Promise<TaskAsset[]>;
   onOpenAsset: (url: string) => Promise<void>;
@@ -128,11 +136,12 @@ export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loadin
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<TaskStatus | null>(null);
   const [dropTaskTarget, setDropTaskTarget] = useState<string | null>(null);
-  const [editorWidth, setEditorWidth] = useState(480);
+  const [editorWidth, setEditorWidth] = useState(() => loadTaskEditorWidth());
   const [resizingEditor, setResizingEditor] = useState(false);
   const [newTypeName, setNewTypeName] = useState('');
   const [renamingTypeId, setRenamingTypeId] = useState<string | null>(null);
   const [renamingTypeName, setRenamingTypeName] = useState('');
+  const [taskTypeMenuId, setTaskTypeMenuId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<TaskFilter>('all');
   const [taskMenuId, setTaskMenuId] = useState<string | null>(null);
@@ -154,6 +163,9 @@ export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loadin
   const onUpdateRef = useRef(onUpdate);
   onCreateRef.current = onCreate;
   onUpdateRef.current = onUpdate;
+  useEffect(() => {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(TASK_EDITOR_WIDTH_STORAGE_KEY, String(Math.round(editorWidth)));
+  }, [editorWidth]);
 
   const closeTaskMenu = () => {
     if (!taskMenuId) return;
@@ -278,6 +290,24 @@ export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loadin
       setError(reason instanceof Error ? reason.message : '修改任务类型失败。');
     }
   };
+  const deleteTaskType = async (taskType: TaskType, taskCount: number) => {
+    setTaskTypeMenuId(null);
+    if (taskTypes.length <= 1) {
+      setError('至少保留一个任务类型。');
+      return;
+    }
+    if (taskCount > 0) {
+      setError('该类型仍有任务，请先移动或删除任务。');
+      return;
+    }
+    if (!window.confirm(`删除任务类型“${taskType.name}”？此操作无法撤销。`)) return;
+    try {
+      await onDeleteType(taskType.id);
+      setError(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '删除任务类型失败。');
+    }
+  };
   const openTask = (task: Task) => {
     closeTaskMenu();
     clearScheduledSave();
@@ -302,6 +332,15 @@ export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loadin
     window.addEventListener('click', closeMenu);
     return () => window.removeEventListener('click', closeMenu);
   }, [taskMenuId]);
+  useEffect(() => {
+    if (!taskTypeMenuId) return;
+    const closeMenu = (event: MouseEvent) => {
+      if ((event.target as Element | null)?.closest('.task-type-menu, .task-type-menu-trigger')) return;
+      setTaskTypeMenuId(null);
+    };
+    window.addEventListener('click', closeMenu);
+    return () => window.removeEventListener('click', closeMenu);
+  }, [taskTypeMenuId]);
   const deleteTask = async (task: Task) => {
     if (!window.confirm(`删除任务“${task.title}”？此操作无法撤销。`)) return;
     const editorSessionKey = editorSessionKeyRef.current;
@@ -406,7 +445,7 @@ export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loadin
       void closeEditor();
     }}
   >
-    <header className="task-page-header">
+    <header key={`header:${boardId ?? 'empty-board'}`} className="task-page-header">
       {headerControl}
       <div><span className="task-page-kicker"><LayoutDashboard size={13} /> 看板</span><h1>{boardName}</h1><p>把需要推进的事项放到合适的阶段。</p></div>
       <div className="task-board-actions">
@@ -416,29 +455,33 @@ export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loadin
       </div>
     </header>
     {error && !editingId && <div className="task-page-error" role="alert">{error}<button type="button" onClick={() => setError(null)} aria-label="关闭错误"><X size={14} /></button></div>}
-    <div className="task-board-scroll">
+    <div key={`content:${boardId ?? 'empty-board'}`} className="task-board-scroll">
       <div className="task-board" style={{ gridTemplateColumns: `${taskTypes.length > 0 ? `repeat(${taskTypes.length}, 260px) ` : ''}230px` }}>
         {taskTypes.map((taskType, taskTypeIndex) => {
           const items = visibleTasks.filter((task) => task.status === taskType.id);
           const color = columnColor(taskType.id, taskTypeIndex);
           return <section
             key={taskType.id}
-            className={`task-column ${dropTarget === taskType.id ? 'is-drop-target' : ''}`}
+            className={`task-column ${dropTarget === taskType.id ? 'is-drop-target' : ''} ${taskTypeMenuId === taskType.id ? 'has-menu' : ''}`}
             style={{ '--task-column-color': color } as CSSProperties}
             onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTarget(taskType.id); }}
             onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null); }}
             onDrop={(event) => void drop(event, taskType.id)}
           >
-            <header className="task-column-header"><div><span className={`task-status-dot is-${taskType.id}`} />{renamingTypeId === taskType.id ? <input className="task-type-name-input" autoFocus value={renamingTypeName} onChange={(event) => setRenamingTypeName(event.target.value)} onBlur={() => void submitRenameType()} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } if (event.key === 'Escape') { setRenamingTypeId(null); } }} aria-label="任务类型名称" /> : <><strong>{taskType.name}</strong><button type="button" className="task-type-rename" onClick={() => { setRenamingTypeId(taskType.id); setRenamingTypeName(taskType.name); }} aria-label={`修改${taskType.name}名称`} title="修改类型名称"><Pencil size={12} /></button></>}<span className="task-count">{items.length}</span></div><button type="button" onClick={() => openNew(taskType.id)} aria-label={`在${taskType.name}中新建任务`} title="新建任务"><Plus size={15} /></button></header>
+            <header className="task-column-header"><div><span className={`task-status-dot is-${taskType.id}`} />{renamingTypeId === taskType.id ? <input className="task-type-name-input" autoFocus value={renamingTypeName} onChange={(event) => setRenamingTypeName(event.target.value)} onBlur={() => void submitRenameType()} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } if (event.key === 'Escape') { setRenamingTypeId(null); } }} aria-label="任务类型名称" /> : <><strong>{taskType.name}</strong><button type="button" className="task-type-rename" onClick={() => { setRenamingTypeId(taskType.id); setRenamingTypeName(taskType.name); }} aria-label={`修改${taskType.name}名称`} title="修改类型名称"><Pencil size={12} /></button></>}<span className="task-count">{items.length}</span></div><div className="task-type-actions"><button type="button" className="task-type-menu-trigger" onClick={(event) => { event.stopPropagation(); setTaskTypeMenuId((current) => current === taskType.id ? null : taskType.id); }} aria-label={`打开${taskType.name}操作菜单`} aria-expanded={taskTypeMenuId === taskType.id} title="更多操作"><MoreHorizontal size={15} /></button>{taskTypeMenuId === taskType.id && <div className="task-type-menu" role="menu"><button type="button" role="menuitem" onClick={() => { setTaskTypeMenuId(null); setRenamingTypeId(taskType.id); setRenamingTypeName(taskType.name); }}><Pencil size={13} />重命名</button><button type="button" role="menuitem" className="is-destructive" onClick={() => void deleteTaskType(taskType, items.length)}><Trash2 size={13} />删除类型</button></div>}<button type="button" onClick={() => openNew(taskType.id)} aria-label={`在${taskType.name}中新建任务`} title="新建任务"><Plus size={15} /></button></div></header>
             <p className="task-column-hint">{typeHints[taskType.id] ?? typeHints[taskType.id.split(':').at(-1) ?? ''] ?? '自定义任务类型'}</p>
             <div className="task-card-list">
               {loading && <div className="task-column-empty">正在读取...</div>}
               {!loading && items.length === 0 && <div className="task-column-empty">{filtering ? '没有匹配任务' : '暂无任务'}</div>}
-              {!loading && items.map((task) => <div
+              {!loading && items.map((task) => {
+                const preview = taskDescriptionPreview(task.description);
+                const hasDescription = preview.length > 0;
+                const hasMenu = taskMenuId === task.id || taskMenuClosingId === task.id;
+                return <div key={task.id} className={`task-card-shell ${hasMenu ? 'has-menu' : ''}`}>
+                <div
                 role="button"
                 tabIndex={0}
-                key={task.id}
-                className={`task-card ${taskDescriptionPreview(task.description).length > 0 ? 'has-description' : 'is-compact'} ${draggedId === task.id ? 'is-dragging' : ''} ${taskMenuId === task.id || taskMenuClosingId === task.id ? 'has-menu' : ''} ${dropTaskTarget === task.id ? 'is-drop-target' : ''}`}
+                className={`task-card ${hasDescription ? 'has-description' : 'is-compact'} ${draggedId === task.id ? 'is-dragging' : ''} ${dropTaskTarget === task.id ? 'is-drop-target' : ''}`}
                 draggable
                 onPointerDown={() => { suppressCardClickRef.current = null; }}
                 onClick={() => {
@@ -467,15 +510,19 @@ export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loadin
                   aria-hidden="true"
                 ><GripVertical size={13} /></span>
                 <button type="button" className="task-card-edit" onClick={(event) => { event.stopPropagation(); openTask(task); }} aria-label={`编辑${task.title}`} title="编辑"><Pencil size={13} /></button>
-                {(taskMenuId === task.id || taskMenuClosingId === task.id) && <div className={`task-card-menu ${taskMenuClosingId === task.id ? 'is-closing' : ''}`}><button type="button" onClick={(event) => { event.stopPropagation(); openTask(task); }}><Pencil size={13} />编辑</button><button type="button" onClick={(event) => { event.stopPropagation(); setBoardAction('move'); }}><LayoutDashboard size={13} />移动到</button><button type="button" onClick={(event) => { event.stopPropagation(); setBoardAction('copy'); }}><LayoutDashboard size={13} />复制到</button>{boardAction && <div className="task-board-action-list">{boards.filter((board) => board.id !== (boardId ?? task.boardId)).map((board) => <button type="button" key={board.id} onClick={(event) => { event.stopPropagation(); void moveOrCopyTask(task, board.id); }}>{board.name}</button>)}</div>}<button type="button" className="is-destructive" onClick={(event) => { event.stopPropagation(); void deleteTask(task); }}><Trash2 size={13} />删除</button></div>}
-                <strong>{task.title}</strong>
-                {taskDescriptionPreview(task.description).length > 0 && <span className="task-card-description">{taskDescriptionPreview(task.description)}</span>}
-                {(task.dueAt || task.remindAt || task.reminderFiredAt) && <span className="task-card-meta">
-                  {task.dueAt && <span className="task-due"><CalendarDays size={12} />{dueLabel(task.dueAt)}</span>}
-                  {task.remindAt && !task.reminderFiredAt && <span className="task-due"><Bell size={12} />{dateTimeLabel(task.remindAt)}</span>}
-                  {task.reminderFiredAt && <span className="task-reminder-delivered"><Bell size={12} />已提醒</span>}
-                </span>}
-              </div>)}
+                {hasDescription && <span className="task-card-description">{preview}</span>}
+                <div className="task-card-footer">
+                  <strong>{task.title}</strong>
+                  {hasDescription && (task.dueAt || task.remindAt || task.reminderFiredAt) && <span className="task-card-meta">
+                    {task.dueAt && <span className="task-due"><CalendarDays size={12} />{dueLabel(task.dueAt)}</span>}
+                    {task.remindAt && !task.reminderFiredAt && <span className="task-due"><Bell size={12} />{dateTimeLabel(task.remindAt)}</span>}
+                    {task.reminderFiredAt && <span className="task-reminder-delivered"><Bell size={12} />已提醒</span>}
+                  </span>}
+                </div>
+              </div>
+              {hasMenu && <div className={`task-card-menu ${taskMenuClosingId === task.id ? 'is-closing' : ''}`}><button type="button" onClick={(event) => { event.stopPropagation(); openTask(task); }}><Pencil size={13} />编辑</button><button type="button" onClick={(event) => { event.stopPropagation(); setBoardAction('move'); }}><LayoutDashboard size={13} />移动到</button><button type="button" onClick={(event) => { event.stopPropagation(); setBoardAction('copy'); }}><LayoutDashboard size={13} />复制到</button>{boardAction && <div className="task-board-action-list">{boards.filter((board) => board.id !== (boardId ?? task.boardId)).map((board) => <button type="button" key={board.id} onClick={(event) => { event.stopPropagation(); void moveOrCopyTask(task, board.id); }}>{board.name}</button>)}</div>}<button type="button" className="is-destructive" onClick={(event) => { event.stopPropagation(); void deleteTask(task); }}><Trash2 size={13} />删除</button></div>}
+              </div>;
+              })}
             </div>
             {!loading && <button type="button" className="task-column-create" onClick={() => openNew(taskType.id)}><Plus size={15} aria-hidden="true" /><span>新建任务</span></button>}
           </section>;

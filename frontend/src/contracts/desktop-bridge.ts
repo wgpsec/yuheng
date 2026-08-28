@@ -116,6 +116,7 @@ export type DesktopBridge = {
       list: (boardId: string) => Promise<TaskType[]>;
       create: (boardId: string, name: string) => Promise<TaskType>;
       rename: (id: string, name: string) => Promise<TaskType>;
+      delete: (id: string) => Promise<void>;
     };
     create: (boardId: string, input: CreateTaskInput) => Promise<Task>;
     update: (id: string, patch: UpdateTaskInput) => Promise<Task>;

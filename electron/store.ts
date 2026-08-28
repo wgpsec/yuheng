@@ -935,6 +935,19 @@ export class AppStore {
     return { id: String(row.id), boardId: String(row.boardId), name: String(row.name), position: Number(row.position) };
   }
 
+  deleteTaskType(id: string): TaskType {
+    const row = this.db.prepare('SELECT id, board_id AS boardId, name, position FROM task_types WHERE id = ?').get(id) as Row | undefined;
+    if (!row) throw new Error('Task type not found.');
+    const boardId = String(row.boardId);
+    const typeCount = Number((this.db.prepare('SELECT COUNT(*) AS count FROM task_types WHERE board_id = ?').get(boardId) as Row).count);
+    if (typeCount <= 1) throw new Error('At least one task type is required.');
+    const taskCount = Number((this.db.prepare('SELECT COUNT(*) AS count FROM tasks WHERE status = ?').get(id) as Row).count);
+    if (taskCount > 0) throw new Error('Task type still contains tasks. Move or delete them first.');
+    this.db.prepare('DELETE FROM task_types WHERE id = ?').run(id);
+    this.db.prepare('UPDATE task_types SET position = position - 1 WHERE board_id = ? AND position > ?').run(boardId, Number(row.position));
+    return { id: String(row.id), boardId, name: String(row.name), position: Number(row.position) };
+  }
+
   private assertTaskStatus(status: TaskStatus, boardId: string): void {
     const row = this.db.prepare('SELECT 1 FROM task_types WHERE id = ? AND board_id = ?').get(status, boardId);
     if (!row) throw new Error('Task type not found.');

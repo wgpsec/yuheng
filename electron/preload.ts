@@ -71,6 +71,7 @@ contextBridge.exposeInMainWorld('desktopBridge', {
       list: (boardId: string) => ipcRenderer.invoke('tasks:types:list', boardId),
       create: (boardId: string, name: string) => ipcRenderer.invoke('tasks:types:create', boardId, name),
       rename: (id: string, name: string) => ipcRenderer.invoke('tasks:types:rename', id, name),
+      delete: (id: string) => ipcRenderer.invoke('tasks:types:delete', id),
     },
     create: (boardId: string, input: unknown) => ipcRenderer.invoke('tasks:create', boardId, input),
     update: (id: string, patch: unknown) => ipcRenderer.invoke('tasks:update', id, patch),

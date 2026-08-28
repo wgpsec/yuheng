@@ -13,6 +13,11 @@ type SlashState = { query: string; from: number; to: number; left: number; top: 
 type BlockControlState = { left: number; top: number; position: number };
 type BlockDragState = { from: number; to: number };
 
+export function shouldInterpretMarkdownPaste(value: string): boolean {
+  return /(^|\n)\s{0,3}(?:[-*+]\s+\[[ xX]\]|[-*+]\s+|#{1,6}\s+|\d+[.)]\s+)/u.test(value)
+    || /(^|\n)\s{0,3}(?:\*\*|__|```|>\s)/u.test(value);
+}
+
 const slashItems = [
   { id: 'paragraph', label: '正文', hint: '普通文本块', icon: Text },
   { id: 'heading1', label: '一级标题', hint: '大标题', icon: Heading1 },
@@ -71,11 +76,18 @@ export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAsse
     autofocus: 'end',
     editorProps: {
       attributes: { 'aria-label': '任务 Markdown 详情', spellcheck: 'true' },
-      handlePaste: (_view, event) => {
+      handlePaste: (view, event) => {
         const files = Array.from(event.clipboardData?.files ?? []);
-        if (files.length === 0) return false;
+        if (files.length > 0) {
+          event.preventDefault();
+          void importFiles(files);
+          return true;
+        }
+        const markdown = event.clipboardData?.getData('text/plain') ?? '';
+        if (!markdown || !shouldInterpretMarkdownPaste(markdown)) return false;
         event.preventDefault();
-        void importFiles(files);
+        const { from, to } = view.state.selection;
+        editor?.commands.insertContentAt({ from, to }, markdown, { contentType: 'markdown' });
         return true;
       },
       handleDrop: (_view, event) => {

@@ -536,6 +536,26 @@ describe('AppStore tasks', () => {
     }
   });
 
+  it('deletes empty task types while protecting the last type and assigned tasks', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
+    const store = new AppStore(dataDir);
+    try {
+      const review = store.createTaskType('等待审核');
+      const task = store.createTask({ title: '保留任务', status: review.id });
+      assert.throws(() => store.deleteTaskType(review.id), /still contains tasks/);
+      store.deleteTask(task.id);
+      store.deleteTaskType(review.id);
+      assert.equal(store.listTaskTypes().some((type) => type.id === review.id), false);
+
+      const remaining = store.listTaskTypes();
+      for (const type of remaining.slice(1)) store.deleteTaskType(type.id);
+      assert.throws(() => store.deleteTaskType(remaining[0].id), /At least one task type/);
+    } finally {
+      store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('persists reminder delivery and only rearms it when the reminder changes', () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
     let store = new AppStore(dataDir);
