@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { AppStore } from '../electron/store';
+import { AppStore, DEFAULT_PROVIDER_CONTEXT_WINDOW } from '../electron/store';
 import { TaskAssetStore } from '../electron/task-assets';
 
 describe('AppStore run activities', () => {
@@ -93,6 +93,29 @@ describe('AppStore run activities', () => {
       assert.equal(store.listRuns(conversation.id).some((run) => run.id === 'run-2'), false);
       assert.deepEqual(store.listRuns(conversation.id).find((run) => run.id === 'run-1')?.usage, { inputTokens: 120, outputTokens: 30, totalTokens: 150, contextTokens: 900, contextWindow: 128000, contextPercent: 0.7 });
       assert.equal(replacement.role, 'user');
+    } finally {
+      store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('AppStore provider settings', () => {
+  it('migrates legacy providers to the default context window and persists a custom value', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
+    const database = new DatabaseSync(path.join(dataDir, 'yuheng.sqlite'));
+    database.exec('CREATE TABLE provider_profiles (id INTEGER PRIMARY KEY CHECK (id = 1), protocol TEXT NOT NULL, base_url TEXT NOT NULL, model TEXT NOT NULL, display_name TEXT NOT NULL, updated_at TEXT NOT NULL)');
+    database.prepare('INSERT INTO provider_profiles (id, protocol, base_url, model, display_name, updated_at) VALUES (1, ?, ?, ?, ?, ?)')
+      .run('openai', 'https://api.example.test/v1', 'test-model', '测试模型', '2026-08-28T00:00:00.000Z');
+    database.close();
+
+    let store = new AppStore(dataDir);
+    try {
+      assert.equal(store.getProvider()?.contextWindow, DEFAULT_PROVIDER_CONTEXT_WINDOW);
+      store.saveProvider({ protocol: 'openai', baseUrl: 'https://api.example.test/v1', model: 'test-model', displayName: '测试模型', contextWindow: 320_000 });
+      store.close();
+      store = new AppStore(dataDir);
+      assert.equal(store.getProvider()?.contextWindow, 320_000);
     } finally {
       store.close();
       fs.rmSync(dataDir, { recursive: true, force: true });

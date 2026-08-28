@@ -20,7 +20,7 @@ const emptyTaskService: TaskToolService = {
 
 describe('Pi SDK session factory', () => {
   it('rejects enabling Browser Use and Computer Use together', () => {
-    assert.throws(() => createPiSessionFactory({ protocol: 'openai', baseUrl: 'https://api.example.test/v1', model: 'test-model', displayName: '测试模型', hasApiKey: false }, 'test-key', {
+    assert.throws(() => createPiSessionFactory({ protocol: 'openai', baseUrl: 'https://api.example.test/v1', model: 'test-model', displayName: '测试模型', contextWindow: 200_000, hasApiKey: false }, 'test-key', {
       agentDir: '/tmp/yuheng-agent',
       browserUse: { supervisor: { callTool: async () => ({ content: [] }) }, requestApproval: async () => true },
       computerUse: { requestApproval: async () => true },
@@ -41,10 +41,12 @@ describe('Pi SDK session factory', () => {
         baseUrl: 'http://127.0.0.1:9/v1',
         model: 'test-model',
         displayName: '测试模型',
+        contextWindow: 320_000,
         hasApiKey: false,
       }, 'test-key', { agentDir: path.join(root, 'agent') })(input);
 
       assert.equal(typeof session.prompt, 'function');
+      assert.equal(session.stats?.().contextUsage?.contextWindow, 320_000);
       session.dispose();
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -70,7 +72,7 @@ describe('Pi SDK session factory', () => {
     const port = (server.address() as { port: number }).port;
     const events: string[] = [];
     try {
-      const session = await createPiSessionFactory({ protocol: 'openai', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', hasApiKey: false }, 'test-key', { agentDir: path.join(root, 'agent'), yuhengSystemPrompt: 'YUHENG_SYSTEM_PROMPT_SENTINEL' })({ prompt: 'hello', images: [], sessionId: 'session-test', cwd: root, emit: () => undefined });
+      const session = await createPiSessionFactory({ protocol: 'openai', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', contextWindow: 200_000, hasApiKey: false }, 'test-key', { agentDir: path.join(root, 'agent'), yuhengSystemPrompt: 'YUHENG_SYSTEM_PROMPT_SENTINEL' })({ prompt: 'hello', images: [], sessionId: 'session-test', cwd: root, emit: () => undefined });
       session.subscribe((event) => { if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') events.push(event.assistantMessageEvent.delta); });
       await session.prompt('hello');
       session.dispose();
@@ -104,7 +106,7 @@ describe('Pi SDK session factory', () => {
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const port = (server.address() as { port: number }).port;
-    const config = { protocol: 'openai' as const, baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', hasApiKey: false };
+    const config = { protocol: 'openai' as const, baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', contextWindow: 200_000, hasApiKey: false };
     const options = { agentDir: path.join(root, 'agent') };
     const input = { images: [], sessionId: 'conversation-one', cwd: root, emit: () => undefined };
     try {
@@ -140,7 +142,7 @@ describe('Pi SDK session factory', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const port = (server.address() as { port: number }).port;
     try {
-      const session = await createPiSessionFactory({ protocol: 'openai', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', hasApiKey: false }, 'test-key', {
+      const session = await createPiSessionFactory({ protocol: 'openai', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', contextWindow: 200_000, hasApiKey: false }, 'test-key', {
         agentDir: path.join(root, 'agent'),
       })({ prompt: '新问题', images: [], sessionId: 'upgraded-conversation', cwd: root, emit: () => undefined,
         history: [
@@ -176,7 +178,7 @@ describe('Pi SDK session factory', () => {
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const port = (server.address() as { port: number }).port;
-    const config = { protocol: 'openai' as const, baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', hasApiKey: false };
+    const config = { protocol: 'openai' as const, baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', contextWindow: 200_000, hasApiKey: false };
     const options = { agentDir: path.join(root, 'agent') };
     const input = { images: [], sessionId: 'replay-mismatch', cwd: root, emit: () => undefined };
     try {
@@ -218,7 +220,7 @@ describe('Pi SDK session factory', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const port = (server.address() as { port: number }).port;
     try {
-      const session = await createPiSessionFactory({ protocol: 'openai', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', hasApiKey: false }, 'test-key', {
+      const session = await createPiSessionFactory({ protocol: 'openai', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', contextWindow: 200_000, hasApiKey: false }, 'test-key', {
         agentDir: path.join(root, 'agent'),
         thinkingLevel: 'xhigh',
       })({ prompt: '分析问题', images: [], sessionId: 'session-reasoning', cwd: root, emit: () => undefined });
@@ -251,7 +253,7 @@ describe('Pi SDK session factory', () => {
     const port = (server.address() as { port: number }).port;
     const events: string[] = [];
     try {
-      const session = await createPiSessionFactory({ protocol: 'anthropic', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', hasApiKey: false }, 'test-key', { agentDir: path.join(root, 'agent') })({ prompt: 'hello', images: [], sessionId: 'session-test', cwd: root, emit: () => undefined });
+      const session = await createPiSessionFactory({ protocol: 'anthropic', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', contextWindow: 200_000, hasApiKey: false }, 'test-key', { agentDir: path.join(root, 'agent') })({ prompt: 'hello', images: [], sessionId: 'session-test', cwd: root, emit: () => undefined });
       session.subscribe((event) => { if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') events.push(event.assistantMessageEvent.delta); });
       await session.prompt('hello');
       session.dispose();
@@ -276,7 +278,7 @@ describe('Pi SDK session factory', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const port = (server.address() as { port: number }).port;
     try {
-      const session = await createPiSessionFactory({ protocol: 'openai', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', hasApiKey: false }, 'test-key', {
+      const session = await createPiSessionFactory({ protocol: 'openai', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', contextWindow: 200_000, hasApiKey: false }, 'test-key', {
         agentDir: path.join(root, 'agent'),
         browserUse: {
           supervisor: { async callTool() { return { content: [{ type: 'text', text: 'ok' }] }; } },
@@ -305,7 +307,7 @@ describe('Pi SDK session factory', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const port = (server.address() as { port: number }).port;
     try {
-      const session = await createPiSessionFactory({ protocol: 'openai', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', hasApiKey: false }, 'test-key', {
+      const session = await createPiSessionFactory({ protocol: 'openai', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', contextWindow: 200_000, hasApiKey: false }, 'test-key', {
         agentDir: path.join(root, 'agent'),
         computerUse: { requestApproval: async () => true },
       })({ prompt: '查看桌面', images: [], sessionId: 'session-computer', cwd: root, emit: () => undefined });
@@ -332,7 +334,7 @@ describe('Pi SDK session factory', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const port = (server.address() as { port: number }).port;
     try {
-      const session = await createPiSessionFactory({ protocol: 'openai', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', hasApiKey: false }, 'test-key', {
+      const session = await createPiSessionFactory({ protocol: 'openai', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', contextWindow: 200_000, hasApiKey: false }, 'test-key', {
         agentDir: path.join(root, 'agent'),
         taskService: emptyTaskService,
       })({ prompt: '创建一个任务', images: [], sessionId: 'session-tasks', cwd: root, emit: () => undefined });
@@ -374,7 +376,7 @@ describe('Pi SDK session factory', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const port = (server.address() as { port: number }).port;
     try {
-      const session = await createPiSessionFactory({ protocol: 'openai', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', hasApiKey: false }, 'test-key', {
+      const session = await createPiSessionFactory({ protocol: 'openai', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', contextWindow: 200_000, hasApiKey: false }, 'test-key', {
         agentDir: path.join(root, 'agent'),
         taskService,
       })({ prompt: '查看我的任务看板', images: [], sessionId: 'session-task-call', cwd: root, emit: () => undefined });

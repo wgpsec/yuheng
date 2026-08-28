@@ -137,7 +137,7 @@ export function Transcript({ messages, isThinking, activities = [], recoveryNoti
           </article>}
         </div>)}
       </div>}
-      {latestUsage && <div className="run-usage" aria-label="最近一次运行用量"><span>输入 {latestUsage.inputTokens.toLocaleString()} tokens</span><span>输出 {latestUsage.outputTokens.toLocaleString()}</span><span>耗时 {(latestUsage.durationMs / 1000).toFixed(1)} 秒</span><span>上下文 {latestUsage.contextTokens == null ? '不可用' : `${latestUsage.contextTokens.toLocaleString()} / ${latestUsage.contextWindow.toLocaleString()} (${Math.round(latestUsage.contextPercent ?? 0)}%)`}</span></div>}
+      {latestUsage && <div className="run-usage" aria-label="最近一次运行用量"><span>输入 {latestUsage.inputTokens.toLocaleString()} tokens</span><span>输出 {latestUsage.outputTokens.toLocaleString()}</span><span>耗时 {(latestUsage.durationMs / 1000).toFixed(1)} 秒</span></div>}
       {recoveryNotice && <div className="recovery-notice" role="status"><div><strong>上次运行已中断</strong><p>{recoveryNotice.message}</p></div><button type="button" onClick={recoveryNotice.onRetry}>重新发送</button></div>}
       {isThinking && (
         <div className="assistant-message pending-message">

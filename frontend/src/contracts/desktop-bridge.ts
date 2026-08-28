@@ -2,7 +2,7 @@ export type ProviderProtocol = 'openai' | 'anthropic';
 export type AppInfo = { name: string; version: string; platform: string; arch: string };
 export type ReasoningLevel = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type ReasoningSelection = 'default' | ReasoningLevel;
-export type ProviderConfig = { protocol: ProviderProtocol; baseUrl: string; model: string; displayName: string; hasApiKey: boolean };
+export type ProviderConfig = { protocol: ProviderProtocol; baseUrl: string; model: string; displayName: string; contextWindow: number; hasApiKey: boolean };
 export type BrowserUseConfig = { enabled: boolean };
 export type ComputerUseConfig = { enabled: boolean };
 export type ConversationProject = { id: string; name: string; position: number };
@@ -61,7 +61,7 @@ export type DesktopBridge = {
   };
   provider: {
     get: () => Promise<ProviderConfig | null>;
-    save: (config: { protocol: ProviderProtocol; baseUrl: string; model: string; displayName: string; apiKey: string }) => Promise<ProviderConfig>;
+    save: (config: { protocol: ProviderProtocol; baseUrl: string; model: string; displayName: string; contextWindow: number; apiKey: string }) => Promise<ProviderConfig>;
   };
   browserUse: {
     get: () => Promise<BrowserUseConfig>;

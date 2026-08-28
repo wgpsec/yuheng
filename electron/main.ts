@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { AppStore, type BrowserUseConfig, type ComputerUseConfig, type ConversationProject, type CreateTaskInput, type ProviderConfig, type ReasoningSelection, type RunUsage, type Task, type TaskBoard, type TaskPriority, type TaskStatus, type TaskType, type UpdateTaskInput } from './store';
+import { AppStore, DEFAULT_PROVIDER_CONTEXT_WINDOW, MAX_PROVIDER_CONTEXT_WINDOW, MIN_PROVIDER_CONTEXT_WINDOW, type BrowserUseConfig, type ComputerUseConfig, type ConversationProject, type CreateTaskInput, type ProviderConfig, type ReasoningSelection, type RunUsage, type Task, type TaskBoard, type TaskPriority, type TaskStatus, type TaskType, type UpdateTaskInput } from './store';
 import { SecretStore } from './secrets';
 import { createPiRuntime, createPiSessionFactory, type ReasoningLevel } from './pi-runtime';
 import { loadYuhengSystemPrompt } from './system-prompt';
@@ -587,11 +587,14 @@ app.whenReady().then(() => {
     const input = raw as Record<string, unknown>;
     const protocol = input.protocol === 'anthropic' ? 'anthropic' : input.protocol === 'openai' ? 'openai' : null;
     if (!protocol) throw new Error('Unsupported provider protocol.');
+    const contextWindow = input.contextWindow == null ? DEFAULT_PROVIDER_CONTEXT_WINDOW : Number(input.contextWindow);
+    if (!Number.isInteger(contextWindow) || contextWindow < MIN_PROVIDER_CONTEXT_WINDOW || contextWindow > MAX_PROVIDER_CONTEXT_WINDOW) throw new Error(`上下文窗口必须是 ${MIN_PROVIDER_CONTEXT_WINDOW.toLocaleString()} 到 ${MAX_PROVIDER_CONTEXT_WINDOW.toLocaleString()} 之间的整数。`);
     const config = {
       protocol,
       baseUrl: assertText(input.baseUrl, 'baseUrl').replace(/\/$/, ''),
       model: assertText(input.model, 'model'),
       displayName: assertText(input.displayName, 'displayName'),
+      contextWindow,
     } satisfies Omit<ProviderConfig, 'hasApiKey'>;
     const apiKey = typeof input.apiKey === 'string' ? input.apiKey.trim() : '';
     if (apiKey) secrets.saveProviderKey(apiKey);

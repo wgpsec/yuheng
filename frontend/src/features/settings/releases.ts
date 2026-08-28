@@ -6,6 +6,15 @@ export type ReleaseNote = {
 
 export const releaseNotes: readonly ReleaseNote[] = [
   {
+    version: '0.1.4',
+    title: '上下文窗口可见与可配置',
+    changes: [
+      '会话顶栏显示当前上下文占用、窗口容量和使用进度。',
+      '模型服务设置支持自定义上下文窗口，默认值调整为 200K tokens。',
+      '会话恢复与新一轮完成后会保留并更新最近的上下文使用数据。',
+    ],
+  },
+  {
     version: '0.1.3',
     title: '任务与会话体验',
     changes: [

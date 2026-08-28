@@ -12,7 +12,7 @@ import { listTodayTasks, todayTaskKindLabel, type TodayTask } from '../features/
 
 const TaskBoard = lazy(() => import('../features/tasks/task-board').then((module) => ({ default: module.TaskBoard })));
 
-type ThemeName = 'dark' | 'light' | 'graphite';
+type ThemeName = 'dark' | 'light' | 'graphite' | 'notion';
 type SettingsSection = 'provider' | 'capabilities' | 'appearance' | 'about';
 
 const fallbackConversations: SidebarConversation[] = [
@@ -36,6 +36,12 @@ function shortId(id: string): string {
   return id.length > 12 ? id.slice(0, 8) : id;
 }
 
+function compactTokens(value: number): string {
+  if (value >= 1_000_000) return `${Number((value / 1_000_000).toFixed(1))}M`;
+  if (value >= 1_000) return `${Number((value / 1_000).toFixed(1))}K`;
+  return value.toLocaleString('zh-CN');
+}
+
 function sortConversations(items: SidebarConversation[]): SidebarConversation[] {
   return [...items].sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
 }
@@ -43,6 +49,19 @@ function sortConversations(items: SidebarConversation[]): SidebarConversation[] 
 function SidebarExpandControl({ onExpand }: { onExpand: () => void }) {
   return <div className="sidebar-expand-control">
     <button type="button" className="collapsed-sidebar-toggle" onClick={onExpand} aria-label="展开侧栏" title="展开侧栏"><PanelLeftOpen size={17} aria-hidden="true" /></button>
+  </div>;
+}
+
+function ContextWindowStatus({ usage, refreshing }: { usage: RunSummary['usage']; refreshing: boolean }) {
+  const available = usage?.contextTokens != null && usage.contextWindow > 0;
+  const percent = available ? Math.min(100, Math.max(0, usage.contextTokens! / usage.contextWindow * 100)) : 0;
+  const value = available ? `${compactTokens(usage.contextTokens!)} / ${compactTokens(usage.contextWindow)}` : '暂无数据';
+  const detail = available
+    ? `当前会话上下文：${usage.contextTokens!.toLocaleString('zh-CN')} / ${usage.contextWindow.toLocaleString('zh-CN')} tokens（${Math.round(percent)}%）${refreshing ? '；本轮完成后更新' : ''}`
+    : `当前会话上下文暂无可靠数据${refreshing ? '，本轮完成后更新' : ''}`;
+  return <div className={`context-window-status ${available ? '' : 'is-empty'} ${refreshing ? 'is-refreshing' : ''}`} aria-label={detail} title={detail}>
+    <div className="context-window-copy"><span>上下文</span><strong>{value}</strong>{available && <small>{Math.round(percent)}%</small>}</div>
+    <div className="context-window-meter" aria-hidden="true"><span style={{ width: `${percent}%` }} /></div>
   </div>;
 }
 
@@ -59,6 +78,7 @@ function SettingsWorkspace({ appInfo, current, browserUseConfig, computerUseConf
   const [baseUrl, setBaseUrl] = useState(current?.baseUrl ?? 'https://api.openai.com/v1');
   const [model, setModel] = useState(current?.model ?? 'gpt-4o-mini');
   const [displayName, setDisplayName] = useState(current?.displayName ?? '默认模型');
+  const [contextWindow, setContextWindow] = useState(String(current?.contextWindow ?? 200_000));
   const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [browserSaving, setBrowserSaving] = useState(false);
@@ -71,7 +91,7 @@ function SettingsWorkspace({ appInfo, current, browserUseConfig, computerUseConf
     if (!activeBridge) return;
     setError(null);
     try {
-      const saved = await activeBridge.provider.save({ protocol, baseUrl, model, displayName, apiKey });
+      const saved = await activeBridge.provider.save({ protocol, baseUrl, model, displayName, contextWindow: Number(contextWindow), apiKey });
       setApiKey('');
       onSaved(saved);
     } catch (reason) { setError(reason instanceof Error ? reason.message : '保存失败。'); }
@@ -135,6 +155,7 @@ function SettingsWorkspace({ appInfo, current, browserUseConfig, computerUseConf
           <label>显示名称<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required /></label>
           <label>Base URL<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} required /></label>
           <label>模型<input value={model} onChange={(event) => setModel(event.target.value)} required /></label>
+          <label>上下文窗口<div className="settings-input-stack"><input type="number" min="4096" max="10000000" step="1" value={contextWindow} onChange={(event) => setContextWindow(event.target.value)} required /><small>以 token 计；默认 200,000，新一轮会话开始时生效。</small></div></label>
           <label>API Key<input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={current?.hasApiKey ? '已配置，留空则保持不变' : '输入 API Key'} autoComplete="off" /></label>
           {error && <p className="form-error" role="alert">{error}</p>}
           <div className="provider-modal-actions"><button type="submit" className="send-button">保存配置</button></div>
@@ -146,7 +167,7 @@ function SettingsWorkspace({ appInfo, current, browserUseConfig, computerUseConf
         <div className="settings-section"><div className="settings-section-heading"><div><h3>Computer Use</h3><p>让模型观察并操作桌面界面，也可使用受控浏览器。</p></div><span className={`settings-state ${computerUseConfig.enabled ? 'is-ready' : ''}`}>{computerUseConfig.enabled ? '已启用' : '已关闭'}</span></div><div className="plugin-toggle-row"><div><strong>桌面自动化</strong><small>与 Browser Use 二选一；桌面、浏览器和脚本操作会逐次请求确认。</small></div><button type="button" className={`switch-control ${computerUseConfig.enabled ? 'is-on' : ''}`} role="switch" aria-checked={computerUseConfig.enabled} aria-label={computerUseConfig.enabled ? '关闭 Computer Use' : '开启 Computer Use'} onClick={() => void toggleComputerUse()} disabled={computerSaving}><span /></button></div>{computerError && <p className="form-error" role="alert">{computerError}</p>}</div>
       </>}
 
-      {activeSection === 'appearance' && <div className="settings-section settings-section-first appearance-section"><div className="settings-section-heading"><div><h3>主题</h3><p>选择玉衡工作区的基础配色。</p></div></div><div className="theme-options" role="radiogroup" aria-label="界面配色"><button type="button" className={`theme-option ${theme === 'dark' ? 'is-selected' : ''}`} onClick={() => onThemeChange('dark')} role="radio" aria-checked={theme === 'dark'}><span className="theme-swatch theme-swatch-dark" /><span><strong>深色</strong><small>适合长时间专注</small></span></button><button type="button" className={`theme-option ${theme === 'light' ? 'is-selected' : ''}`} onClick={() => onThemeChange('light')} role="radio" aria-checked={theme === 'light'}><span className="theme-swatch theme-swatch-light" /><span><strong>浅色</strong><small>明亮清晰</small></span></button><button type="button" className={`theme-option ${theme === 'graphite' ? 'is-selected' : ''}`} onClick={() => onThemeChange('graphite')} role="radio" aria-checked={theme === 'graphite'}><span className="theme-swatch theme-swatch-graphite" /><span><strong>石墨灰</strong><small>低对比度</small></span></button></div></div>}
+      {activeSection === 'appearance' && <div className="settings-section settings-section-first appearance-section"><div className="settings-section-heading"><div><h3>主题</h3><p>选择玉衡工作区的基础配色。</p></div></div><div className="theme-options" role="radiogroup" aria-label="界面配色"><button type="button" className={`theme-option ${theme === 'dark' ? 'is-selected' : ''}`} onClick={() => onThemeChange('dark')} role="radio" aria-checked={theme === 'dark'}><span className="theme-swatch theme-swatch-dark" /><span><strong>深色</strong><small>适合长时间专注</small></span></button><button type="button" className={`theme-option ${theme === 'light' ? 'is-selected' : ''}`} onClick={() => onThemeChange('light')} role="radio" aria-checked={theme === 'light'}><span className="theme-swatch theme-swatch-light" /><span><strong>浅色</strong><small>明亮清晰</small></span></button><button type="button" className={`theme-option ${theme === 'graphite' ? 'is-selected' : ''}`} onClick={() => onThemeChange('graphite')} role="radio" aria-checked={theme === 'graphite'}><span className="theme-swatch theme-swatch-graphite" /><span><strong>石墨灰</strong><small>低对比度</small></span></button><button type="button" className={`theme-option ${theme === 'notion' ? 'is-selected' : ''}`} onClick={() => onThemeChange('notion')} role="radio" aria-checked={theme === 'notion'}><span className="theme-swatch theme-swatch-notion" /><span><strong>Notion</strong><small>温和中性</small></span></button></div></div>}
 
       {activeSection === 'about' && <div className="settings-section settings-section-first about-section">
         <div className="about-product"><div><strong>玉衡</strong><span>{appInfo ? `版本 v${appInfo.version}` : '版本信息读取中'}</span></div><small>{platformLabel(appInfo)}</small></div>
@@ -183,7 +204,7 @@ export function ProductionRenderer() {
   const [copiedConversationId, setCopiedConversationId] = useState(false);
   const [theme, setTheme] = useState<ThemeName>(() => {
     const saved = typeof localStorage !== 'undefined' ? localStorage.getItem('yuheng-theme') : null;
-    return saved === 'light' || saved === 'graphite' ? saved : 'dark';
+    return saved === 'light' || saved === 'graphite' || saved === 'notion' ? saved : 'dark';
   });
   const [error, setError] = useState<string | null>(null);
   const [interruptedRun, setInterruptedRun] = useState<RunSummary | null>(null);
@@ -599,7 +620,7 @@ export function ProductionRenderer() {
     <Sidebar conversations={conversationItems} projects={conversationProjects} boards={taskBoards} activeId={activeConversation} activeProjectId={activeConversationProject} activeBoardId={activeTaskBoardId} mode={activeView} settingsOpen={providerOpen} collapsed={sidebarCollapsed} appVersion={appInfo?.version} onSearch={() => setSearchOpen(true)} onSelect={(id) => { setProviderOpen(false); selectConversation(id); }} onSelectProject={setActiveConversationProject} onSelectBoard={(id) => { setProviderOpen(false); setRequestedOpenTaskId(null); setActiveTaskBoardId(id); setActiveView('tasks'); }} onModeChange={(mode) => { releaseAttachments(attachments); setAttachments([]); setError(null); setRequestedMessageId(null); setRequestedOpenTaskId(null); setProviderOpen(false); setActiveView(mode); }} onNew={(projectId) => void createConversation(projectId)} onRenameConversation={renameConversation} onMoveConversation={moveConversation} onArchiveConversation={archiveConversation} onPinConversation={pinConversation} onDeleteConversation={deleteConversation} onCreateProject={createConversationProject} onRenameProject={renameConversationProject} onDeleteProject={deleteConversationProject} onCreateBoard={createTaskBoard} onRenameBoard={renameTaskBoard} onSettings={() => setProviderOpen(true)} onToggle={() => setSidebarCollapsed((current) => !current)} />
     <section className="workspace" aria-label="会话工作区">
       {providerOpen ? <SettingsWorkspace appInfo={appInfo} current={provider} browserUseConfig={browserUseConfig} computerUseConfig={computerUseConfig} theme={theme} onThemeChange={setTheme} onClose={() => setProviderOpen(false)} onSaved={setProvider} onBrowserUseChange={setBrowserUseConfig} onComputerUseChange={setComputerUseConfig} /> : activeView === 'tasks' ? <Suspense fallback={<div className="task-page-loading">正在打开任务看板...</div>}><TaskBoard boardName={taskBoards.find((board) => board.id === activeTaskBoardId)?.name ?? '任务'} tasks={tasks} taskTypes={taskTypes} loading={tasksLoading} headerControl={sidebarCollapsed ? <SidebarExpandControl onExpand={() => setSidebarCollapsed(false)} /> : null} requestedOpenTaskId={requestedOpenTaskId} onOpenTaskHandled={() => setRequestedOpenTaskId(null)} sourceConversations={conversationItems} onOpenConversation={selectConversation} onCreate={createTask} onUpdate={updateTask} onCreateType={createTaskType} onRenameType={renameTaskType} onImportAsset={importTaskAsset} onPickAssets={pickTaskAssets} onOpenAsset={openTaskAsset} /></Suspense> : <>
-      <header className="workspace-header">{sidebarCollapsed && <SidebarExpandControl onExpand={() => setSidebarCollapsed(false)} />}<div className="conversation-identity"><div className="identity-mark"><ThinkingOrb state={isThinking ? 'working' : 'breathing'} size={20} theme="dark" /></div><div><h1>{activeTitle}</h1><span className="identity-meta">个人工作区 <span className="meta-separator">·</span> 会话 ID <button type="button" className="conversation-id-button" onClick={() => void copyConversationId()} title={`复制完整会话 ID：${activeConversation}`} aria-label={`复制会话 ID：${activeConversation}`}>{copiedConversationId ? '已复制' : shortId(activeConversation)}</button></span></div></div><div className="header-actions"><div className="header-status" aria-live="polite"><span className={`status-dot ${isThinking ? 'is-active' : ''}`} />{isThinking ? '处理中' : error ? '需要处理' : '就绪'}</div><button type="button" className="header-button" onClick={() => setContextCollapsed((current) => !current)} aria-label={contextCollapsed ? '打开详情面板' : '关闭详情面板'}>{contextCollapsed ? '详情' : '收起'}</button></div></header>
+      <header className="workspace-header">{sidebarCollapsed && <SidebarExpandControl onExpand={() => setSidebarCollapsed(false)} />}<div className="conversation-identity"><div className="identity-mark"><ThinkingOrb state={isThinking ? 'working' : 'breathing'} size={20} theme="dark" /></div><div><h1>{activeTitle}</h1><span className="identity-meta">个人工作区 <span className="meta-separator">·</span> 会话 ID <button type="button" className="conversation-id-button" onClick={() => void copyConversationId()} title={`复制完整会话 ID：${activeConversation}`} aria-label={`复制会话 ID：${activeConversation}`}>{copiedConversationId ? '已复制' : shortId(activeConversation)}</button></span></div></div><div className="header-actions"><ContextWindowStatus usage={latestCompletedRun?.usage ?? null} refreshing={Boolean(isThinking)} /><div className="header-status" aria-live="polite"><span className={`status-dot ${isThinking ? 'is-active' : ''}`} />{isThinking ? '处理中' : error ? '需要处理' : '就绪'}</div><button type="button" className="header-button" onClick={() => setContextCollapsed((current) => !current)} aria-label={contextCollapsed ? '打开详情面板' : '关闭详情面板'}>{contextCollapsed ? '详情' : '收起'}</button></div></header>
       {error && <div className="inline-error" role="alert">{error}<button type="button" onClick={() => setError(null)} aria-label="关闭错误提示">×</button></div>}
       <div className={`conversation-body ${conversationIsEmpty ? 'is-empty' : ''}`}>
         {conversationIsEmpty ? <ConversationStart composer={<Composer variant="start" prefill={composerPrefill} busy={Boolean(isThinking)} attachments={attachments} reasoningSelection={reasoningSelection} onReasoningSelectionChange={(selection) => { setReasoningSelection(selection); void activeBridge?.reasoning.save(activeConversation, selection); }} onAttach={pickAttachments} onRemoveAttachment={removeAttachment} onSubmit={submitMessage} onCancel={cancelRun} />} onSelectPrompt={(value) => setComposerPrefill((current) => ({ id: (current?.id ?? 0) + 1, value }))} /> : <>

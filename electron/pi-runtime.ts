@@ -108,7 +108,7 @@ export function createPiSessionFactory(config: ProviderConfig, apiKey: string, o
         thinkingLevelMap: options.thinkingLevel === undefined ? undefined : { xhigh: 'xhigh', max: 'max' },
         input: ['text', 'image'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
+        contextWindow: config.contextWindow,
         maxTokens: 4096,
       }],
     });

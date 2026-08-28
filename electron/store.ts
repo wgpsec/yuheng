@@ -7,6 +7,7 @@ export type ProviderConfig = {
   baseUrl: string;
   model: string;
   displayName: string;
+  contextWindow: number;
   hasApiKey: boolean;
 };
 export type BrowserUseConfig = { enabled: boolean };
@@ -14,6 +15,9 @@ export type ComputerUseConfig = { enabled: boolean };
 export type ReasoningSelection = 'default' | 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export const DEFAULT_CONVERSATION_PROJECT_ID = 'personal';
+export const DEFAULT_PROVIDER_CONTEXT_WINDOW = 200_000;
+export const MIN_PROVIDER_CONTEXT_WINDOW = 4_096;
+export const MAX_PROVIDER_CONTEXT_WINDOW = 10_000_000;
 export type ConversationProject = { id: string; name: string; position: number };
 export type Conversation = { id: string; projectId: string; title: string; updatedAt: string; archived: boolean; pinned: boolean };
 export type Message = { id: string; role: 'user' | 'assistant'; content: string; createdAt: string };
@@ -148,6 +152,7 @@ export class AppStore {
         base_url TEXT NOT NULL,
         model TEXT NOT NULL,
         display_name TEXT NOT NULL,
+        context_window INTEGER NOT NULL DEFAULT ${DEFAULT_PROVIDER_CONTEXT_WINDOW},
         updated_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS app_settings (
@@ -180,6 +185,8 @@ export class AppStore {
         updated_at TEXT NOT NULL
       );
     `);
+    const providerColumns = this.db.prepare('PRAGMA table_info(provider_profiles)').all() as Row[];
+    if (!providerColumns.some((column) => column.name === 'context_window')) this.db.exec(`ALTER TABLE provider_profiles ADD COLUMN context_window INTEGER NOT NULL DEFAULT ${DEFAULT_PROVIDER_CONTEXT_WINDOW}`);
     const runColumns = this.db.prepare('PRAGMA table_info(runs)').all() as Row[];
     if (!runColumns.some((column) => column.name === 'input_message_id')) this.db.exec('ALTER TABLE runs ADD COLUMN input_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL');
     for (const [name, sql] of [
@@ -838,15 +845,15 @@ export class AppStore {
   }
 
   getProvider(): ProviderConfig | null {
-    const row = this.db.prepare('SELECT protocol, base_url AS baseUrl, model, display_name AS displayName FROM provider_profiles WHERE id = 1').get() as Row | undefined;
+    const row = this.db.prepare('SELECT protocol, base_url AS baseUrl, model, display_name AS displayName, context_window AS contextWindow FROM provider_profiles WHERE id = 1').get() as Row | undefined;
     if (!row) return null;
-    return { protocol: row.protocol as ProviderConfig['protocol'], baseUrl: String(row.baseUrl), model: String(row.model), displayName: String(row.displayName), hasApiKey: false };
+    return { protocol: row.protocol as ProviderConfig['protocol'], baseUrl: String(row.baseUrl), model: String(row.model), displayName: String(row.displayName), contextWindow: Number(row.contextWindow), hasApiKey: false };
   }
 
   saveProvider(config: Omit<ProviderConfig, 'hasApiKey'>): ProviderConfig {
     const now = new Date().toISOString();
-    this.db.prepare(`INSERT INTO provider_profiles (id, protocol, base_url, model, display_name, updated_at) VALUES (1, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET protocol=excluded.protocol, base_url=excluded.base_url, model=excluded.model, display_name=excluded.display_name, updated_at=excluded.updated_at`).run(config.protocol, config.baseUrl, config.model, config.displayName, now);
+    this.db.prepare(`INSERT INTO provider_profiles (id, protocol, base_url, model, display_name, context_window, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET protocol=excluded.protocol, base_url=excluded.base_url, model=excluded.model, display_name=excluded.display_name, context_window=excluded.context_window, updated_at=excluded.updated_at`).run(config.protocol, config.baseUrl, config.model, config.displayName, config.contextWindow, now);
     return { ...config, hasApiKey: true };
   }
 
