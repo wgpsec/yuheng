@@ -1,9 +1,9 @@
-import { app, BrowserWindow, dialog, ipcMain, net, Notification, protocol, screen, shell, type OpenDialogOptions, type Rectangle, type WebContents } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, screen, shell, Tray, type OpenDialogOptions, type Rectangle, type WebContents } from 'electron';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { AppStore, DEFAULT_PROVIDER_CONTEXT_WINDOW, MAX_PROVIDER_CONTEXT_WINDOW, MIN_PROVIDER_CONTEXT_WINDOW, type BackupConfig, type BrowserUseConfig, type ComputerUseConfig, type ConversationProject, type CreateTaskInput, type ProviderConfig, type ReasoningSelection, type RunUsage, type Task, type TaskBoard, type TaskPriority, type TaskStatus, type TaskType, type UpdateTaskInput } from './store';
+import { AppStore, DEFAULT_PROVIDER_CONTEXT_WINDOW, MAX_PROVIDER_CONTEXT_WINDOW, MIN_PROVIDER_CONTEXT_WINDOW, type BackupConfig, type BrowserUseConfig, type ComputerUseConfig, type ConversationProject, type CreateTaskInput, type DesktopPetConfig, type DesktopPresenceConfig, type ProviderConfig, type ReasoningSelection, type RunUsage, type Task, type TaskBoard, type TaskPriority, type TaskStatus, type TaskType, type UpdateTaskInput } from './store';
 import { SecretStore } from './secrets';
 import { createPiRuntime, createPiSessionFactory, type ReasoningLevel } from './pi-runtime';
 import { loadYuhengSystemPrompt } from './system-prompt';
@@ -18,6 +18,7 @@ import { MAX_CONVERSATION_BACKUP_BYTES, conversationBackupMarkdown, parseConvers
 import { testProviderConnection, type ProviderTestResult } from './provider-test';
 import { externalHttpUrl } from './external-links';
 import { createFullBackup, restoreFullBackup } from './full-backup';
+import { trayReminderTitle } from './tray-state';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: TASK_ASSET_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
@@ -31,6 +32,9 @@ let secrets: SecretStore;
 let taskAssets: TaskAssetStore;
 let browserUse: BrowserUseSupervisor;
 let browserArtifacts: BrowserArtifactStore;
+let petWindow: BrowserWindow | null = null;
+let currentPetState: 'idle' | 'working' | 'celebrate' = 'idle';
+let petDragState: { senderId: number; pointerX: number; pointerY: number; windowX: number; windowY: number } | null = null;
 const computerUseLease = new ComputerUseLease();
 let taskReminders: TaskReminderScheduler;
 let pendingTaskOpen: { boardId: string; taskId: string } | null = null;
@@ -40,6 +44,10 @@ let shutdownRequested = false;
 let shutdownReady = false;
 let resourcesClosed = false;
 let automaticBackupTimer: NodeJS.Timeout | undefined;
+let tray: Tray | undefined;
+let unreadReminderCount = 0;
+let allowWindowClose = false;
+let desktopPresenceConfig: DesktopPresenceConfig = { notificationsEnabled: true, menuBarEnabled: true };
 type StoredAttachment = Attachment & { data: Uint8Array };
 type Attachment = { id: string; name: string; mimeType: string; size: number };
 const attachments = new Map<string, StoredAttachment>();
@@ -59,9 +67,15 @@ const DEFAULT_WINDOW_BOUNDS: Rectangle = { x: 0, y: 0, width: 1440, height: 920 
 const MIN_WINDOW_WIDTH = 980;
 const MIN_WINDOW_HEIGHT = 640;
 const WINDOW_STATE_FILE = 'window-state.json';
+const PET_STATE_FILE = 'desktop-pet-state.json';
+const PET_WINDOW_SIZE = 188;
 
 function windowStatePath(): string {
   return path.join(app.getPath('userData'), WINDOW_STATE_FILE);
+}
+
+function petStatePath(): string {
+  return path.join(app.getPath('userData'), PET_STATE_FILE);
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -120,6 +134,45 @@ function saveWindowBounds(window: BrowserWindow): void {
   }
 }
 
+function loadPetPosition(): { x: number; y: number } | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(petStatePath(), 'utf8'));
+    if (!parsed || typeof parsed !== 'object') return undefined;
+    const state = parsed as Record<string, unknown>;
+    const x = finiteNumber(state.x);
+    const y = finiteNumber(state.y);
+    return x !== undefined && y !== undefined ? { x: Math.round(x), y: Math.round(y) } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function visiblePetPosition(saved: { x: number; y: number } | undefined): { x: number; y: number } {
+  const displays = screen.getAllDisplays();
+  const display = saved
+    ? displays.find((candidate) => saved.x >= candidate.bounds.x && saved.x < candidate.bounds.x + candidate.bounds.width && saved.y >= candidate.bounds.y && saved.y < candidate.bounds.y + candidate.bounds.height) ?? screen.getPrimaryDisplay()
+    : screen.getPrimaryDisplay();
+  const workArea = display.workArea;
+  return {
+    x: Math.min(Math.max(saved?.x ?? workArea.x + workArea.width - PET_WINDOW_SIZE - 28, workArea.x), workArea.x + workArea.width - PET_WINDOW_SIZE),
+    y: Math.min(Math.max(saved?.y ?? workArea.y + workArea.height - PET_WINDOW_SIZE - 28, workArea.y), workArea.y + workArea.height - PET_WINDOW_SIZE),
+  };
+}
+
+function savePetPosition(window: BrowserWindow): void {
+  if (window.isDestroyed()) return;
+  const [x, y] = window.getPosition();
+  const filePath = petStatePath();
+  const temporaryPath = `${filePath}.tmp`;
+  try {
+    mkdirSync(path.dirname(filePath), { recursive: true });
+    writeFileSync(temporaryPath, JSON.stringify({ x, y }), 'utf8');
+    renameSync(temporaryPath, filePath);
+  } catch {
+    // Pet position is best effort and must not prevent the app from closing.
+  }
+}
+
 type RunEvent =
   | { type: 'accepted'; runId: string; conversationId: string }
   | { type: 'delta'; runId: string; conversationId: string; messageId: string; delta: string; createdAt: string }
@@ -138,6 +191,17 @@ function assertText(value: unknown, label: string): string {
 
 function emit(sender: WebContents, event: RunEvent): void {
   if (!sender.isDestroyed()) sender.send('run:event', event);
+  const petState = event.type === 'accepted' || event.type === 'tool_start' || event.type === 'approval_required'
+    ? 'working'
+    : event.type === 'completed'
+      ? 'celebrate'
+      : event.type === 'failed' || event.type === 'cancelled'
+        ? 'idle'
+        : null;
+  if (petState) {
+    currentPetState = petState;
+    if (petWindow && !petWindow.isDestroyed()) petWindow.webContents.send('pet:state', petState);
+  }
 }
 
 function emitTaskChanged(task: Task): void {
@@ -459,6 +523,32 @@ async function runAutomaticBackup(): Promise<void> {
   }
 }
 
+function createTray(window: BrowserWindow): void {
+  if (process.platform !== 'darwin' || tray || !desktopPresenceConfig.menuBarEnabled) return;
+  const icon = nativeImage.createFromDataURL(`data:image/svg+xml;charset=utf-8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><path fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M9 2.2 15.5 6v6L9 15.8 2.5 12V6L9 2.2Z"/><path fill="none" stroke="black" stroke-width="1.4" stroke-linecap="round" d="m5.4 8.9 2.2 2.2 4.8-4.8"/></svg>')}`);
+  icon.setTemplateImage(true);
+  tray = new Tray(icon);
+  tray.setToolTip('玉衡');
+  const refreshMenu = () => {
+    tray?.setTitle(trayReminderTitle(unreadReminderCount));
+    tray?.setContextMenu(Menu.buildFromTemplate([
+      { label: unreadReminderCount > 0 ? `待处理提醒（${trayReminderTitle(unreadReminderCount)}）` : '暂无待处理提醒', enabled: false },
+      { type: 'separator' },
+      { label: '打开玉衡', click: () => { unreadReminderCount = 0; refreshMenu(); window.show(); window.focus(); } },
+      { label: '退出玉衡', click: () => { allowWindowClose = true; app.quit(); } },
+    ]));
+  };
+  tray.on('click', () => { unreadReminderCount = 0; refreshMenu(); window.show(); window.focus(); });
+  refreshMenu();
+}
+
+function destroyTray(): void {
+  if (!tray) return;
+  tray.destroy();
+  tray = undefined;
+  unreadReminderCount = 0;
+}
+
 function createWindow(): BrowserWindow {
   const bounds = visibleWindowBounds(loadWindowBounds());
   const window = new BrowserWindow({
@@ -494,7 +584,12 @@ function createWindow(): BrowserWindow {
   };
   window.on('resize', scheduleBoundsSave);
   window.on('move', scheduleBoundsSave);
-  window.on('close', () => {
+  window.on('close', (event) => {
+    if (!allowWindowClose && process.platform === 'darwin' && desktopPresenceConfig.menuBarEnabled) {
+      event.preventDefault();
+      window.hide();
+      return;
+    }
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = undefined;
     saveWindowBounds(window);
@@ -509,8 +604,70 @@ function createWindow(): BrowserWindow {
   return window;
 }
 
+function mainWindow(): BrowserWindow | undefined {
+  return BrowserWindow.getAllWindows().find((candidate) => candidate !== petWindow && !candidate.isDestroyed());
+}
+
+function focusMainWindow(): void {
+  const window = mainWindow() ?? createWindow();
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+}
+
+function createPetWindow(): BrowserWindow {
+  if (petWindow && !petWindow.isDestroyed()) return petWindow;
+  const position = visiblePetPosition(loadPetPosition());
+  const window = new BrowserWindow({
+    ...position,
+    width: PET_WINDOW_SIZE,
+    height: PET_WINDOW_SIZE,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: true,
+    fullscreenable: false,
+    skipTaskbar: true,
+    hasShadow: false,
+    show: false,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+  petWindow = window;
+  window.setAlwaysOnTop(true, 'floating');
+  let saveTimer: NodeJS.Timeout | undefined;
+  const scheduleSave = () => {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => { saveTimer = undefined; savePetPosition(window); }, 250);
+  };
+  window.on('move', scheduleSave);
+  window.on('close', () => {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = undefined;
+    savePetPosition(window);
+  });
+  window.on('closed', () => { petWindow = null; petDragState = null; });
+  if (isDevelopment) {
+    const rendererUrl = new URL(process.env.ELECTRON_RENDERER_URL as string);
+    rendererUrl.searchParams.set('pet', '1');
+    void window.loadURL(rendererUrl.toString());
+  } else {
+    void window.loadFile(path.join(__dirname, '../dist-renderer/index.html'), { query: { pet: '1' } });
+  }
+  window.webContents.on('did-finish-load', () => {
+    if (!window.isDestroyed()) window.webContents.send('pet:state', currentPetState);
+  });
+  window.once('ready-to-show', () => { if (!window.isDestroyed()) window.showInactive(); });
+  return window;
+}
+
 function openTaskFromReminder(boardId: string, taskId: string): void {
-  const existingWindow = BrowserWindow.getAllWindows()[0];
+  const existingWindow = mainWindow();
   const window = existingWindow ?? createWindow();
   if (!existingWindow || window.webContents.isLoadingMainFrame()) pendingTaskOpen = { boardId, taskId };
   else window.webContents.send('task:event', { type: 'open', boardId, taskId });
@@ -521,6 +678,7 @@ function openTaskFromReminder(boardId: string, taskId: string): void {
 
 app.whenReady().then(() => {
   store = new AppStore(app.getPath('userData'));
+  desktopPresenceConfig = store.getDesktopPresenceConfig();
   secrets = new SecretStore(app.getPath('userData'));
   taskAssets = new TaskAssetStore(path.join(app.getPath('userData'), 'task-assets'));
   browserUse = new BrowserUseSupervisor({ dataDir: path.join(app.getPath('userData'), 'browser-use') });
@@ -532,9 +690,12 @@ app.whenReady().then(() => {
     listPending: () => store.listPendingTaskReminders(),
     claim: (taskId, expectedRemindAt) => store.markTaskReminderFired(taskId, expectedRemindAt),
     notify: (task, onClick) => {
+      unreadReminderCount += 1;
+      tray?.setTitle(trayReminderTitle(unreadReminderCount));
       emitTaskChanged(task);
-      const notification = new Notification({ title: '任务提醒', body: task.title });
-      notification.on('click', onClick);
+      if (!desktopPresenceConfig.notificationsEnabled) return;
+      const notification = new Notification({ title: '玉衡 · 任务提醒', body: task.title, silent: false });
+      notification.on('click', () => { unreadReminderCount = 0; tray?.setTitle(''); onClick(); });
       notification.show();
     },
     openTask: openTaskFromReminder,
@@ -657,6 +818,50 @@ app.whenReady().then(() => {
     const saved = store.saveBackupConfig({ enabled: input.enabled === true, directory, retention });
     if (saved.enabled) void runAutomaticBackup();
     return saved;
+  });
+  ipcMain.handle('desktop-presence:get-config', (): DesktopPresenceConfig => desktopPresenceConfig);
+  ipcMain.handle('desktop-presence:save-config', (_event, raw: unknown): DesktopPresenceConfig => {
+    if (!raw || typeof raw !== 'object') throw new Error('无效的通知设置。');
+    const input = raw as Record<string, unknown>;
+    desktopPresenceConfig = store.saveDesktopPresenceConfig({ notificationsEnabled: input.notificationsEnabled !== false, menuBarEnabled: input.menuBarEnabled !== false });
+    const primaryWindow = mainWindow();
+    if (desktopPresenceConfig.menuBarEnabled && primaryWindow) createTray(primaryWindow);
+    else if (!desktopPresenceConfig.menuBarEnabled) destroyTray();
+    return desktopPresenceConfig;
+  });
+  ipcMain.handle('pet:get', (): DesktopPetConfig => store.getDesktopPetConfig());
+  ipcMain.handle('pet:save', (_event, raw: unknown): DesktopPetConfig => {
+    if (!raw || typeof raw !== 'object' || typeof (raw as Record<string, unknown>).enabled !== 'boolean') {
+      throw new Error('无效的桌面宠物设置。');
+    }
+    const config = store.saveDesktopPetConfig({ enabled: (raw as Record<string, unknown>).enabled === true });
+    if (config.enabled) createPetWindow();
+    else if (petWindow && !petWindow.isDestroyed()) petWindow.close();
+    return config;
+  });
+  ipcMain.handle('pet:focus-main', () => focusMainWindow());
+  ipcMain.on('pet:drag-start', (event, rawScreenX: unknown, rawScreenY: unknown) => {
+    if (!petWindow || petWindow.isDestroyed() || event.sender !== petWindow.webContents) return;
+    const pointerX = finiteNumber(rawScreenX);
+    const pointerY = finiteNumber(rawScreenY);
+    if (pointerX === undefined || pointerY === undefined) return;
+    const [windowX, windowY] = petWindow.getPosition();
+    petDragState = { senderId: event.sender.id, pointerX, pointerY, windowX, windowY };
+  });
+  ipcMain.on('pet:drag-move', (event, rawScreenX: unknown, rawScreenY: unknown) => {
+    const drag = petDragState;
+    if (!drag || drag.senderId !== event.sender.id || !petWindow || petWindow.isDestroyed() || event.sender !== petWindow.webContents) return;
+    const pointerX = finiteNumber(rawScreenX);
+    const pointerY = finiteNumber(rawScreenY);
+    if (pointerX === undefined || pointerY === undefined) return;
+    const position = visiblePetPosition({
+      x: Math.round(drag.windowX + pointerX - drag.pointerX),
+      y: Math.round(drag.windowY + pointerY - drag.pointerY),
+    });
+    petWindow.setPosition(position.x, position.y);
+  });
+  ipcMain.on('pet:drag-end', (event) => {
+    if (petDragState?.senderId === event.sender.id) petDragState = null;
   });
   ipcMain.handle('tasks:boards:list', (): TaskBoard[] => store.listTaskBoards());
   ipcMain.handle('tasks:boards:create', (_event, rawName: unknown): TaskBoard => {
@@ -912,17 +1117,20 @@ app.whenReady().then(() => {
     pending.finish(approved === true);
   });
 
-  createWindow();
+  const primaryWindow = createWindow();
+  createTray(primaryWindow);
+  if (store.getDesktopPetConfig().enabled) createPetWindow();
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    focusMainWindow();
   });
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  if (process.platform !== 'darwin' || !desktopPresenceConfig.menuBarEnabled) app.quit();
 });
 
 app.on('before-quit', (event) => {
+  allowWindowClose = true;
   if (shutdownReady) {
     closeResources();
     return;

@@ -1,19 +1,19 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { AlertCircle, ArchiveRestore, ArrowLeft, BrainCircuit, CalendarCheck2, CalendarClock, ChevronDown, Download, Info, KeyRound, Palette, PanelLeftOpen, Upload, X } from 'lucide-react';
+import { AlertCircle, ArchiveRestore, ArrowLeft, Bell, BrainCircuit, CalendarCheck2, CalendarClock, ChevronDown, Download, Info, KeyRound, Palette, PanelLeftOpen, Upload, X } from 'lucide-react';
 import { ThinkingOrb } from 'thinking-orbs';
 import { Composer } from '../features/conversation/workspace/composer';
 import { ConversationStart } from '../features/conversation/workspace/conversation-start';
 import { Sidebar, type Conversation as SidebarConversation } from '../features/conversation/workspace/sidebar';
 import { Transcript, type ToolActivity, type TranscriptMessage } from '../features/conversation/workspace/transcript';
 import { GlobalSearch } from '../features/search/global-search';
-import { AGENT_PROFILES, DEFAULT_AGENT_PROFILE_ID, type AgentProfileId, type AppInfo, type Attachment, type BrowserUseConfig, type ComputerUseConfig, type ConversationProject, type CreateTaskInput, type DesktopBridge, type Message, type ProviderConfig, type ProviderProtocol, type ProviderTestResult, type ReasoningLevel, type ReasoningSelection, type RunEvent, type RunSummary, type SearchResult, type Task, type TaskAsset, type TaskBoard, type TaskEvent, type TaskType, type UpdateTaskInput } from '../contracts/desktop-bridge';
+import { AGENT_PROFILES, DEFAULT_AGENT_PROFILE_ID, type AgentProfileId, type AppInfo, type Attachment, type BrowserUseConfig, type ComputerUseConfig, type ConversationProject, type CreateTaskInput, type DesktopBridge, type DesktopPetConfig, type Message, type ProviderConfig, type ProviderProtocol, type ProviderTestResult, type ReasoningLevel, type ReasoningSelection, type RunEvent, type RunSummary, type SearchResult, type Task, type TaskAsset, type TaskBoard, type TaskEvent, type TaskType, type UpdateTaskInput } from '../contracts/desktop-bridge';
 import { releaseNotes } from '../features/settings/releases';
 import { listTodayTasks, todayTaskKindLabel, type TodayTask } from '../features/tasks/today-overview';
 
 const TaskBoard = lazy(() => import('../features/tasks/task-board').then((module) => ({ default: module.TaskBoard })));
 
 type ThemeName = 'dark' | 'light' | 'graphite' | 'notion';
-type SettingsSection = 'provider' | 'capabilities' | 'appearance' | 'backup' | 'about';
+type SettingsSection = 'provider' | 'capabilities' | 'appearance' | 'desktop' | 'backup' | 'about';
 
 const fallbackConversations: SidebarConversation[] = [
   { id: 'inbox', projectId: 'personal', title: '收件箱', time: '现在', pinned: false },
@@ -72,7 +72,14 @@ function platformLabel(appInfo: AppInfo | null): string {
   return `${platform} · ${arch}`;
 }
 
-function SettingsWorkspace({ appInfo, current, providers, browserUseConfig, computerUseConfig, theme, onThemeChange, onClose, onSaved, onProvidersChange, onBrowserUseChange, onComputerUseChange }: { appInfo: AppInfo | null; current: ProviderConfig | null; providers: ProviderConfig[]; browserUseConfig: BrowserUseConfig; computerUseConfig: ComputerUseConfig; theme: ThemeName; onThemeChange: (theme: ThemeName) => void; onClose: () => void; onSaved: (provider: ProviderConfig) => void; onProvidersChange: (providers: ProviderConfig[]) => void; onBrowserUseChange: (config: BrowserUseConfig) => void; onComputerUseChange: (config: ComputerUseConfig) => void }) {
+function SettingsWorkspace({ appInfo, current, providers, browserUseConfig, computerUseConfig, desktopPetConfig: configuredDesktopPet, theme, onThemeChange, onClose, onSaved, onProvidersChange, onBrowserUseChange, onComputerUseChange, onDesktopPetChange }: { appInfo: AppInfo | null; current: ProviderConfig | null; providers: ProviderConfig[]; browserUseConfig: BrowserUseConfig; computerUseConfig: ComputerUseConfig; desktopPetConfig?: DesktopPetConfig; theme: ThemeName; onThemeChange: (theme: ThemeName) => void; onClose: () => void; onSaved: (provider: ProviderConfig) => void; onProvidersChange: (providers: ProviderConfig[]) => void; onBrowserUseChange: (config: BrowserUseConfig) => void; onComputerUseChange: (config: ComputerUseConfig) => void; onDesktopPetChange?: (config: DesktopPetConfig) => void }) {
+  const [localDesktopPet, setLocalDesktopPet] = useState<DesktopPetConfig>(configuredDesktopPet ?? { enabled: false });
+  const desktopPetConfig = configuredDesktopPet ?? localDesktopPet;
+  useEffect(() => {
+    if (configuredDesktopPet) return;
+    const activeBridge = getBridge();
+    if (activeBridge) void activeBridge.pet.get().then(setLocalDesktopPet).catch(() => undefined);
+  }, [configuredDesktopPet]);
   const [activeSection, setActiveSection] = useState<SettingsSection>('provider');
   const [protocol, setProtocol] = useState<ProviderProtocol>(current?.protocol ?? 'openai');
   const [editingProviderId, setEditingProviderId] = useState(current?.id ?? '');
@@ -137,10 +144,22 @@ function SettingsWorkspace({ appInfo, current, providers, browserUseConfig, comp
     } catch (reason) { setComputerError(reason instanceof Error ? reason.message : '更新 Computer Use 设置失败。'); }
     finally { setComputerSaving(false); }
   };
+  const toggleDesktopPet = async () => {
+    const activeBridge = getBridge();
+    if (!activeBridge) return;
+    try {
+      const saved = await activeBridge.pet.save({ enabled: !desktopPetConfig.enabled });
+      setLocalDesktopPet(saved);
+      onDesktopPetChange?.(saved);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '更新桌面宠物设置失败。');
+    }
+  };
   const sectionCopy: Record<SettingsSection, { title: string; description: string }> = {
     provider: { title: '模型服务', description: '配置玉衡用于会话和任务处理的语言模型。' },
     capabilities: { title: 'Agent 能力', description: '管理需要额外运行环境或系统权限的可选能力。' },
     appearance: { title: '界面外观', description: '调整玉衡在这台设备上的显示方式。' },
+    desktop: { title: '通知与驻留', description: '控制任务提醒和 macOS 菜单栏驻留行为。' },
     backup: { title: '数据备份', description: '导出或导入这台 Mac 上的玉衡数据。' },
     about: { title: '关于玉衡', description: '查看当前安装版本和历次版本更新。' },
   };
@@ -155,6 +174,7 @@ function SettingsWorkspace({ appInfo, current, providers, browserUseConfig, comp
         <button type="button" className={activeSection === 'capabilities' ? 'is-selected' : ''} aria-current={activeSection === 'capabilities' ? 'page' : undefined} onClick={() => setActiveSection('capabilities')}><BrainCircuit size={15} aria-hidden="true" /><span>Agent 能力</span></button>
         <span className="settings-navigation-label">应用</span>
         <button type="button" className={activeSection === 'appearance' ? 'is-selected' : ''} aria-current={activeSection === 'appearance' ? 'page' : undefined} onClick={() => setActiveSection('appearance')}><Palette size={15} aria-hidden="true" /><span>界面外观</span></button>
+        <button type="button" className={activeSection === 'desktop' ? 'is-selected' : ''} aria-current={activeSection === 'desktop' ? 'page' : undefined} onClick={() => setActiveSection('desktop')}><Bell size={15} aria-hidden="true" /><span>通知与驻留</span></button>
         <button type="button" className={activeSection === 'backup' ? 'is-selected' : ''} aria-current={activeSection === 'backup' ? 'page' : undefined} onClick={() => setActiveSection('backup')}><ArchiveRestore size={15} aria-hidden="true" /><span>数据备份</span></button>
         <button type="button" className={activeSection === 'about' ? 'is-selected' : ''} aria-current={activeSection === 'about' ? 'page' : undefined} onClick={() => setActiveSection('about')}><Info size={15} aria-hidden="true" /><span>关于玉衡</span></button>
       </nav>
@@ -188,7 +208,10 @@ function SettingsWorkspace({ appInfo, current, providers, browserUseConfig, comp
 
       {activeSection === 'appearance' && <div className="settings-section settings-section-first appearance-section"><div className="settings-section-heading"><div><h3>主题</h3><p>选择玉衡工作区的基础配色。</p></div></div><div className="theme-options" role="radiogroup" aria-label="界面配色"><button type="button" className={`theme-option ${theme === 'dark' ? 'is-selected' : ''}`} onClick={() => onThemeChange('dark')} role="radio" aria-checked={theme === 'dark'}><span className="theme-swatch theme-swatch-dark" /><span><strong>深色</strong><small>适合长时间专注</small></span></button><button type="button" className={`theme-option ${theme === 'light' ? 'is-selected' : ''}`} onClick={() => onThemeChange('light')} role="radio" aria-checked={theme === 'light'}><span className="theme-swatch theme-swatch-light" /><span><strong>浅色</strong><small>明亮清晰</small></span></button><button type="button" className={`theme-option ${theme === 'graphite' ? 'is-selected' : ''}`} onClick={() => onThemeChange('graphite')} role="radio" aria-checked={theme === 'graphite'}><span className="theme-swatch theme-swatch-graphite" /><span><strong>石墨灰</strong><small>低对比度</small></span></button><button type="button" className={`theme-option ${theme === 'notion' ? 'is-selected' : ''}`} onClick={() => onThemeChange('notion')} role="radio" aria-checked={theme === 'notion'}><span className="theme-swatch theme-swatch-notion" /><span><strong>Notion</strong><small>温和中性</small></span></button></div></div>}
 
+      {activeSection === 'appearance' && <div className="settings-section desktop-pet-settings"><div className="settings-section-heading"><div><h3>桌面宠物</h3><p>在桌面显示可拖动的玉衡宠物；Agent 工作时会切换状态。</p></div><span className={`settings-state ${desktopPetConfig.enabled ? 'is-ready' : ''}`}>{desktopPetConfig.enabled ? '已启用' : '已关闭'}</span></div><div className="plugin-toggle-row"><div><strong>显示桌面宠物</strong><small>宠物窗口透明、始终置顶，点击可快速回到玉衡。</small></div><button type="button" className={`switch-control ${desktopPetConfig.enabled ? 'is-on' : ''}`} role="switch" aria-checked={desktopPetConfig.enabled} aria-label={desktopPetConfig.enabled ? '关闭桌面宠物' : '开启桌面宠物'} onClick={() => void toggleDesktopPet()}><span /></button></div></div>}
+
       {activeSection === 'backup' && <BackupSettings />}
+      {activeSection === 'desktop' && <DesktopPresenceSettings />}
 
       {activeSection === 'about' && <div className="settings-section settings-section-first about-section">
         <div className="about-product"><div><strong>玉衡</strong><span>{appInfo ? `版本 v${appInfo.version}` : '版本信息读取中'}</span></div><small>{platformLabel(appInfo)}</small></div>
@@ -201,6 +224,21 @@ function SettingsWorkspace({ appInfo, current, providers, browserUseConfig, comp
       </div>}
     </section>
   </section>;
+}
+
+function DesktopPresenceSettings() {
+  const [config, setConfig] = useState<{ notificationsEnabled: boolean; menuBarEnabled: boolean } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { const bridge = getBridge(); if (bridge) void bridge.desktopPresence.getConfig().then(setConfig).catch(() => undefined); }, []);
+  const toggle = async (key: 'notificationsEnabled' | 'menuBarEnabled') => {
+    const bridge = getBridge(); if (!bridge || !config || saving) return;
+    setSaving(true); setError(null);
+    try { setConfig(await bridge.desktopPresence.saveConfig({ ...config, [key]: !config[key] })); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '保存设置失败。'); }
+    finally { setSaving(false); }
+  };
+  return <div className="settings-section settings-section-first desktop-presence-section"><div className="settings-section-heading"><div><h3>系统提醒</h3><p>任务到期时显示 macOS 通知中心横幅。需要在系统设置中允许玉衡发送通知。</p></div></div><div className="plugin-toggle-row"><div><strong>任务通知</strong><small>关闭后不会弹出系统通知，但任务提醒仍会保留在玉衡内。</small></div><button type="button" className={`switch-control ${config?.notificationsEnabled ? 'is-on' : ''}`} role="switch" aria-checked={config?.notificationsEnabled ?? false} aria-label={config?.notificationsEnabled ? '关闭任务通知' : '开启任务通知'} onClick={() => void toggle('notificationsEnabled')} disabled={!config || saving}><span /></button></div><div className="settings-section-heading desktop-presence-subheading"><div><h3>菜单栏驻留</h3><p>关闭主窗口后继续在后台运行，并从 macOS 菜单栏快速打开玉衡。</p></div></div><div className="plugin-toggle-row"><div><strong>显示菜单栏图标</strong><small>关闭后玉衡仍可通过通知运行，但不显示顶部菜单栏图标。</small></div><button type="button" className={`switch-control ${config?.menuBarEnabled ? 'is-on' : ''}`} role="switch" aria-checked={config?.menuBarEnabled ?? false} aria-label={config?.menuBarEnabled ? '隐藏菜单栏图标' : '显示菜单栏图标'} onClick={() => void toggle('menuBarEnabled')} disabled={!config || saving}><span /></button></div>{error && <p className="form-error" role="alert">{error}</p>}</div>;
 }
 
 function BackupSettings() {
@@ -223,7 +261,7 @@ function BackupSettings() {
     finally { setBusy(false); }
   };
   const toggleAutomatic = async () => { const bridge = getBridge(); if (!bridge || !config) return; const saved = await bridge.backup.saveConfig({ enabled: !config.enabled, directory: config.directory, retention: config.retention }); setConfig(saved); };
-  return <div className="settings-section settings-section-first"><div className="settings-section-heading"><div><h3>完整备份</h3><p>包含会话、任务、运行记录和受控附件，不包含 API Key 或 workspace 文件。备份文件未加密，请妥善保管。</p></div></div><div className="provider-modal-actions"><button type="button" className="secondary-action" onClick={() => void importBackup()} disabled={busy}>导入 .yuheng</button><button type="button" className="send-button" onClick={() => void exportBackup()} disabled={busy}>{busy ? '处理中…' : '导出完整备份'}</button></div><div className="plugin-toggle-row"><div><strong>自动备份</strong><small>每天最多一次；检测到运行中任务时跳过本轮。</small></div><button type="button" className={`switch-control ${config?.enabled ? 'is-on' : ''}`} role="switch" aria-checked={config?.enabled ?? false} aria-label="开启自动备份" onClick={() => void toggleAutomatic()} disabled={!config || busy}><span /></button></div>{config?.lastRunAt && <small>最近成功：{new Date(config.lastRunAt).toLocaleString('zh-CN')}</small>}{config?.lastError && <p className="form-error" role="alert">{config.lastError}</p>}{status && <p className="provider-test-result" role="status">{status}</p>}</div>;
+  return <div className="settings-section settings-section-first desktop-backup-section"><div className="settings-section-heading"><div><h3>完整备份</h3><p>包含会话、任务、运行记录和受控附件，不包含 API Key 或 workspace 文件。备份文件未加密，请妥善保管。</p></div></div><div className="provider-modal-actions"><button type="button" className="secondary-action" onClick={() => void importBackup()} disabled={busy}>导入 .yuheng</button><button type="button" className="send-button" onClick={() => void exportBackup()} disabled={busy}>{busy ? '处理中…' : '导出完整备份'}</button></div><div className="plugin-toggle-row"><div><strong>自动备份</strong><small>每天最多一次；检测到运行中任务时跳过本轮。</small></div><button type="button" className={`switch-control ${config?.enabled ? 'is-on' : ''}`} role="switch" aria-checked={config?.enabled ?? false} aria-label="开启自动备份" onClick={() => void toggleAutomatic()} disabled={!config || busy}><span /></button></div>{config?.lastRunAt && <small>最近成功：{new Date(config.lastRunAt).toLocaleString('zh-CN')}</small>}{config?.lastError && <p className="form-error" role="alert">{config.lastError}</p>}{status && <p className="provider-test-result" role="status">{status}</p>}</div>;
 }
 
 export function ProductionRenderer() {

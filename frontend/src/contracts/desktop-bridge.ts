@@ -14,6 +14,7 @@ export const AGENT_PROFILES: readonly AgentProfile[] = [
 export const DEFAULT_AGENT_PROFILE_ID: AgentProfileId = 'assistant';
 export type BrowserUseConfig = { enabled: boolean };
 export type ComputerUseConfig = { enabled: boolean };
+export type DesktopPetConfig = { enabled: boolean };
 export type ConversationProject = { id: string; name: string; position: number };
 export type Conversation = { id: string; projectId: string; title: string; updatedAt: string; archived: boolean; pinned: boolean; providerId?: string; profileId: AgentProfileId };
 export type Message = { id: string; role: 'user' | 'assistant'; content: string; createdAt: string };
@@ -56,6 +57,10 @@ export type DesktopBridge = {
     getConfig: () => Promise<{ enabled: boolean; directory: string; retention: number; lastRunAt: string | null; lastError: string | null }>;
     saveConfig: (config: { enabled: boolean; directory: string; retention: number }) => Promise<{ enabled: boolean; directory: string; retention: number; lastRunAt: string | null; lastError: string | null }>;
   };
+  desktopPresence: {
+    getConfig: () => Promise<{ notificationsEnabled: boolean; menuBarEnabled: boolean }>;
+    saveConfig: (config: { notificationsEnabled: boolean; menuBarEnabled: boolean }) => Promise<{ notificationsEnabled: boolean; menuBarEnabled: boolean }>;
+  };
   search: {
     query: (text: string, limit?: number) => Promise<SearchResult[]>;
   };
@@ -93,6 +98,15 @@ export type DesktopBridge = {
   computerUse: {
     get: () => Promise<ComputerUseConfig>;
     save: (config: ComputerUseConfig) => Promise<ComputerUseConfig>;
+  };
+  pet: {
+    get: () => Promise<DesktopPetConfig>;
+    save: (config: DesktopPetConfig) => Promise<DesktopPetConfig>;
+    focusMain: () => Promise<void>;
+    beginDrag: (screenX: number, screenY: number) => void;
+    dragTo: (screenX: number, screenY: number) => void;
+    endDrag: () => void;
+    onState: (listener: (state: 'idle' | 'working' | 'celebrate') => void) => () => void;
   };
   reasoning: {
     get: (conversationId: string) => Promise<ReasoningSelection>;

@@ -11,6 +11,10 @@ contextBridge.exposeInMainWorld('desktopBridge', {
     getConfig: () => ipcRenderer.invoke('backup:get-config'),
     saveConfig: (config: unknown) => ipcRenderer.invoke('backup:save-config', config),
   },
+  desktopPresence: {
+    getConfig: () => ipcRenderer.invoke('desktop-presence:get-config'),
+    saveConfig: (config: unknown) => ipcRenderer.invoke('desktop-presence:save-config', config),
+  },
   search: {
     query: (text: string, limit?: number) => ipcRenderer.invoke('search:query', text, limit),
   },
@@ -48,6 +52,21 @@ contextBridge.exposeInMainWorld('desktopBridge', {
   computerUse: {
     get: () => ipcRenderer.invoke('computer-use:get'),
     save: (config: unknown) => ipcRenderer.invoke('computer-use:save', config),
+  },
+  pet: {
+    get: () => ipcRenderer.invoke('pet:get'),
+    save: (config: unknown) => ipcRenderer.invoke('pet:save', config),
+    focusMain: () => ipcRenderer.invoke('pet:focus-main'),
+    beginDrag: (screenX: number, screenY: number) => ipcRenderer.send('pet:drag-start', screenX, screenY),
+    dragTo: (screenX: number, screenY: number) => ipcRenderer.send('pet:drag-move', screenX, screenY),
+    endDrag: () => ipcRenderer.send('pet:drag-end'),
+    onState: (listener: (state: 'idle' | 'working' | 'celebrate') => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: unknown) => {
+        if (state === 'idle' || state === 'working' || state === 'celebrate') listener(state);
+      };
+      ipcRenderer.on('pet:state', handler);
+      return () => ipcRenderer.removeListener('pet:state', handler);
+    },
   },
   reasoning: {
     get: (conversationId: string) => ipcRenderer.invoke('reasoning:get', conversationId),

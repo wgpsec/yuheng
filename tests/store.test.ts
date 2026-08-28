@@ -127,6 +127,32 @@ describe('AppStore full backup snapshot', () => {
   });
 });
 
+describe('AppStore desktop presence settings', () => {
+  it('defaults to enabled and persists notification/menu bar choices', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-presence-'));
+    const store = new AppStore(dataDir);
+    try {
+      assert.deepEqual(store.getDesktopPresenceConfig('/tmp'), { notificationsEnabled: true, menuBarEnabled: true });
+      assert.deepEqual(store.saveDesktopPresenceConfig({ notificationsEnabled: false, menuBarEnabled: false }), { notificationsEnabled: false, menuBarEnabled: false });
+      assert.deepEqual(store.getDesktopPresenceConfig('/tmp'), { notificationsEnabled: false, menuBarEnabled: false });
+    } finally { store.close(); fs.rmSync(dataDir, { recursive: true, force: true }); }
+  });
+});
+
+describe('AppStore desktop pet settings', () => {
+  it('defaults disabled and persists the opt-in flag across store instances', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-pet-'));
+    let store = new AppStore(dataDir);
+    try {
+      assert.deepEqual(store.getDesktopPetConfig(), { enabled: false });
+      assert.deepEqual(store.saveDesktopPetConfig({ enabled: true }), { enabled: true });
+      store.close();
+      store = new AppStore(dataDir);
+      assert.deepEqual(store.getDesktopPetConfig(), { enabled: true });
+    } finally { store.close(); fs.rmSync(dataDir, { recursive: true, force: true }); }
+  });
+});
+
 describe('AppStore provider settings', () => {
   it('stores multiple providers and binds each conversation to its selected provider', () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));

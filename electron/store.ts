@@ -15,6 +15,7 @@ export type ProviderConfig = {
 };
 export type BrowserUseConfig = { enabled: boolean };
 export type ComputerUseConfig = { enabled: boolean };
+export type DesktopPetConfig = { enabled: boolean };
 export type ReasoningSelection = 'default' | 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export const DEFAULT_CONVERSATION_PROJECT_ID = 'personal';
@@ -78,6 +79,7 @@ export type FullBackupSnapshot = {
   tasks: Array<{ id: string; boardId: string; title: string; description: string; position: number; status: string; priority: TaskPriority; dueAt: string | null; remindAt: string | null; reminderFiredAt: string | null; sourceConversationId: string | null; createdAt: string; updatedAt: string }>;
 };
 export type BackupConfig = { enabled: boolean; directory: string; retention: number; lastRunAt: string | null; lastError: string | null };
+export type DesktopPresenceConfig = { notificationsEnabled: boolean; menuBarEnabled: boolean };
 
 type Row = Record<string, unknown>;
 
@@ -1139,6 +1141,23 @@ export class AppStore {
     }
   }
 
+  getDesktopPetConfig(): DesktopPetConfig {
+    const row = this.db.prepare("SELECT value FROM app_settings WHERE key = 'desktop_pet'").get() as Row | undefined;
+    if (!row) return { enabled: false };
+    try {
+      const value = JSON.parse(String(row.value)) as { enabled?: unknown };
+      return { enabled: value.enabled === true };
+    } catch {
+      return { enabled: false };
+    }
+  }
+
+  saveDesktopPetConfig(config: DesktopPetConfig): DesktopPetConfig {
+    const value = { enabled: config.enabled === true } satisfies DesktopPetConfig;
+    this.db.prepare("INSERT INTO app_settings (key, value, updated_at) VALUES ('desktop_pet', ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at").run(JSON.stringify(value), new Date().toISOString());
+    return value;
+  }
+
   saveComputerUseConfig(config: ComputerUseConfig): ComputerUseConfig {
     const normalized = { enabled: config.enabled === true };
     const now = new Date().toISOString();
@@ -1188,6 +1207,23 @@ export class AppStore {
   saveBackupConfig(config: Pick<BackupConfig, 'enabled' | 'directory' | 'retention'> & Partial<Pick<BackupConfig, 'lastRunAt' | 'lastError'>>): BackupConfig {
     const value: BackupConfig = { enabled: config.enabled === true, directory: config.directory.trim(), retention: Math.min(30, Math.max(1, Math.round(config.retention))), lastRunAt: config.lastRunAt ?? null, lastError: config.lastError ?? null };
     this.db.prepare("INSERT INTO app_settings (key, value, updated_at) VALUES ('backup_config', ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at").run(JSON.stringify(value), new Date().toISOString());
+    return value;
+  }
+
+  getDesktopPresenceConfig(): DesktopPresenceConfig {
+    const fallback: DesktopPresenceConfig = { notificationsEnabled: true, menuBarEnabled: true };
+    const row = this.db.prepare("SELECT value FROM app_settings WHERE key = 'desktop_presence'").get() as Row | undefined;
+    if (!row) return fallback;
+    try {
+      const value = JSON.parse(String(row.value)) as Partial<DesktopPresenceConfig>;
+      return { notificationsEnabled: value.notificationsEnabled !== false, menuBarEnabled: value.menuBarEnabled !== false };
+    } catch { return fallback; }
+  }
+
+  saveDesktopPresenceConfig(config: Partial<DesktopPresenceConfig>): DesktopPresenceConfig {
+    const current = this.getDesktopPresenceConfig();
+    const value = { notificationsEnabled: config.notificationsEnabled ?? current.notificationsEnabled, menuBarEnabled: config.menuBarEnabled ?? current.menuBarEnabled };
+    this.db.prepare("INSERT INTO app_settings (key, value, updated_at) VALUES ('desktop_presence', ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at").run(JSON.stringify(value), new Date().toISOString());
     return value;
   }
 
