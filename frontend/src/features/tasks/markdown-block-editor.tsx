@@ -34,7 +34,8 @@ export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAsse
   const containerRef = useRef<HTMLDivElement>(null);
   const [slash, setSlash] = useState<SlashState | null>(null);
   const [blockControl, setBlockControl] = useState<BlockControlState | null>(null);
-  const [blockMenuOpen, setBlockMenuOpen] = useState(false);
+  const [blockMenuOpen, setBlockMenuOpenState] = useState(false);
+  const [blockMenuClosing, setBlockMenuClosing] = useState(false);
   const [draggedBlock, setDraggedBlock] = useState<BlockDragState | null>(null);
   const [dropBlockTop, setDropBlockTop] = useState<number | null>(null);
   const draggedBlockElementRef = useRef<HTMLElement | null>(null);
@@ -42,9 +43,19 @@ export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAsse
   const [assetBusy, setAssetBusy] = useState(false);
   const [assetError, setAssetError] = useState<string | null>(null);
   const blockControlHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const blockMenuCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const setBlockMenuOpen = (next: boolean | ((current: boolean) => boolean)) => {
+    const value = typeof next === 'function' ? next(blockMenuOpen) : next;
+    if (blockMenuCloseTimerRef.current !== null) clearTimeout(blockMenuCloseTimerRef.current);
+    if (value) { setBlockMenuClosing(false); setBlockMenuOpenState(true); return; }
+    if (!blockMenuOpen) return;
+    setBlockMenuClosing(true);
+    blockMenuCloseTimerRef.current = setTimeout(() => { setBlockMenuOpenState(false); setBlockMenuClosing(false); blockMenuCloseTimerRef.current = null; }, 125);
+  };
 
   useEffect(() => () => {
     if (blockControlHideTimerRef.current !== null) clearTimeout(blockControlHideTimerRef.current);
+    if (blockMenuCloseTimerRef.current !== null) clearTimeout(blockMenuCloseTimerRef.current);
   }, []);
   const editor = useEditor({
     extensions: [
@@ -333,7 +344,7 @@ export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAsse
     {blockControl && <div className="block-editor-block-controls" style={{ left: blockControl.left, top: blockControl.top }} onMouseEnter={keepBlockControl} onMouseDown={(event) => { if (!(event.target as Element | null)?.closest('.block-editor-drag-handle')) event.preventDefault(); }}>
       <button type="button" onClick={insertBlockAfter} aria-label="在下方添加内容块" title="添加内容块"><Plus size={14} /></button>
       <button type="button" className="block-editor-drag-handle" draggable onDragStart={(event) => { const range = blockRange(); if (!range) return; const source = Array.from(containerRef.current?.querySelectorAll<HTMLElement>('.ProseMirror > *') ?? []).find((candidate) => blockRangeForElement(candidate)?.from === range.from); draggedBlockElementRef.current = source ?? null; source?.classList.add('is-block-dragging'); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/yuheng-block', String(range.from)); setDraggedBlock({ from: range.from, to: range.to }); setDropBlockTop(null); }} onDragEnd={clearDraggedBlock} onClick={() => setBlockMenuOpen((current) => !current)} aria-expanded={blockMenuOpen} aria-label="块操作和拖拽排序" title="拖拽排序或打开块操作"><GripVertical size={14} /></button>
-      {blockMenuOpen && <div className="block-editor-block-menu" role="menu" aria-label="块操作菜单">
+      {(blockMenuOpen || blockMenuClosing) && <div className={`block-editor-block-menu ${blockMenuClosing ? 'is-closing' : ''}`} role="menu" aria-label="块操作菜单">
         {slashItems.map((item) => <button type="button" role="menuitem" key={item.id} onClick={() => applyBlockAction(item.id)}><item.icon size={14} /><span>{item.label}</span></button>)}
         <div className="block-editor-block-menu-separator" />
         <button type="button" role="menuitem" className="is-destructive" onClick={deleteBlock}><Trash2 size={14} /><span>删除块</span></button>

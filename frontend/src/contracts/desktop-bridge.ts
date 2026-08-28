@@ -48,6 +48,13 @@ export type RunEvent =
 export type DesktopBridge = {
   app: {
     getInfo: () => Promise<AppInfo>;
+    openExternal: (url: string) => Promise<void>;
+  };
+  backup: {
+    export: () => Promise<string | null>;
+    import: () => Promise<{ conversations: number; messages: number; tasks: number; missingProviders: number; contextUnavailable: boolean } | null>;
+    getConfig: () => Promise<{ enabled: boolean; directory: string; retention: number; lastRunAt: string | null; lastError: string | null }>;
+    saveConfig: (config: { enabled: boolean; directory: string; retention: number }) => Promise<{ enabled: boolean; directory: string; retention: number; lastRunAt: string | null; lastError: string | null }>;
   };
   search: {
     query: (text: string, limit?: number) => Promise<SearchResult[]>;

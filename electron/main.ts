@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { AppStore, DEFAULT_PROVIDER_CONTEXT_WINDOW, MAX_PROVIDER_CONTEXT_WINDOW, MIN_PROVIDER_CONTEXT_WINDOW, type BrowserUseConfig, type ComputerUseConfig, type ConversationProject, type CreateTaskInput, type ProviderConfig, type ReasoningSelection, type RunUsage, type Task, type TaskBoard, type TaskPriority, type TaskStatus, type TaskType, type UpdateTaskInput } from './store';
+import { AppStore, DEFAULT_PROVIDER_CONTEXT_WINDOW, MAX_PROVIDER_CONTEXT_WINDOW, MIN_PROVIDER_CONTEXT_WINDOW, type BackupConfig, type BrowserUseConfig, type ComputerUseConfig, type ConversationProject, type CreateTaskInput, type ProviderConfig, type ReasoningSelection, type RunUsage, type Task, type TaskBoard, type TaskPriority, type TaskStatus, type TaskType, type UpdateTaskInput } from './store';
 import { SecretStore } from './secrets';
 import { createPiRuntime, createPiSessionFactory, type ReasoningLevel } from './pi-runtime';
 import { loadYuhengSystemPrompt } from './system-prompt';
@@ -16,6 +16,8 @@ import { applicationVersion } from './app-info';
 import { getAgentProfile, isAgentProfileId, loadAgentProfilePrompt, formatRuntimeContext } from './agent-profiles';
 import { MAX_CONVERSATION_BACKUP_BYTES, conversationBackupMarkdown, parseConversationBackup } from './conversation-backup';
 import { testProviderConnection, type ProviderTestResult } from './provider-test';
+import { externalHttpUrl } from './external-links';
+import { createFullBackup, restoreFullBackup } from './full-backup';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: TASK_ASSET_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
@@ -37,6 +39,7 @@ const pendingApprovals = new Map<string, { runId: string; senderId: number; fini
 let shutdownRequested = false;
 let shutdownReady = false;
 let resourcesClosed = false;
+let automaticBackupTimer: NodeJS.Timeout | undefined;
 type StoredAttachment = Attachment & { data: Uint8Array };
 type Attachment = { id: string; name: string; mimeType: string; size: number };
 const attachments = new Map<string, StoredAttachment>();
@@ -414,6 +417,7 @@ function closeResources(): void {
   // will reclaim the handle if the worker never responds.
   if (activeRuns.size > 0) return;
   resourcesClosed = true;
+  if (automaticBackupTimer) { clearInterval(automaticBackupTimer); automaticBackupTimer = undefined; }
   taskReminders?.dispose();
   void browserUse?.dispose();
   store?.close();
@@ -430,6 +434,29 @@ function waitForActiveRuns(timeoutMs: number): Promise<void> {
       }
     }, 25);
   });
+}
+
+function defaultBackupDirectory(): string { return path.join(app.getPath('userData'), 'backups'); }
+
+async function runAutomaticBackup(): Promise<void> {
+  if (!store || activeRuns.size > 0) return;
+  const config = store.getBackupConfig(defaultBackupDirectory());
+  if (!config.enabled) return;
+  const today = new Date().toISOString().slice(0, 10);
+  await fs.mkdir(config.directory, { recursive: true });
+  const existing = (await fs.readdir(config.directory).catch(() => [])).filter((name) => name.endsWith('.yuheng') && name.includes(today));
+  if (existing.length > 0) return;
+  try {
+    const archive = await createFullBackup({ dataDir: app.getPath('userData'), store, appVersion: applicationVersionValue, platform: `${process.platform}-${process.arch}` });
+    const target = path.join(config.directory, `yuheng-auto-${today}.yuheng`);
+    await fs.writeFile(`${target}.tmp`, archive, { flag: 'wx', mode: 0o600 });
+    await fs.rename(`${target}.tmp`, target);
+    const files = (await fs.readdir(config.directory)).filter((name) => name.startsWith('yuheng-auto-') && name.endsWith('.yuheng')).sort().reverse();
+    for (const stale of files.slice(config.retention)) await fs.rm(path.join(config.directory, stale), { force: true });
+    store.saveBackupConfig({ ...config, lastRunAt: new Date().toISOString(), lastError: null });
+  } catch (error) {
+    store.saveBackupConfig({ ...config, lastError: error instanceof Error ? error.message.slice(0, 500) : '自动备份失败。' });
+  }
 }
 
 function createWindow(): BrowserWindow {
@@ -449,6 +476,12 @@ function createWindow(): BrowserWindow {
       nodeIntegration: false,
       sandbox: false,
     },
+  });
+  window.webContents.on('will-navigate', (event) => event.preventDefault());
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    const externalUrl = externalHttpUrl(url);
+    if (externalUrl) void shell.openExternal(externalUrl);
+    return { action: 'deny' };
   });
 
   let saveTimer: NodeJS.Timeout | undefined;
@@ -522,6 +555,7 @@ app.whenReady().then(() => {
   });
   store.recoverRunningRuns();
   taskReminders.refresh();
+  automaticBackupTimer = setInterval(() => { void runAutomaticBackup(); }, 60 * 60 * 1000);
 
   ipcMain.handle('app:get-info', () => ({
     name: 'yuheng',
@@ -529,6 +563,11 @@ app.whenReady().then(() => {
     platform: process.platform,
     arch: process.arch,
   }));
+  ipcMain.handle('app:open-external', async (_event, rawUrl: unknown) => {
+    const url = externalHttpUrl(rawUrl);
+    if (!url) throw new Error('只允许打开 http 或 https 链接。');
+    await shell.openExternal(url);
+  });
 
   ipcMain.handle('search:query', (_event, rawQuery: unknown, rawLimit: unknown) => {
     const query = typeof rawQuery === 'string' ? rawQuery : '';
@@ -590,6 +629,34 @@ app.whenReady().then(() => {
     if (stat.size > MAX_CONVERSATION_BACKUP_BYTES) throw new Error('会话备份超过 5 MB。');
     const parsed = parseConversationBackup(JSON.parse(await fs.readFile(filePath, 'utf8')));
     return store.importConversation(parsed);
+  });
+  ipcMain.handle('backup:export', async () => {
+    await waitForActiveRuns(10 * 60 * 1000);
+    if (activeRuns.size > 0) throw new Error('当前仍有运行中的任务，请稍后再试。');
+    const target = await dialog.showSaveDialog({ defaultPath: path.join(app.getPath('documents'), `yuheng-backup-${new Date().toISOString().slice(0, 10)}.yuheng`), filters: [{ name: '玉衡备份', extensions: ['yuheng'] }] });
+    if (target.canceled || !target.filePath) return null;
+    const archive = await createFullBackup({ dataDir: app.getPath('userData'), store, appVersion: applicationVersionValue, platform: `${process.platform}-${process.arch}` });
+    const temp = `${target.filePath}.tmp-${crypto.randomUUID()}`;
+    try { await fs.writeFile(temp, archive, { flag: 'wx', mode: 0o600 }); await fs.rename(temp, target.filePath); return target.filePath; }
+    catch (error) { await fs.rm(temp, { force: true }); throw error; }
+  });
+  ipcMain.handle('backup:import', async () => {
+    const selected = await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: '玉衡备份', extensions: ['yuheng'] }] });
+    if (selected.canceled || !selected.filePaths[0]) return null;
+    const archive = await fs.readFile(selected.filePaths[0]);
+    const report = await restoreFullBackup({ dataDir: app.getPath('userData'), store, archive });
+    const { conversationMap: _conversationMap, ...publicReport } = report;
+    return publicReport;
+  });
+  ipcMain.handle('backup:get-config', (): BackupConfig => store.getBackupConfig(defaultBackupDirectory()));
+  ipcMain.handle('backup:save-config', (_event, raw: unknown): BackupConfig => {
+    if (!raw || typeof raw !== 'object') throw new Error('无效的备份设置。');
+    const input = raw as Record<string, unknown>;
+    const directory = typeof input.directory === 'string' && input.directory.trim() ? input.directory.trim() : defaultBackupDirectory();
+    const retention = typeof input.retention === 'number' && Number.isFinite(input.retention) ? input.retention : 7;
+    const saved = store.saveBackupConfig({ enabled: input.enabled === true, directory, retention });
+    if (saved.enabled) void runAutomaticBackup();
+    return saved;
   });
   ipcMain.handle('tasks:boards:list', (): TaskBoard[] => store.listTaskBoards());
   ipcMain.handle('tasks:boards:create', (_event, rawName: unknown): TaskBoard => {

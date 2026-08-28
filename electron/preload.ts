@@ -3,6 +3,13 @@ import { contextBridge, ipcRenderer } from 'electron';
 contextBridge.exposeInMainWorld('desktopBridge', {
   app: {
     getInfo: () => ipcRenderer.invoke('app:get-info'),
+    openExternal: (url: string) => ipcRenderer.invoke('app:open-external', url),
+  },
+  backup: {
+    export: () => ipcRenderer.invoke('backup:export'),
+    import: () => ipcRenderer.invoke('backup:import'),
+    getConfig: () => ipcRenderer.invoke('backup:get-config'),
+    saveConfig: (config: unknown) => ipcRenderer.invoke('backup:save-config', config),
   },
   search: {
     query: (text: string, limit?: number) => ipcRenderer.invoke('search:query', text, limit),

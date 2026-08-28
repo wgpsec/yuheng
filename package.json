@@ -24,6 +24,7 @@
     "@tiptap/pm": "^3.30.5",
     "@tiptap/react": "^3.30.5",
     "@tiptap/starter-kit": "^3.30.5",
+    "fflate": "^0.8.3",
     "lucide-react": "^0.468.0",
     "react": "19.2.1",
     "react-dom": "19.2.1",

@@ -102,6 +102,31 @@ describe('AppStore run activities', () => {
   });
 });
 
+describe('AppStore full backup snapshot', () => {
+  it('exports and merges a snapshot with fresh identities and terminal runs', () => {
+    const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-source-'));
+    const targetDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-target-'));
+    const source = new AppStore(sourceDir);
+    const target = new AppStore(targetDir);
+    try {
+      const conversation = source.createConversation();
+      const message = source.addMessage(conversation.id, 'user', '备份测试');
+      source.startRun('r1', conversation.id, message.id);
+      const snapshot = source.exportFullBackupSnapshot();
+      const targetBefore = target.listConversations(true).length;
+      const report = target.importFullBackupSnapshot(snapshot);
+      assert.equal(report.conversations, snapshot.conversations.length);
+      assert.equal(report.messages, snapshot.messages.length);
+      assert.equal(target.listConversations(true).length, targetBefore + snapshot.conversations.length);
+      const imported = target.listConversations(true).find((item) => item.title === '备份测试');
+      assert.ok(imported);
+      assert.equal(target.listMessages(imported!.id).length, 1);
+      assert.equal(target.listRuns(imported!.id)[0].status, 'interrupted');
+      assert.notEqual(imported!.id, conversation.id);
+    } finally { source.close(); target.close(); fs.rmSync(sourceDir, { recursive: true, force: true }); fs.rmSync(targetDir, { recursive: true, force: true }); }
+  });
+});
+
 describe('AppStore provider settings', () => {
   it('stores multiple providers and binds each conversation to its selected provider', () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));

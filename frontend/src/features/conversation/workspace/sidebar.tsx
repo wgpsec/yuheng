@@ -1,5 +1,5 @@
 import { Archive, ArchiveRestore, Check, ChevronDown, Folder, FolderOpen, LayoutDashboard, ListTodo, MessageSquare, MessageSquarePlus, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, PinOff, Plus, Search, Settings, Trash2 } from 'lucide-react';
-import { useEffect, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type SetStateAction } from 'react';
 import type { AgentProfileId, ConversationProject, TaskBoard } from '../../../contracts/desktop-bridge';
 import type { ProviderConfig } from '../../../contracts/desktop-bridge';
 
@@ -77,13 +77,13 @@ export function conversationMenuKey(conversationId: string, placement: string) {
   const [renamingBoardId, setRenamingBoardId] = useState<string | null>(null);
   const [renamingBoardName, setRenamingBoardName] = useState('');
   const [boardError, setBoardError] = useState<string | null>(null);
-  const [boardMenuId, setBoardMenuId] = useState<string | null>(null);
+  const [boardMenuId, setBoardMenuIdState] = useState<string | null>(null);
   const [draggedBoardId, setDraggedBoardId] = useState<string | null>(null);
   const [dragOverBoardId, setDragOverBoardId] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [renamingConversation, setRenamingConversation] = useState<RenamingConversation | null>(null);
   const [renamingConversationTitle, setRenamingConversationTitle] = useState('');
-  const [openConversationMenu, setOpenConversationMenu] = useState<OpenConversationMenu | null>(null);
+  const [openConversationMenu, setOpenConversationMenuState] = useState<OpenConversationMenu | null>(null);
   const [conversationError, setConversationError] = useState<string | null>(null);
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>(() => {
     try { return JSON.parse(localStorage.getItem('yuheng-expanded-projects') ?? '{}') as Record<string, boolean>; }
@@ -94,13 +94,15 @@ export function conversationMenuKey(conversationId: string, placement: string) {
   const [newProjectName, setNewProjectName] = useState('');
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
   const [renamingProjectName, setRenamingProjectName] = useState('');
-  const [projectMenuId, setProjectMenuId] = useState<string | null>(null);
+  const [projectMenuId, setProjectMenuIdState] = useState<string | null>(null);
   const [projectError, setProjectError] = useState<string | null>(null);
   const [collapsedSections, setCollapsedSections] = useState<Record<ConversationSection, boolean>>(() => {
     try { return JSON.parse(localStorage.getItem('yuheng-collapsed-sections') ?? '{}') as Record<ConversationSection, boolean>; }
     catch { return { pinned: false, projects: false, recent: false }; }
   });
-  const [sectionMenu, setSectionMenu] = useState<ConversationSection | null>(null);
+  const [closingSections, setClosingSections] = useState<Record<string, boolean>>({});
+  const sectionCloseTimers = useRef<Partial<Record<ConversationSection, number>>>({});
+  const [sectionMenu, setSectionMenuState] = useState<ConversationSection | null>(null);
   const [sidebarSort, setSidebarSort] = useState<SidebarSort>(() => {
     const saved = localStorage.getItem('yuheng-sidebar-sort');
     return saved === 'recent' || saved === 'manual' ? saved : 'priority';
@@ -112,13 +114,39 @@ export function conversationMenuKey(conversationId: string, placement: string) {
   const [sidebarOrganization, setSidebarOrganization] = useState<SidebarOrganization>(() => localStorage.getItem('yuheng-sidebar-organization') === 'list' ? 'list' : 'projects');
   const [draggedConversationId, setDraggedConversationId] = useState<string | null>(null);
   const [dragOverProjectId, setDragOverProjectId] = useState<string | null>(null);
-  const [newProviderMenuOpen, setNewProviderMenuOpen] = useState(false);
+  const [newProviderMenuOpen, setNewProviderMenuOpenState] = useState(false);
+  const [sidebarMenuClosing, setSidebarMenuClosing] = useState(false);
+  const sidebarMenuCloseTimer = useRef<number | null>(null);
+  const delayedMenuSetter = <T,>(current: T | null, setter: (value: T | null) => void, next: SetStateAction<T | null>) => {
+    const value = typeof next === 'function' ? (next as (value: T | null) => T | null)(current) : next;
+    if (sidebarMenuCloseTimer.current !== null) window.clearTimeout(sidebarMenuCloseTimer.current);
+    if (value !== null) { setSidebarMenuClosing(false); setter(value); return; }
+    if (current === null) return;
+    setSidebarMenuClosing(true);
+    sidebarMenuCloseTimer.current = window.setTimeout(() => { setter(null); setSidebarMenuClosing(false); sidebarMenuCloseTimer.current = null; }, 125);
+  };
+  const setSectionMenu = (next: SetStateAction<ConversationSection | null>) => delayedMenuSetter(sectionMenu, setSectionMenuState, next);
+  const setProjectMenuId = (next: SetStateAction<string | null>) => delayedMenuSetter(projectMenuId, setProjectMenuIdState, next);
+  const setOpenConversationMenu = (next: SetStateAction<OpenConversationMenu | null>) => delayedMenuSetter(openConversationMenu, setOpenConversationMenuState, next);
+  const setBoardMenuId = (next: SetStateAction<string | null>) => delayedMenuSetter(boardMenuId, setBoardMenuIdState, next);
+  const setNewProviderMenuOpen = (next: SetStateAction<boolean>) => {
+    const value = typeof next === 'function' ? (next as (value: boolean) => boolean)(newProviderMenuOpen) : next;
+    if (sidebarMenuCloseTimer.current !== null) window.clearTimeout(sidebarMenuCloseTimer.current);
+    if (value) { setSidebarMenuClosing(false); setNewProviderMenuOpenState(true); return; }
+    if (!newProviderMenuOpen) return;
+    setSidebarMenuClosing(true);
+    sidebarMenuCloseTimer.current = window.setTimeout(() => { setNewProviderMenuOpenState(false); setSidebarMenuClosing(false); sidebarMenuCloseTimer.current = null; }, 125);
+  };
 
   useEffect(() => { localStorage.setItem('yuheng-expanded-projects', JSON.stringify(expandedProjects)); }, [expandedProjects]);
   useEffect(() => { localStorage.setItem('yuheng-collapsed-sections', JSON.stringify(collapsedSections)); }, [collapsedSections]);
   useEffect(() => { localStorage.setItem('yuheng-sidebar-sort', sidebarSort); }, [sidebarSort]);
   useEffect(() => { localStorage.setItem('yuheng-manual-conversation-order', JSON.stringify(manualConversationOrder)); }, [manualConversationOrder]);
   useEffect(() => { localStorage.setItem('yuheng-sidebar-organization', sidebarOrganization); }, [sidebarOrganization]);
+  useEffect(() => () => {
+    Object.values(sectionCloseTimers.current).forEach((timer) => { if (timer !== undefined) window.clearTimeout(timer); });
+    if (sidebarMenuCloseTimer.current !== null) window.clearTimeout(sidebarMenuCloseTimer.current);
+  }, []);
   useEffect(() => {
     const closeMenus = (event: MouseEvent) => {
       if ((event.target as Element | null)?.closest('.sidebar-section-menu, .sidebar-section-action, .project-menu, .project-menu-button, .conversation-menu, .conversation-menu-button, .project-create-row, .task-board-menu, .task-board-nav-rename, .sidebar-provider-picker')) return;
@@ -131,7 +159,7 @@ export function conversationMenuKey(conversationId: string, placement: string) {
     };
     window.addEventListener('click', closeMenus);
     return () => window.removeEventListener('click', closeMenus);
-  }, []);
+  }, [sectionMenu, projectMenuId, openConversationMenu, boardMenuId, newProviderMenuOpen]);
   useEffect(() => {
     if (!activeProjectId || !projects.some((project) => project.id === activeProjectId)) return;
     setExpandedProjects((current) => current[activeProjectId] ? current : { ...current, [activeProjectId]: true });
@@ -255,7 +283,19 @@ export function conversationMenuKey(conversationId: string, placement: string) {
     return (right.updatedAt ?? '').localeCompare(left.updatedAt ?? '');
   });
   const toggleSection = (section: ConversationSection) => {
-    setCollapsedSections((current) => ({ ...current, [section]: !current[section] }));
+    const isCollapsed = collapsedSections[section];
+    if (sectionCloseTimers.current[section] !== undefined) window.clearTimeout(sectionCloseTimers.current[section]);
+    if (isCollapsed) {
+      setClosingSections((current) => ({ ...current, [section]: false }));
+      setCollapsedSections((current) => ({ ...current, [section]: false }));
+    } else {
+      setCollapsedSections((current) => ({ ...current, [section]: true }));
+      setClosingSections((current) => ({ ...current, [section]: true }));
+      sectionCloseTimers.current[section] = window.setTimeout(() => {
+        setClosingSections((current) => ({ ...current, [section]: false }));
+        delete sectionCloseTimers.current[section];
+      }, 165);
+    }
     setSectionMenu(null);
   };
   const reorderConversation = (sourceId: string, targetId: string) => {
@@ -303,7 +343,7 @@ export function conversationMenuKey(conversationId: string, placement: string) {
   };
 
   return (
-    <aside className="sidebar" aria-label="工作区导航" data-collapsed={collapsed}>
+    <aside className={`sidebar ${sidebarMenuClosing ? 'sidebar-menu-closing' : ''}`} aria-label="工作区导航" data-collapsed={collapsed}>
       <div className="sidebar-topbar">
         <button type="button" className="icon-button sidebar-toggle" onClick={onToggle} aria-label={collapsed ? '展开侧栏' : '收起侧栏'} title={collapsed ? '展开侧栏' : '收起侧栏'}>
           {collapsed ? <PanelLeftOpen size={17} aria-hidden="true" /> : <PanelLeftClose size={17} aria-hidden="true" />}
@@ -334,7 +374,7 @@ export function conversationMenuKey(conversationId: string, placement: string) {
                 {!collapsed && <div className="sidebar-section-actions"><button type="button" className="sidebar-section-action" onClick={(event) => { event.stopPropagation(); setSectionMenu((current) => current === section ? null : section); }} aria-expanded={sectionMenu === section} aria-label={`整理${label}`} title={`整理${label}`}><MoreHorizontal size={16} /></button>{section === 'projects' && <button type="button" className="sidebar-section-action" onClick={(event) => { event.stopPropagation(); setSectionMenu(null); setCreatingProject(true); setCollapsedSections((current) => ({ ...current, projects: false })); }} aria-label="新建项目" title="新建项目"><Plus size={16} /></button>}</div>}
                 {sectionMenu === section && !collapsed && <div className="sidebar-section-menu"><div className="sidebar-section-menu-label">整理侧边栏</div>{(['projects', 'list'] as SidebarOrganization[]).map((organization) => <button type="button" key={organization} onClick={() => { setSidebarOrganization(organization); setSectionMenu(null); }}><span>{sidebarOrganization === organization ? <Check size={14} /> : <span className="sidebar-menu-placeholder" />}</span>{organization === 'projects' ? '按项目' : '在一个列表中'}</button>)}<div className="sidebar-section-menu-label">聊天排序方式</div>{(['priority', 'recent', 'manual'] as SidebarSort[]).map((sort) => <button type="button" key={sort} onClick={() => { setSidebarSort(sort); setSectionMenu(null); }}><span>{sidebarSort === sort ? <Check size={14} /> : <span className="sidebar-menu-placeholder" />}</span>{sort === 'priority' ? '优先级' : sort === 'recent' ? '最近更新' : '手动排序'}</button>)}<div className="sidebar-section-menu-separator" /><button type="button" onClick={() => { setShowArchived((current) => !current); setSectionMenu(null); }}><span>{showArchived ? <ArchiveRestore size={14} /> : <Archive size={14} />}</span>{showArchived ? '返回进行中' : '查看已归档'}</button></div>}
               </div>
-              {!isCollapsed && <div className="sidebar-section-content">
+              {(!isCollapsed || closingSections[section]) && <div className={`sidebar-section-content ${isCollapsed ? 'is-closing' : ''}`}>
                 {section === 'projects' ? <>{creatingProject && !collapsed && <div className="project-create-row"><Folder size={15} /><input autoFocus value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} onBlur={() => { if (!newProjectName.trim()) setCreatingProject(false); }} onKeyDown={(event) => submitOnEnter(event, createProject)} placeholder="项目名称" aria-label="新项目名称" /><button type="button" onClick={() => void createProject()} disabled={!newProjectName.trim()}>添加</button></div>}{projects.map(renderProject)}{!projects.length && <div className="conversation-list-empty">暂无项目</div>}</> : sectionConversations.length ? sectionConversations.map((conversation) => renderConversation(conversation, `section:${section}`, section)) : <div className="conversation-list-empty">{showArchived ? '暂无已归档会话' : '暂无最近会话'}</div>}
               </div>}
             </section>;

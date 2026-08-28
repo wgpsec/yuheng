@@ -67,4 +67,14 @@ describe('Transcript timeline', () => {
     assert.match(html, /<img[^>]+src="yuheng-browser-artifact:\/\/local\/artifact-1\.png"/);
     assert.match(html, /页面截图/);
   });
+
+  it('renders assistant links as external, non-navigating links', () => {
+    const html = renderToStaticMarkup(createElement(Transcript, {
+      messages: [{ id: 'assistant-link', role: 'assistant' as const, content: '[打开](https://example.com)', time: '10:00' }],
+      isThinking: false,
+    }));
+    assert.match(html, /href="https:\/\/example.com"/);
+    assert.match(html, /target="_blank"/);
+    assert.match(html, /rel="noreferrer noopener"/);
+  });
 });

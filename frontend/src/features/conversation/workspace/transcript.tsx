@@ -3,6 +3,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ThinkingOrb } from 'thinking-orbs';
 import { Maximize2, Pencil, RefreshCw, X } from 'lucide-react';
+import type { DesktopBridge } from '../../../contracts/desktop-bridge';
 
 export type TranscriptAttachment = { id: string; name: string; size: number };
 export type TranscriptMessage = { id: string; role: 'user' | 'assistant'; content: string; time: string; createdAt?: string; attachments?: TranscriptAttachment[] };
@@ -31,7 +32,16 @@ function toolLabel(toolName: string): string {
 
 function ToolActivityCard({ activity, onOpenTask }: { activity: ToolActivity; onOpenTask?: (boardId: string, taskId: string) => void }) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewClosing, setPreviewClosing] = useState(false);
+  const previewCloseTimer = useRef<number | null>(null);
   const [failedArtifacts, setFailedArtifacts] = useState<Set<string>>(() => new Set());
+  const closePreview = () => {
+    if (!previewUrl) return;
+    setPreviewClosing(true);
+    if (previewCloseTimer.current !== null) window.clearTimeout(previewCloseTimer.current);
+    previewCloseTimer.current = window.setTimeout(() => { setPreviewUrl(null); setPreviewClosing(false); previewCloseTimer.current = null; }, 170);
+  };
+  useEffect(() => () => { if (previewCloseTimer.current !== null) window.clearTimeout(previewCloseTimer.current); }, []);
   const statusLabel = activity.status === 'running' ? '执行中' : activity.status === 'completed' ? '已完成' : activity.status === 'failed' ? '失败' : '已取消';
   const taskIdentity = activity.status === 'completed' ? taskIdentityFromToolActivity(activity) : null;
   return <article className={`tool-activity is-${activity.status}`}>
@@ -39,13 +49,13 @@ function ToolActivityCard({ activity, onOpenTask }: { activity: ToolActivity; on
     {activity.artifacts?.map((artifact) => <div className="tool-artifact" key={artifact.id}>
       {failedArtifacts.has(artifact.id)
         ? <div className="tool-artifact-unavailable" role="status">截图文件不可用或已过期</div>
-        : <button type="button" className="tool-artifact-preview" onClick={() => setPreviewUrl(artifact.url)} aria-label="放大查看工具截图">
+        : <button type="button" className="tool-artifact-preview" onClick={() => { if (previewCloseTimer.current !== null) window.clearTimeout(previewCloseTimer.current); setPreviewClosing(false); setPreviewUrl(artifact.url); }} aria-label="放大查看工具截图">
           <img src={artifact.url} alt={artifact.kind === 'computer_screenshot' ? 'Computer Use 桌面截图' : 'Browser Use 页面截图'} loading="lazy" onError={() => setFailedArtifacts((current) => new Set(current).add(artifact.id))} />
           <span><Maximize2 size={14} />{Math.max(1, Math.round(artifact.size / 1024))} KB</span>
         </button>}
     </div>)}
     {(activity.input || activity.output) && <details open={activity.status === 'running'}><summary>查看调用详情</summary>{activity.input && <div><span className="tool-activity-label">输入</span><pre>{activity.input}</pre></div>}{activity.output && <div><span className="tool-activity-label">结果</span><pre>{activity.output}</pre></div>}</details>}
-    {previewUrl && <div className="tool-artifact-lightbox" role="presentation" onClick={() => setPreviewUrl(null)}><section role="dialog" aria-modal="true" aria-label="工具截图预览" onClick={(event) => event.stopPropagation()}><button type="button" onClick={() => setPreviewUrl(null)} aria-label="关闭截图预览" title="关闭"><X size={18} /></button><img src={previewUrl} alt="工具截图大图" /></section></div>}
+    {previewUrl && <div className={`tool-artifact-lightbox ${previewClosing ? 'is-closing' : ''}`} role="presentation" onClick={closePreview}><section role="dialog" aria-modal="true" aria-label="工具截图预览" onClick={(event) => event.stopPropagation()}><button type="button" onClick={closePreview} aria-label="关闭截图预览" title="关闭"><X size={18} /></button><img src={previewUrl} alt="工具截图大图" /></section></div>}
   </article>;
 }
 
@@ -64,7 +74,19 @@ function CodeBlock({ language, children }: { language?: string; children: string
 }
 
 function AssistantContent({ content }: { content: string }) {
+  const openExternal = (href: string) => {
+    try {
+      const url = new URL(href, window.location.href);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+      const bridge = (window as Window & { desktopBridge?: DesktopBridge }).desktopBridge;
+      if (bridge) void bridge.app.openExternal(url.toString());
+    } catch { /* Invalid links remain inert. */ }
+  };
   return <div className="message-markdown"><Markdown remarkPlugins={[remarkGfm]} components={{
+    a({ href, children }) {
+      if (!href) return <>{children}</>;
+      return <a href={href} target="_blank" rel="noreferrer noopener" onClick={(event) => { event.preventDefault(); openExternal(href); }}>{children}</a>;
+    },
     pre({ children }) { return <>{children}</>; },
     code({ className, children }) {
       const value = String(children).replace(/\n$/, '');

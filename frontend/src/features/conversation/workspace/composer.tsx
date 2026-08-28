@@ -21,8 +21,18 @@ export function Composer({ busy, attachments, variant = 'default', prefill, edit
   const [value, setValue] = useState('');
   const [reasoningLevel, setReasoningLevel] = useState<ReasoningSelection>(reasoningSelection);
   const [reasoningOpen, setReasoningOpen] = useState(false);
+  const [reasoningClosing, setReasoningClosing] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const reasoningPickerRef = useRef<HTMLDivElement>(null);
+  const reasoningCloseTimer = useRef<number | null>(null);
+  const closeReasoning = () => {
+    if (!reasoningOpen) return;
+    setReasoningOpen(false);
+    setReasoningClosing(true);
+    if (reasoningCloseTimer.current !== null) window.clearTimeout(reasoningCloseTimer.current);
+    reasoningCloseTimer.current = window.setTimeout(() => { setReasoningClosing(false); reasoningCloseTimer.current = null; }, 125);
+  };
+  useEffect(() => () => { if (reasoningCloseTimer.current !== null) window.clearTimeout(reasoningCloseTimer.current); }, []);
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -32,10 +42,10 @@ export function Composer({ busy, attachments, variant = 'default', prefill, edit
   useEffect(() => {
     if (!reasoningOpen) return;
     const closeOutside = (event: PointerEvent) => {
-      if (!reasoningPickerRef.current?.contains(event.target as Node)) setReasoningOpen(false);
+      if (!reasoningPickerRef.current?.contains(event.target as Node)) closeReasoning();
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setReasoningOpen(false);
+      if (event.key === 'Escape') closeReasoning();
     };
     document.addEventListener('pointerdown', closeOutside);
     document.addEventListener('keydown', closeOnEscape);
@@ -83,7 +93,7 @@ export function Composer({ busy, attachments, variant = 'default', prefill, edit
       />
       {attachments.length > 0 && <div className="attachment-list" aria-label="待发送附件">{attachments.map((attachment) => <span className="attachment-chip" key={attachment.id}><span className="attachment-chip-name">{attachment.name}</span><small>{Math.max(1, Math.round(attachment.size / 1024))} KB</small><button type="button" onClick={() => onRemoveAttachment(attachment.id)} aria-label={`移除附件 ${attachment.name}`}>×</button></span>)}</div>}
       <div className="composer-actions">
-        <div className="composer-tools"><button type="button" className="tool-button" onClick={() => void onAttach()} disabled={busy} aria-label="添加附件">＋ 附件</button><div className="reasoning-picker" ref={reasoningPickerRef}><button type="button" className="reasoning-trigger" onClick={() => setReasoningOpen((open) => !open)} disabled={busy} aria-label={`推理级别：${reasoningOptions.find((option) => option.value === reasoningLevel)?.label}`} aria-haspopup="menu" aria-expanded={reasoningOpen}><BrainCircuit size={14} aria-hidden="true" /><span>{reasoningOptions.find((option) => option.value === reasoningLevel)?.label}</span><ChevronDown size={13} aria-hidden="true" /></button>{reasoningOpen && <div className="reasoning-menu" role="menu" aria-label="选择推理级别">{reasoningOptions.map((option) => <button type="button" key={option.value} className={reasoningLevel === option.value ? 'is-selected' : ''} role="menuitemradio" aria-checked={reasoningLevel === option.value} onClick={() => { setReasoningLevel(option.value); setReasoningOpen(false); }}><span>{option.label}</span>{reasoningLevel === option.value && <Check size={13} aria-hidden="true" />}</button>)}</div>}</div></div>
+        <div className="composer-tools"><button type="button" className="tool-button" onClick={() => void onAttach()} disabled={busy} aria-label="添加附件">＋ 附件</button><div className="reasoning-picker" ref={reasoningPickerRef}><button type="button" className="reasoning-trigger" onClick={() => { if (reasoningOpen) closeReasoning(); else { setReasoningClosing(false); setReasoningOpen(true); } }} disabled={busy} aria-label={`推理级别：${reasoningOptions.find((option) => option.value === reasoningLevel)?.label}`} aria-haspopup="menu" aria-expanded={reasoningOpen}><BrainCircuit size={14} aria-hidden="true" /><span>{reasoningOptions.find((option) => option.value === reasoningLevel)?.label}</span><ChevronDown size={13} aria-hidden="true" /></button>{(reasoningOpen || reasoningClosing) && <div className={`reasoning-menu ${reasoningClosing ? 'is-closing' : ''}`} role="menu" aria-label="选择推理级别">{reasoningOptions.map((option) => <button type="button" key={option.value} className={reasoningLevel === option.value ? 'is-selected' : ''} role="menuitemradio" aria-checked={reasoningLevel === option.value} onClick={() => { setReasoningLevel(option.value); closeReasoning(); }}><span>{option.label}</span>{reasoningLevel === option.value && <Check size={13} aria-hidden="true" />}</button>)}</div>}</div></div>
         <div className="composer-submit-actions">
         {busy ? (
           <button type="button" className="send-button stop" onClick={onCancel} aria-label="停止处理">停止</button>
