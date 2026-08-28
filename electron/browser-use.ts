@@ -78,7 +78,7 @@ async function createMcpClient(dataDir: string): Promise<BrowserUseClient> {
   transport.stderr?.on('data', (chunk: Buffer | string) => {
     startupStderr = `${startupStderr}${String(chunk)}`.slice(-4_000);
   });
-  const client = new Client({ name: 'yuheng', version: '0.1.3' }, { capabilities: {} });
+  const client = new Client({ name: 'yuheng', version: '0.1.4' }, { capabilities: {} });
   try {
     await client.connect(transport, { timeout: BROWSER_USE_START_TIMEOUT_MS, maxTotalTimeout: BROWSER_USE_START_TIMEOUT_MS });
   } catch (error) {

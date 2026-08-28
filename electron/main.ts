@@ -12,6 +12,7 @@ import { BrowserUseSupervisor, redactBrowserToolInput, type BrowserToolName } fr
 import { TaskReminderScheduler } from './task-reminders';
 import { BROWSER_ARTIFACT_SCHEME, BrowserArtifactStore, browserImagesFromToolResult, type BrowserArtifact } from './browser-artifacts';
 import { ComputerUseLease, redactComputerUseToolInput, type ComputerUseToolName } from './computer-use';
+import { applicationVersion } from './app-info';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: TASK_ASSET_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
@@ -19,6 +20,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 const isDevelopment = Boolean(process.env.ELECTRON_RENDERER_URL);
+const applicationVersionValue = applicationVersion(path.resolve(__dirname, '..'));
 let store: AppStore;
 let secrets: SecretStore;
 let taskAssets: TaskAssetStore;
@@ -487,7 +489,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle('app:get-info', () => ({
     name: 'yuheng',
-    version: app.getVersion(),
+    version: applicationVersionValue,
     platform: process.platform,
     arch: process.arch,
   }));
