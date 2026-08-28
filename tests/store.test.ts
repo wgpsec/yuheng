@@ -77,7 +77,7 @@ describe('AppStore conversations', () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
     const database = new DatabaseSync(path.join(dataDir, 'yuheng.sqlite'));
     try {
-      database.exec("CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)");
+      database.exec("CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)");
       database.prepare('INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)').run('legacy', '历史会话', '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z');
     } finally {
       database.close();
@@ -146,6 +146,77 @@ describe('AppStore conversations', () => {
       assert.equal(store.listConversations(true)[0].id, first.id);
       assert.equal(store.setConversationPinned(first.id, false).pinned, false);
       assert.equal(store.listConversations(true).slice(0, 2).some((item) => item.pinned), false);
+    } finally {
+      store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('AppStore global search', () => {
+  it('searches Chinese conversation content, tasks, and boards with short-query fallback', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
+    const store = new AppStore(dataDir);
+    try {
+      const conversation = store.createConversation('秋季发布讨论');
+      const message = store.addMessage(conversation.id, 'user', '请整理本周发布材料并确认负责人');
+      const board = store.createTaskBoard('增长实验看板');
+      const task = store.createTask({ title: '核对上线清单', description: '包含灰度计划和回滚负责人' }, board.id);
+
+      assert.equal(store.search('整理本周').find((result) => result.id === message.id)?.parentId, conversation.id);
+      assert.equal(store.search('本周').find((result) => result.id === message.id)?.kind, 'message');
+      assert.equal(store.search('秋季发布').find((result) => result.id === conversation.id)?.kind, 'conversation');
+      assert.equal(store.search('回滚负责人').find((result) => result.id === task.id)?.parentId, board.id);
+      assert.equal(store.search('增长实验').find((result) => result.id === board.id)?.kind, 'board');
+    } finally {
+      store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reflects renamed, updated, and deleted records without indexing tool output', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
+    const store = new AppStore(dataDir);
+    try {
+      const conversation = store.createConversation('临时发布标题');
+      const message = store.addMessage(conversation.id, 'user', '级联删除验证文本');
+      const task = store.createTask({ title: '旧任务标题', description: '旧任务说明' });
+      store.renameConversation(conversation.id, '正式发布复盘');
+      store.updateTask(task.id, { title: '新任务标题', description: '新的验收说明' });
+
+      assert.equal(store.search('正式发布').some((result) => result.id === conversation.id), true);
+      assert.equal(store.search('临时发布').some((result) => result.id === conversation.id), false);
+      assert.equal(store.search('新的验收').some((result) => result.id === task.id), true);
+      assert.equal(store.search('旧任务说明').some((result) => result.id === task.id), false);
+
+      store.startRun('search-tool-run', conversation.id, message.id);
+      store.startToolActivity('search-tool-run', 'search-tool-call', 'bash');
+      store.finishToolActivity('search-tool-run', 'search-tool-call', 'bash', false, 'SEARCH_PRIVATE_TOOL_OUTPUT_91');
+      assert.deepEqual(store.search('SEARCH_PRIVATE_TOOL_OUTPUT_91'), []);
+
+      store.deleteConversation(conversation.id);
+      assert.equal(store.search('级联删除验证').some((result) => result.id === message.id), false);
+    } finally {
+      store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('finds existing content after reopening the database and returns recent entities for an empty query', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
+    let store = new AppStore(dataDir);
+    try {
+      const conversation = store.createConversation('重启搜索会话');
+      const message = store.addMessage(conversation.id, 'assistant', '重启后仍然可以检索的正文');
+      const task = store.createTask({ title: '最近任务记录' });
+      store.close();
+      store = new AppStore(dataDir);
+
+      assert.equal(store.search('仍然可以检索').find((result) => result.id === message.id)?.parentId, conversation.id);
+      const recent = store.search('', 20);
+      assert.equal(recent.some((result) => result.id === conversation.id && result.kind === 'conversation'), true);
+      assert.equal(recent.some((result) => result.id === task.id && result.kind === 'task'), true);
+      assert.equal(recent.every((result) => result.kind === 'conversation' || result.kind === 'task'), true);
     } finally {
       store.close();
       fs.rmSync(dataDir, { recursive: true, force: true });

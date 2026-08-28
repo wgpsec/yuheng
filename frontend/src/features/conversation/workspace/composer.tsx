@@ -12,7 +12,12 @@ const reasoningOptions: Array<{ value: ReasoningSelection; label: string }> = [
   { value: 'max', label: 'Max' },
 ];
 
-export function Composer({ busy, attachments, reasoningSelection = 'default', onReasoningSelectionChange, onAttach, onRemoveAttachment, onSubmit, onCancel }: { busy: boolean; attachments: Attachment[]; reasoningSelection?: ReasoningSelection; onReasoningSelectionChange?: (selection: ReasoningSelection) => void; onAttach: () => Promise<void>; onRemoveAttachment: (id: string) => void; onSubmit: (value: string, attachments: Attachment[], reasoningLevel?: ReasoningLevel) => void; onCancel: () => void }) {
+export interface ComposerPrefill {
+  id: number;
+  value: string;
+}
+
+export function Composer({ busy, attachments, variant = 'default', prefill, reasoningSelection = 'default', onReasoningSelectionChange, onAttach, onRemoveAttachment, onSubmit, onCancel }: { busy: boolean; attachments: Attachment[]; variant?: 'default' | 'start'; prefill?: ComposerPrefill | null; reasoningSelection?: ReasoningSelection; onReasoningSelectionChange?: (selection: ReasoningSelection) => void; onAttach: () => Promise<void>; onRemoveAttachment: (id: string) => void; onSubmit: (value: string, attachments: Attachment[], reasoningLevel?: ReasoningLevel) => void; onCancel: () => void }) {
   const [value, setValue] = useState('');
   const [reasoningLevel, setReasoningLevel] = useState<ReasoningSelection>(reasoningSelection);
   const [reasoningOpen, setReasoningOpen] = useState(false);
@@ -40,6 +45,14 @@ export function Composer({ busy, attachments, reasoningSelection = 'default', on
     };
   }, [reasoningOpen]);
   useEffect(() => { setReasoningLevel(reasoningSelection); }, [reasoningSelection]);
+  useEffect(() => {
+    if (!prefill) return;
+    setValue(prefill.value);
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(prefill.value.length, prefill.value.length);
+    });
+  }, [prefill]);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -50,7 +63,7 @@ export function Composer({ busy, attachments, reasoningSelection = 'default', on
   };
 
   return (
-    <form className="composer" onSubmit={submit}>
+    <form className={`composer ${variant === 'start' ? 'composer-start' : ''}`} onSubmit={submit}>
       <textarea
         ref={textareaRef}
         value={value}

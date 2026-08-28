@@ -4,6 +4,9 @@ contextBridge.exposeInMainWorld('desktopBridge', {
   app: {
     getInfo: () => ipcRenderer.invoke('app:get-info'),
   },
+  search: {
+    query: (text: string, limit?: number) => ipcRenderer.invoke('search:query', text, limit),
+  },
   conversations: {
     list: (includeArchived?: boolean) => ipcRenderer.invoke('conversations:list', includeArchived),
     messages: (conversationId: string) => ipcRenderer.invoke('conversations:messages', conversationId),

@@ -36,6 +36,16 @@ describe('Transcript timeline', () => {
     assert.ok(html.indexOf('second-question') < html.indexOf('second-answer'));
   });
 
+  it('marks persisted messages as global-search navigation targets', () => {
+    const html = renderToStaticMarkup(createElement(Transcript, {
+      messages: [{ id: 'message-target-1', role: 'user' as const, content: '定位正文', time: '10:00' }],
+      isThinking: false,
+      requestedMessageId: 'message-target-1',
+    }));
+
+    assert.match(html, /data-message-id="message-target-1"/);
+  });
+
   it('renders a persisted Browser Use screenshot in its tool activity', () => {
     const html = renderToStaticMarkup(createElement(Transcript, {
       messages: [],

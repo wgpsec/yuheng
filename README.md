@@ -40,6 +40,8 @@ npm run dev
 
 会话运行需要先在应用设置中配置 OpenAI-compatible 或 Anthropic Provider 与 API Key。Pi 默认启用 `read`、`write`、`edit`、`bash` 工具，工作目录位于应用数据目录。
 
+玉衡的产品级系统提示词维护在 [`electron/prompts/yuheng-system.md`](electron/prompts/yuheng-system.md)。运行时会把它追加到 Pi 根据当前工具动态生成的基础系统提示词中，使玉衡身份、个人秘书行为和安全边界保持版本可追踪，同时保留 Browser Use、Computer Use 与任务工具各自的动态说明。
+
 Pi 同时可以通过 `task_list`、`task_create`、`task_update` 操作本地任务看板：查询看板和任务、创建任务、修改标题或 Markdown 详情、设置优先级和截止日期，以及在已有任务类型之间移动。写操作只在用户明确要求时执行；看板和任务类型的结构管理仍由界面完成。
 
 任务可以在详情中设置提醒时间，也可以让 Pi 通过 `remind_at` 设置或清除。到点后由 Electron 主进程发送 macOS 通知，点击通知会打开对应看板和任务；完成或归档任务不会继续提醒。提醒在应用进程运行时触发，完全退出后的未触发提醒会在下次启动时恢复。

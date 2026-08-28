@@ -19,6 +19,8 @@ export type TaskPriority = 'low' | 'medium' | 'high';
 export type Task = { id: string; boardId: string; title: string; description: string; status: TaskStatus; priority: TaskPriority; dueAt: string | null; remindAt: string | null; reminderFiredAt: string | null; sourceConversationId: string | null; createdAt: string; updatedAt: string };
 export type CreateTaskInput = Pick<Task, 'title'> & Partial<Pick<Task, 'description' | 'status' | 'priority' | 'dueAt' | 'remindAt' | 'sourceConversationId'>>;
 export type UpdateTaskInput = Partial<Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'dueAt' | 'remindAt'>>;
+export type SearchResultKind = 'conversation' | 'message' | 'task' | 'board';
+export type SearchResult = { kind: SearchResultKind; id: string; parentId: string | null; title: string; snippet: string; context: string; updatedAt: string; archived: boolean };
 export type TaskEvent = { type: 'changed'; task: Task } | { type: 'types_changed'; boardId: string } | { type: 'boards_changed' } | { type: 'open'; boardId: string; taskId: string };
 export type TaskAsset = { id: string; name: string; mimeType: string; size: number; url: string };
 export type RunEvent =
@@ -35,6 +37,9 @@ export type RunEvent =
 export type DesktopBridge = {
   app: {
     getInfo: () => Promise<AppInfo>;
+  };
+  search: {
+    query: (text: string, limit?: number) => Promise<SearchResult[]>;
   };
   conversations: {
     list: (includeArchived?: boolean) => Promise<Conversation[]>;

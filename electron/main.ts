@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { AppStore, type BrowserUseConfig, type ComputerUseConfig, type CreateTaskInput, type ProviderConfig, type ReasoningSelection, type Task, type TaskBoard, type TaskPriority, type TaskStatus, type TaskType, type UpdateTaskInput } from './store';
 import { SecretStore } from './secrets';
 import { createPiRuntime, createPiSessionFactory, type ReasoningLevel } from './pi-runtime';
+import { loadYuhengSystemPrompt } from './system-prompt';
 import { MAX_TASK_ASSET_BYTES, TASK_ASSET_SCHEME, TaskAssetStore, type TaskAsset } from './task-assets';
 import { BrowserUseSupervisor, redactBrowserToolInput, type BrowserToolName } from './browser-use';
 import { TaskReminderScheduler } from './task-reminders';
@@ -293,6 +294,7 @@ async function executeRun(sender: WebContents, runId: string, conversationId: st
     if (computerUseConfig.enabled) releaseComputerUse = await computerUseLease.acquire(run.controller.signal);
     runtime = createPiRuntime({ sessionFactory: createPiSessionFactory(config, apiKey, {
     agentDir: path.join(app.getPath('userData'), 'pi-agent'),
+    yuhengSystemPrompt: loadYuhengSystemPrompt(app.getAppPath()),
     thinkingLevel: reasoningLevel,
     taskService: {
       listBoards: () => store.listTaskBoards(),
@@ -480,6 +482,12 @@ app.whenReady().then(() => {
     platform: process.platform,
     arch: process.arch,
   }));
+
+  ipcMain.handle('search:query', (_event, rawQuery: unknown, rawLimit: unknown) => {
+    const query = typeof rawQuery === 'string' ? rawQuery : '';
+    const limit = typeof rawLimit === 'number' && Number.isFinite(rawLimit) ? rawLimit : undefined;
+    return store.search(query, limit);
+  });
 
   ipcMain.handle('conversations:list', (_event, includeArchived: unknown) => store.listConversations(includeArchived === true));
   ipcMain.handle('conversations:messages', (_event, conversationId: unknown) => store.listMessages(assertText(conversationId, 'conversationId')));

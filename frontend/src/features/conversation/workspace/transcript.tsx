@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ThinkingOrb } from 'thinking-orbs';
@@ -102,24 +102,33 @@ function messageTimestamps(messages: TranscriptMessage[]): number[] {
   return timestamps as number[];
 }
 
-export function Transcript({ messages, isThinking, activities = [], recoveryNotice, onOpenTask }: { messages: TranscriptMessage[]; isThinking: boolean; activities?: ToolActivity[]; recoveryNotice?: RecoveryNotice | null; onOpenTask?: (boardId: string, taskId: string) => void }) {
+export function Transcript({ messages, isThinking, activities = [], recoveryNotice, requestedMessageId, onRequestedMessageHandled, onOpenTask }: { messages: TranscriptMessage[]; isThinking: boolean; activities?: ToolActivity[]; recoveryNotice?: RecoveryNotice | null; requestedMessageId?: string | null; onRequestedMessageHandled?: () => void; onOpenTask?: (boardId: string, taskId: string) => void }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const timestamps = messageTimestamps(messages);
   const timeline = [
     ...messages.map((message, index) => ({ kind: 'message' as const, value: message, timestamp: timestamps[index], order: index })),
     ...activities.map((activity, index) => ({ kind: 'activity' as const, value: activity, timestamp: activity.startedAt ? Date.parse(activity.startedAt) : Number.MAX_SAFE_INTEGER, order: messages.length + index })),
   ].sort((left, right) => left.timestamp - right.timestamp || left.order - right.order);
+  useEffect(() => {
+    if (!requestedMessageId) return;
+    const target = Array.from(containerRef.current?.querySelectorAll<HTMLElement>('[data-message-id]') ?? []).find((element) => element.dataset.messageId === requestedMessageId);
+    if (!target) return;
+    setHighlightedMessageId(requestedMessageId);
+    window.requestAnimationFrame(() => target.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+    onRequestedMessageHandled?.();
+  }, [messages, onRequestedMessageHandled, requestedMessageId]);
+  useEffect(() => {
+    if (!highlightedMessageId) return;
+    const timer = window.setTimeout(() => setHighlightedMessageId(null), 1600);
+    return () => window.clearTimeout(timer);
+  }, [highlightedMessageId]);
   return (
-    <div className="transcript" aria-live="polite">
-      {messages.length === 0 && <div className="welcome-block">
-        <div className="welcome-orb"><ThinkingOrb state="breathing" size={64} theme="dark" /></div>
-        <h2>今天想先处理什么？</h2>
-        <p>把想法、资料或下一步行动交给玉衡。</p>
-        <div className="suggestion-row"><button type="button">整理今天的计划</button><button type="button">总结一份资料</button><button type="button">记录一个待办</button></div>
-      </div>}
+    <div className="transcript" aria-live="polite" ref={containerRef}>
       {timeline.length > 0 && <div className="message-list">
         {timeline.map((item, index) => <div key={`${item.kind}-${item.value.id}`}>
           {item.kind === 'activity' && (index === 0 || timeline[index - 1].kind !== 'activity') && <div className="tool-activity-heading">执行记录</div>}
-          {item.kind === 'activity' ? <ToolActivityCard activity={item.value} onOpenTask={onOpenTask} /> : <article className={`message ${item.value.role}`}>
+          {item.kind === 'activity' ? <ToolActivityCard activity={item.value} onOpenTask={onOpenTask} /> : <article data-message-id={item.value.id} className={`message ${item.value.role} ${highlightedMessageId === item.value.id ? 'is-search-target' : ''}`}>
             <div className="message-avatar">{item.value.role === 'assistant' ? <ThinkingOrb state="breathing" size={20} theme="dark" /> : '你'}</div>
             <div className="message-body"><div className="message-meta"><strong>{item.value.role === 'assistant' ? '玉衡' : '你'}</strong><time>{item.value.time}</time></div>{item.value.role === 'assistant' ? <AssistantContent content={item.value.content} /> : <p>{item.value.content}</p>}{item.value.attachments && item.value.attachments.length > 0 && <div className="message-attachments" aria-label="消息附件">{item.value.attachments.map((attachment) => <span className="message-attachment" key={attachment.id}><span className="message-attachment-icon">↗</span><span className="message-attachment-name">{attachment.name}</span><small>{Math.max(1, Math.round(attachment.size / 1024))} KB</small></span>)}</div>}</div>
           </article>}

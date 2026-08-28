@@ -2,9 +2,11 @@ import { lazy, Suspense, useEffect, useMemo, useState, type FormEvent } from 're
 import { AlertCircle, ArrowLeft, BrainCircuit, CalendarCheck2, CalendarClock, ChevronDown, Info, KeyRound, Palette, PanelLeftOpen, X } from 'lucide-react';
 import { ThinkingOrb } from 'thinking-orbs';
 import { Composer } from '../features/conversation/workspace/composer';
+import { ConversationStart } from '../features/conversation/workspace/conversation-start';
 import { Sidebar, type Conversation as SidebarConversation } from '../features/conversation/workspace/sidebar';
 import { Transcript, type ToolActivity, type TranscriptMessage } from '../features/conversation/workspace/transcript';
-import type { AppInfo, Attachment, BrowserUseConfig, ComputerUseConfig, CreateTaskInput, DesktopBridge, Message, ProviderConfig, ProviderProtocol, ReasoningLevel, ReasoningSelection, RunEvent, RunSummary, Task, TaskAsset, TaskBoard, TaskEvent, TaskType, UpdateTaskInput } from '../contracts/desktop-bridge';
+import { GlobalSearch } from '../features/search/global-search';
+import type { AppInfo, Attachment, BrowserUseConfig, ComputerUseConfig, CreateTaskInput, DesktopBridge, Message, ProviderConfig, ProviderProtocol, ReasoningLevel, ReasoningSelection, RunEvent, RunSummary, SearchResult, Task, TaskAsset, TaskBoard, TaskEvent, TaskType, UpdateTaskInput } from '../contracts/desktop-bridge';
 import { releaseNotes } from '../features/settings/releases';
 import { listTodayTasks, todayTaskKindLabel, type TodayTask } from '../features/tasks/today-overview';
 
@@ -190,11 +192,25 @@ export function ProductionRenderer() {
   const [taskTypes, setTaskTypes] = useState<TaskType[]>([]);
   const [tasksLoading, setTasksLoading] = useState(Boolean(activeBridge));
   const [requestedOpenTaskId, setRequestedOpenTaskId] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [requestedMessageId, setRequestedMessageId] = useState<string | null>(null);
+  const [composerPrefill, setComposerPrefill] = useState<{ id: number; value: string } | null>(null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('yuheng-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    const handleShortcut = (event: globalThis.KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === 'k') {
+        event.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handleShortcut);
+    return () => window.removeEventListener('keydown', handleShortcut);
+  }, []);
 
   useEffect(() => {
     if (!activeBridge) return;
@@ -345,10 +361,13 @@ export function ProductionRenderer() {
 
   const activeTitle = useMemo(() => conversationItems.find((conversation) => conversation.id === activeConversation)?.title ?? '新会话', [activeConversation, conversationItems]);
   const isThinking = activeRun?.conversationId === activeConversation;
+  const activeMessages = messages[activeConversation] ?? [];
+  const activeActivities = toolActivities[activeConversation] ?? [];
+  const conversationIsEmpty = activeMessages.length === 0 && activeActivities.length === 0 && !isThinking && !interruptedRun;
   const releaseAttachments = (items: Attachment[]) => {
     if (items.length > 0 && activeBridge) void activeBridge.attachments.release(items.map((item) => item.id));
   };
-  const selectConversation = (id: string) => { releaseAttachments(attachments); setError(null); setAttachments([]); setActiveConversation(id); setActiveView('conversation'); };
+  const selectConversation = (id: string) => { releaseAttachments(attachments); setError(null); setAttachments([]); setComposerPrefill(null); setRequestedMessageId(null); setRequestedOpenTaskId(null); setActiveConversation(id); setActiveView('conversation'); };
   const copyConversationId = async () => {
     try {
       await navigator.clipboard.writeText(activeConversation);
@@ -367,6 +386,7 @@ export function ProductionRenderer() {
   };
   const createConversation = async () => {
     setProviderOpen(false);
+    setComposerPrefill(null);
     if (!activeBridge) return selectConversation('inbox');
     try { const created = await activeBridge.conversations.create(); setConversationItems((items) => sortConversations([created, ...items])); setActiveConversation(created.id); setActiveView('conversation'); }
     catch (reason) { setError(reason instanceof Error ? reason.message : '新建会话失败。'); }
@@ -483,18 +503,44 @@ export function ProductionRenderer() {
     if (!activeBridge) throw new Error('附件仅在桌面应用中可用。');
     await activeBridge.tasks.assets.open(url);
   };
+  const openSearchResult = (result: SearchResult) => {
+    setProviderOpen(false);
+    if (result.kind === 'conversation') {
+      selectConversation(result.id);
+      return;
+    }
+    if (result.kind === 'message' && result.parentId) {
+      selectConversation(result.parentId);
+      setRequestedMessageId(result.id);
+      return;
+    }
+    setRequestedMessageId(null);
+    setActiveView('tasks');
+    if (result.kind === 'task' && result.parentId) {
+      setActiveTaskBoardId(result.parentId);
+      setRequestedOpenTaskId(result.id);
+    } else if (result.kind === 'board') {
+      setActiveTaskBoardId(result.id);
+      setRequestedOpenTaskId(null);
+    }
+  };
 
   return <main className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''} ${contextCollapsed || providerOpen ? 'context-is-collapsed' : ''} ${activeView === 'tasks' ? 'tasks-is-active' : ''} ${providerOpen ? 'settings-is-active' : ''}`}>
-    <Sidebar conversations={conversationItems} boards={taskBoards} activeId={activeConversation} activeBoardId={activeTaskBoardId} mode={activeView} settingsOpen={providerOpen} collapsed={sidebarCollapsed} onSelect={(id) => { setProviderOpen(false); selectConversation(id); }} onSelectBoard={(id) => { setProviderOpen(false); setActiveTaskBoardId(id); setActiveView('tasks'); }} onModeChange={(mode) => { releaseAttachments(attachments); setAttachments([]); setError(null); setProviderOpen(false); setActiveView(mode); }} onNew={() => void createConversation()} onRenameConversation={renameConversation} onArchiveConversation={archiveConversation} onPinConversation={pinConversation} onDeleteConversation={deleteConversation} onCreateBoard={createTaskBoard} onRenameBoard={renameTaskBoard} onSettings={() => setProviderOpen(true)} onToggle={() => setSidebarCollapsed((current) => !current)} />
+    <Sidebar conversations={conversationItems} boards={taskBoards} activeId={activeConversation} activeBoardId={activeTaskBoardId} mode={activeView} settingsOpen={providerOpen} collapsed={sidebarCollapsed} onSearch={() => setSearchOpen(true)} onSelect={(id) => { setProviderOpen(false); selectConversation(id); }} onSelectBoard={(id) => { setProviderOpen(false); setRequestedOpenTaskId(null); setActiveTaskBoardId(id); setActiveView('tasks'); }} onModeChange={(mode) => { releaseAttachments(attachments); setAttachments([]); setError(null); setRequestedMessageId(null); setRequestedOpenTaskId(null); setProviderOpen(false); setActiveView(mode); }} onNew={() => void createConversation()} onRenameConversation={renameConversation} onArchiveConversation={archiveConversation} onPinConversation={pinConversation} onDeleteConversation={deleteConversation} onCreateBoard={createTaskBoard} onRenameBoard={renameTaskBoard} onSettings={() => setProviderOpen(true)} onToggle={() => setSidebarCollapsed((current) => !current)} />
     <section className="workspace" aria-label="会话工作区">
       {providerOpen ? <SettingsWorkspace appInfo={appInfo} current={provider} browserUseConfig={browserUseConfig} computerUseConfig={computerUseConfig} theme={theme} onThemeChange={setTheme} onClose={() => setProviderOpen(false)} onSaved={setProvider} onBrowserUseChange={setBrowserUseConfig} onComputerUseChange={setComputerUseConfig} /> : activeView === 'tasks' ? <Suspense fallback={<div className="task-page-loading">正在打开任务看板...</div>}><TaskBoard boardName={taskBoards.find((board) => board.id === activeTaskBoardId)?.name ?? '任务'} tasks={tasks} taskTypes={taskTypes} loading={tasksLoading} headerControl={sidebarCollapsed ? <SidebarExpandControl onExpand={() => setSidebarCollapsed(false)} /> : null} requestedOpenTaskId={requestedOpenTaskId} onOpenTaskHandled={() => setRequestedOpenTaskId(null)} sourceConversations={conversationItems} onOpenConversation={selectConversation} onCreate={createTask} onUpdate={updateTask} onCreateType={createTaskType} onRenameType={renameTaskType} onImportAsset={importTaskAsset} onPickAssets={pickTaskAssets} onOpenAsset={openTaskAsset} /></Suspense> : <>
       <header className="workspace-header">{sidebarCollapsed && <SidebarExpandControl onExpand={() => setSidebarCollapsed(false)} />}<div className="conversation-identity"><div className="identity-mark"><ThinkingOrb state={isThinking ? 'working' : 'breathing'} size={20} theme="dark" /></div><div><h1>{activeTitle}</h1><span className="identity-meta">个人工作区 <span className="meta-separator">·</span> 会话 ID <button type="button" className="conversation-id-button" onClick={() => void copyConversationId()} title={`复制完整会话 ID：${activeConversation}`} aria-label={`复制会话 ID：${activeConversation}`}>{copiedConversationId ? '已复制' : shortId(activeConversation)}</button></span></div></div><div className="header-actions"><div className="header-status" aria-live="polite"><span className={`status-dot ${isThinking ? 'is-active' : ''}`} />{isThinking ? '处理中' : error ? '需要处理' : '就绪'}</div><button type="button" className="header-button" onClick={() => setContextCollapsed((current) => !current)} aria-label={contextCollapsed ? '打开详情面板' : '关闭详情面板'}>{contextCollapsed ? '详情' : '收起'}</button></div></header>
       {error && <div className="inline-error" role="alert">{error}<button type="button" onClick={() => setError(null)} aria-label="关闭错误提示">×</button></div>}
-      <Transcript messages={messages[activeConversation] ?? []} isThinking={isThinking} activities={toolActivities[activeConversation] ?? []} recoveryNotice={interruptedRun && interruptedMessage ? { message: interruptedRun.error ?? '应用重启时运行被中断。', onRetry: () => void submitMessage(interruptedMessage) } : null} onOpenTask={(boardId, taskId) => { setProviderOpen(false); setActiveTaskBoardId(boardId); setActiveView('tasks'); setRequestedOpenTaskId(taskId); }} />
-      <Composer busy={Boolean(isThinking)} attachments={attachments} reasoningSelection={reasoningSelection} onReasoningSelectionChange={(selection) => { setReasoningSelection(selection); void activeBridge?.reasoning.save(activeConversation, selection); }} onAttach={pickAttachments} onRemoveAttachment={removeAttachment} onSubmit={submitMessage} onCancel={cancelRun} />
+      <div className={`conversation-body ${conversationIsEmpty ? 'is-empty' : ''}`}>
+        {conversationIsEmpty ? <ConversationStart composer={<Composer variant="start" prefill={composerPrefill} busy={Boolean(isThinking)} attachments={attachments} reasoningSelection={reasoningSelection} onReasoningSelectionChange={(selection) => { setReasoningSelection(selection); void activeBridge?.reasoning.save(activeConversation, selection); }} onAttach={pickAttachments} onRemoveAttachment={removeAttachment} onSubmit={submitMessage} onCancel={cancelRun} />} onSelectPrompt={(value) => setComposerPrefill((current) => ({ id: (current?.id ?? 0) + 1, value }))} /> : <>
+          <Transcript messages={activeMessages} isThinking={isThinking} activities={activeActivities} recoveryNotice={interruptedRun && interruptedMessage ? { message: interruptedRun.error ?? '应用重启时运行被中断。', onRetry: () => void submitMessage(interruptedMessage) } : null} requestedMessageId={requestedMessageId} onRequestedMessageHandled={() => setRequestedMessageId(null)} onOpenTask={(boardId, taskId) => { setProviderOpen(false); setActiveTaskBoardId(boardId); setActiveView('tasks'); setRequestedOpenTaskId(taskId); }} />
+          <Composer busy={Boolean(isThinking)} attachments={attachments} reasoningSelection={reasoningSelection} onReasoningSelectionChange={(selection) => { setReasoningSelection(selection); void activeBridge?.reasoning.save(activeConversation, selection); }} onAttach={pickAttachments} onRemoveAttachment={removeAttachment} onSubmit={submitMessage} onCancel={cancelRun} />
+        </>}
+      </div>
       </>}
     </section>
     {activeView === 'conversation' && <aside className="context-panel" aria-label="今日概览" aria-hidden={contextCollapsed}><div className="panel-heading"><div><span>今日概览</span><small>{todayTasks.length > 0 ? `${todayTasks.length} 项需要关注` : '暂无需要关注的任务'}</small></div><button type="button" className="icon-button" onClick={() => setContextCollapsed(true)} aria-label="关闭详情面板">×</button></div><div className="activity-card"><div className="activity-icon"><ThinkingOrb state={isThinking ? 'working' : 'breathing'} size={20} theme="dark" /></div><div><strong>{isThinking ? '正在整理请求' : todayTasks.length > 0 ? '今天有待处理事项' : '安排得很轻松'}</strong><p>{isThinking ? '完成后会在这里显示结果。' : todayTasks.length > 0 ? '优先处理逾期和今天到期的任务。' : '确认后的待办会出现在这里。'}</p></div></div><div className="panel-section"><div className="section-heading"><span className="section-label">待办</span><button type="button" className="text-button" onClick={() => setActiveView('tasks')}>查看全部</button></div>{todayTasks.length === 0 ? <div className="empty-state"><span className="empty-state-icon">✓</span><p>今天还没有待办</p><small>确认后的事项会显示在这里</small></div> : <div className="today-task-list">{todayTasks.map(({ task, kind }) => <button type="button" className={`today-task today-task-${kind}`} key={task.id} onClick={() => { setActiveTaskBoardId(task.boardId); setActiveView('tasks'); setRequestedOpenTaskId(task.id); }}><span className="today-task-icon">{kind === 'overdue' ? <AlertCircle size={14} /> : kind === 'due_today' ? <CalendarCheck2 size={14} /> : <CalendarClock size={14} />}</span><span className="today-task-copy"><strong>{task.title}</strong><small>{todayTaskKindLabel(kind)}{task.priority === 'high' ? ' · 高优先级' : ''}</small></span></button>)}</div>}</div></aside>}
+    {searchOpen && <GlobalSearch onQuery={(query) => activeBridge?.search.query(query) ?? Promise.resolve([])} onOpen={openSearchResult} onClose={() => setSearchOpen(false)} />}
     {pendingApproval && <div className="approval-backdrop" role="presentation"><section className="approval-dialog" role="alertdialog" aria-modal="true" aria-labelledby="approval-title" aria-describedby="approval-description"><div className="approval-dialog-header"><span>Agent Runtime</span><h2 id="approval-title">允许这次工具操作？</h2><p id="approval-description">玉衡准备执行 <code>{pendingApproval.toolName}</code></p></div>{pendingApproval.input && <pre>{pendingApproval.input}</pre>}<div className="approval-actions"><button type="button" className="secondary-action" onClick={() => void resolveApproval(false)}>拒绝</button><button type="button" className="send-button" autoFocus onClick={() => void resolveApproval(true)}>允许一次</button></div></section></div>}
   </main>;
 }

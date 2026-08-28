@@ -41,11 +41,37 @@ export type Task = {
 };
 export type CreateTaskInput = Pick<Task, 'title'> & Partial<Pick<Task, 'description' | 'status' | 'priority' | 'dueAt' | 'remindAt' | 'sourceConversationId'>>;
 export type UpdateTaskInput = Partial<Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'dueAt' | 'remindAt'>>;
+export type SearchResultKind = 'conversation' | 'message' | 'task' | 'board';
+export type SearchResult = {
+  kind: SearchResultKind;
+  id: string;
+  parentId: string | null;
+  title: string;
+  snippet: string;
+  context: string;
+  updatedAt: string;
+  archived: boolean;
+};
 
 type Row = Record<string, unknown>;
 
+const MAX_SEARCH_QUERY_LENGTH = 120;
+const MAX_SEARCH_RESULTS = 50;
+
+function searchSnippet(value: string, query: string): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  const maximumLength = 150;
+  if (!query || normalized.length <= maximumLength) return normalized;
+  const matchIndex = normalized.toLocaleLowerCase('zh-CN').indexOf(query.toLocaleLowerCase('zh-CN'));
+  const start = Math.max(0, matchIndex < 0 ? 0 : matchIndex - 45);
+  const end = Math.min(normalized.length, start + maximumLength);
+  return `${start > 0 ? '…' : ''}${normalized.slice(start, end).trim()}${end < normalized.length ? '…' : ''}`;
+}
+
 export class AppStore {
   private readonly db: DatabaseSync;
+  private searchIndexAvailable = false;
 
   constructor(dataDir: string) {
     fs.mkdirSync(dataDir, { recursive: true });
@@ -140,6 +166,7 @@ export class AppStore {
     const runColumns = this.db.prepare('PRAGMA table_info(runs)').all() as Row[];
     if (!runColumns.some((column) => column.name === 'input_message_id')) this.db.exec('ALTER TABLE runs ADD COLUMN input_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL');
     const conversationColumns = this.db.prepare('PRAGMA table_info(conversations)').all() as Row[];
+    if (!conversationColumns.some((column) => column.name === 'description')) this.db.exec("ALTER TABLE conversations ADD COLUMN description TEXT NOT NULL DEFAULT ''");
     if (!conversationColumns.some((column) => column.name === 'archived')) this.db.exec('ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
     if (!conversationColumns.some((column) => column.name === 'pinned')) this.db.exec('ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0');
     if (!conversationColumns.some((column) => column.name === 'reasoning_level')) this.db.exec("ALTER TABLE conversations ADD COLUMN reasoning_level TEXT NOT NULL DEFAULT 'default'");
@@ -156,6 +183,185 @@ export class AppStore {
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_board_status_updated ON tasks(board_id, status, updated_at DESC)');
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_run_artifacts_activity ON run_artifacts(run_id, tool_call_id, created_at ASC)');
     this.seed();
+    this.setupSearchIndex();
+  }
+
+  private setupSearchIndex(): void {
+    try {
+      this.db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
+          kind UNINDEXED,
+          entity_id UNINDEXED,
+          parent_id UNINDEXED,
+          title,
+          content,
+          context UNINDEXED,
+          updated_at UNINDEXED,
+          archived UNINDEXED,
+          tokenize = 'trigram'
+        );
+        CREATE TRIGGER IF NOT EXISTS search_conversations_insert AFTER INSERT ON conversations BEGIN
+          INSERT INTO search_index(kind, entity_id, parent_id, title, content, context, updated_at, archived)
+          VALUES ('conversation', NEW.id, NULL, NEW.title, NEW.description, '会话', NEW.updated_at, NEW.archived);
+        END;
+        CREATE TRIGGER IF NOT EXISTS search_conversations_update AFTER UPDATE ON conversations BEGIN
+          DELETE FROM search_index WHERE kind = 'conversation' AND entity_id = OLD.id;
+          INSERT INTO search_index(kind, entity_id, parent_id, title, content, context, updated_at, archived)
+          VALUES ('conversation', NEW.id, NULL, NEW.title, NEW.description, '会话', NEW.updated_at, NEW.archived);
+          UPDATE search_index SET title = NEW.title, archived = NEW.archived
+          WHERE kind = 'message' AND parent_id = NEW.id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS search_conversations_delete AFTER DELETE ON conversations BEGIN
+          DELETE FROM search_index WHERE (kind = 'conversation' AND entity_id = OLD.id) OR (kind = 'message' AND parent_id = OLD.id);
+        END;
+        CREATE TRIGGER IF NOT EXISTS search_messages_insert AFTER INSERT ON messages BEGIN
+          INSERT INTO search_index(kind, entity_id, parent_id, title, content, context, updated_at, archived)
+          SELECT 'message', NEW.id, NEW.conversation_id, title, NEW.content,
+            CASE NEW.role WHEN 'user' THEN '你' ELSE '玉衡' END, NEW.created_at, archived
+          FROM conversations WHERE id = NEW.conversation_id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS search_messages_update AFTER UPDATE ON messages BEGIN
+          DELETE FROM search_index WHERE kind = 'message' AND entity_id = OLD.id;
+          INSERT INTO search_index(kind, entity_id, parent_id, title, content, context, updated_at, archived)
+          SELECT 'message', NEW.id, NEW.conversation_id, title, NEW.content,
+            CASE NEW.role WHEN 'user' THEN '你' ELSE '玉衡' END, NEW.created_at, archived
+          FROM conversations WHERE id = NEW.conversation_id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS search_messages_delete AFTER DELETE ON messages BEGIN
+          DELETE FROM search_index WHERE kind = 'message' AND entity_id = OLD.id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS search_boards_insert AFTER INSERT ON task_boards BEGIN
+          INSERT INTO search_index(kind, entity_id, parent_id, title, content, context, updated_at, archived)
+          VALUES ('board', NEW.id, NULL, NEW.name, '', '任务看板', '', 0);
+        END;
+        CREATE TRIGGER IF NOT EXISTS search_boards_update AFTER UPDATE ON task_boards BEGIN
+          DELETE FROM search_index WHERE kind = 'board' AND entity_id = OLD.id;
+          INSERT INTO search_index(kind, entity_id, parent_id, title, content, context, updated_at, archived)
+          VALUES ('board', NEW.id, NULL, NEW.name, '', '任务看板', '', 0);
+          UPDATE search_index SET context = NEW.name WHERE kind = 'task' AND parent_id = NEW.id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS search_boards_delete AFTER DELETE ON task_boards BEGIN
+          DELETE FROM search_index WHERE (kind = 'board' AND entity_id = OLD.id) OR (kind = 'task' AND parent_id = OLD.id);
+        END;
+        CREATE TRIGGER IF NOT EXISTS search_tasks_insert AFTER INSERT ON tasks BEGIN
+          INSERT INTO search_index(kind, entity_id, parent_id, title, content, context, updated_at, archived)
+          SELECT 'task', NEW.id, NEW.board_id, NEW.title, NEW.description, name, NEW.updated_at, 0
+          FROM task_boards WHERE id = NEW.board_id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS search_tasks_update AFTER UPDATE ON tasks BEGIN
+          DELETE FROM search_index WHERE kind = 'task' AND entity_id = OLD.id;
+          INSERT INTO search_index(kind, entity_id, parent_id, title, content, context, updated_at, archived)
+          SELECT 'task', NEW.id, NEW.board_id, NEW.title, NEW.description, name, NEW.updated_at, 0
+          FROM task_boards WHERE id = NEW.board_id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS search_tasks_delete AFTER DELETE ON tasks BEGIN
+          DELETE FROM search_index WHERE kind = 'task' AND entity_id = OLD.id;
+        END;
+      `);
+      this.rebuildSearchIndex();
+      this.searchIndexAvailable = true;
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes('no such module: fts5')) throw error;
+      this.searchIndexAvailable = false;
+    }
+  }
+
+  private rebuildSearchIndex(): void {
+    this.db.exec(`
+      DELETE FROM search_index;
+      INSERT INTO search_index(kind, entity_id, parent_id, title, content, context, updated_at, archived)
+      SELECT 'conversation', id, NULL, title, description, '会话', updated_at, archived FROM conversations;
+      INSERT INTO search_index(kind, entity_id, parent_id, title, content, context, updated_at, archived)
+      SELECT 'message', messages.id, conversation_id, conversations.title, messages.content,
+        CASE messages.role WHEN 'user' THEN '你' ELSE '玉衡' END, messages.created_at, conversations.archived
+      FROM messages JOIN conversations ON conversations.id = messages.conversation_id;
+      INSERT INTO search_index(kind, entity_id, parent_id, title, content, context, updated_at, archived)
+      SELECT 'board', id, NULL, name, '', '任务看板', '', 0 FROM task_boards;
+      INSERT INTO search_index(kind, entity_id, parent_id, title, content, context, updated_at, archived)
+      SELECT 'task', tasks.id, board_id, tasks.title, tasks.description, task_boards.name, tasks.updated_at, 0
+      FROM tasks JOIN task_boards ON task_boards.id = tasks.board_id;
+    `);
+  }
+
+  search(rawQuery: string, requestedLimit = 30): SearchResult[] {
+    const query = rawQuery.replace(/\s+/g, ' ').trim().slice(0, MAX_SEARCH_QUERY_LENGTH);
+    const limit = Math.max(1, Math.min(MAX_SEARCH_RESULTS, Math.floor(requestedLimit) || 30));
+    if (!query) return this.recentSearchResults(limit);
+    if (!this.searchIndexAvailable || [...query].length < 3) return this.searchWithLike(query, limit);
+
+    const match = `"${query.replace(/"/g, '""')}"`;
+    try {
+      const rows = this.db.prepare(`
+        SELECT kind, entity_id AS id, parent_id AS parentId, title,
+          snippet(search_index, -1, '', '', ' … ', 24) AS snippet,
+          context, updated_at AS updatedAt, archived
+        FROM search_index
+        WHERE search_index MATCH ?
+        ORDER BY bm25(search_index, 0, 0, 0, 5, 1), updated_at DESC
+        LIMIT ?
+      `).all(match, limit) as Row[];
+      return rows.map((row) => this.mapSearchResult(row, query));
+    } catch {
+      return this.searchWithLike(query, limit);
+    }
+  }
+
+  private recentSearchResults(limit: number): SearchResult[] {
+    const rows = this.db.prepare(`
+      SELECT 'conversation' AS kind, id, NULL AS parentId, title, description AS content,
+        '会话' AS context, updated_at AS updatedAt, archived
+      FROM conversations
+      UNION ALL
+      SELECT 'task' AS kind, tasks.id, board_id AS parentId, tasks.title, tasks.description AS content,
+        task_boards.name AS context, tasks.updated_at AS updatedAt, 0 AS archived
+      FROM tasks JOIN task_boards ON task_boards.id = tasks.board_id
+      ORDER BY updatedAt DESC
+      LIMIT ?
+    `).all(limit) as Row[];
+    return rows.map((row) => this.mapSearchResult(row, ''));
+  }
+
+  private searchWithLike(query: string, limit: number): SearchResult[] {
+    const pattern = `%${query.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
+    const rows = this.db.prepare(`
+      SELECT 'conversation' AS kind, id, NULL AS parentId, title, description AS content,
+        '会话' AS context, updated_at AS updatedAt, archived
+      FROM conversations WHERE title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'
+      UNION ALL
+      SELECT 'message' AS kind, messages.id, conversation_id AS parentId, conversations.title,
+        messages.content, CASE messages.role WHEN 'user' THEN '你' ELSE '玉衡' END AS context,
+        messages.created_at AS updatedAt, conversations.archived
+      FROM messages JOIN conversations ON conversations.id = messages.conversation_id
+      WHERE messages.content LIKE ? ESCAPE '\\'
+      UNION ALL
+      SELECT 'task' AS kind, tasks.id, board_id AS parentId, tasks.title, tasks.description AS content,
+        task_boards.name AS context, tasks.updated_at AS updatedAt, 0 AS archived
+      FROM tasks JOIN task_boards ON task_boards.id = tasks.board_id
+      WHERE tasks.title LIKE ? ESCAPE '\\' OR tasks.description LIKE ? ESCAPE '\\'
+      UNION ALL
+      SELECT 'board' AS kind, id, NULL AS parentId, name AS title, '' AS content,
+        '任务看板' AS context, '' AS updatedAt, 0 AS archived
+      FROM task_boards WHERE name LIKE ? ESCAPE '\\'
+      ORDER BY updatedAt DESC
+      LIMIT ?
+    `).all(pattern, pattern, pattern, pattern, pattern, pattern, limit) as Row[];
+    return rows.map((row) => this.mapSearchResult(row, query));
+  }
+
+  private mapSearchResult(row: Row, query: string): SearchResult {
+    const title = String(row.title ?? '');
+    const content = String(row.content ?? row.snippet ?? '');
+    const source = content || title;
+    return {
+      kind: row.kind as SearchResultKind,
+      id: String(row.id),
+      parentId: row.parentId === null || row.parentId === undefined ? null : String(row.parentId),
+      title,
+      snippet: searchSnippet(source, query),
+      context: String(row.context ?? ''),
+      updatedAt: String(row.updatedAt ?? ''),
+      archived: Boolean(row.archived),
+    };
   }
 
   private migrateRunArtifactSchema(): void {

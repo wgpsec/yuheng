@@ -1,11 +1,11 @@
-import { Archive, ArchiveRestore, LayoutDashboard, ListTodo, MessageSquare, MessageSquarePlus, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, PinOff, Plus, Search, Settings, Trash2, X } from 'lucide-react';
+import { Archive, ArchiveRestore, LayoutDashboard, ListTodo, MessageSquare, MessageSquarePlus, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, PinOff, Plus, Search, Settings, Trash2 } from 'lucide-react';
 import { useState, type KeyboardEvent } from 'react';
 import type { TaskBoard } from '../../../contracts/desktop-bridge';
 
 export type Conversation = { id: string; title: string; updatedAt?: string; time?: string; archived?: boolean; pinned?: boolean };
 type WorkspaceMode = 'conversation' | 'tasks';
 
-export function Sidebar({ conversations, boards, activeId, activeBoardId, mode, settingsOpen, collapsed, onSelect, onSelectBoard, onModeChange, onNew, onRenameConversation, onArchiveConversation, onPinConversation, onDeleteConversation, onCreateBoard, onRenameBoard, onSettings, onToggle }: {
+export function Sidebar({ conversations, boards, activeId, activeBoardId, mode, settingsOpen, collapsed, onSearch, onSelect, onSelectBoard, onModeChange, onNew, onRenameConversation, onArchiveConversation, onPinConversation, onDeleteConversation, onCreateBoard, onRenameBoard, onSettings, onToggle }: {
   conversations: Conversation[];
   boards: TaskBoard[];
   activeId: string;
@@ -13,6 +13,7 @@ export function Sidebar({ conversations, boards, activeId, activeBoardId, mode, 
   mode: WorkspaceMode;
   settingsOpen: boolean;
   collapsed: boolean;
+  onSearch: () => void;
   onSelect: (id: string) => void;
   onSelectBoard: (id: string) => void;
   onModeChange: (mode: WorkspaceMode) => void;
@@ -31,7 +32,6 @@ export function Sidebar({ conversations, boards, activeId, activeBoardId, mode, 
   const [renamingBoardId, setRenamingBoardId] = useState<string | null>(null);
   const [renamingBoardName, setRenamingBoardName] = useState('');
   const [boardError, setBoardError] = useState<string | null>(null);
-  const [conversationQuery, setConversationQuery] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [renamingConversationId, setRenamingConversationId] = useState<string | null>(null);
   const [renamingConversationTitle, setRenamingConversationTitle] = useState('');
@@ -72,10 +72,7 @@ export function Sidebar({ conversations, boards, activeId, activeBoardId, mode, 
       setRenamingBoardId(null);
     }
   };
-  const visibleConversations = conversations.filter((conversation) => {
-    if (Boolean(conversation.archived) !== showArchived) return false;
-    return !conversationQuery.trim() || conversation.title.toLocaleLowerCase('zh-CN').includes(conversationQuery.trim().toLocaleLowerCase('zh-CN'));
-  });
+  const visibleConversations = conversations.filter((conversation) => Boolean(conversation.archived) === showArchived);
   const renameConversation = async () => {
     const id = renamingConversationId;
     const title = renamingConversationTitle.trim();
@@ -105,26 +102,28 @@ export function Sidebar({ conversations, boards, activeId, activeBoardId, mode, 
           {collapsed ? <PanelLeftOpen size={17} aria-hidden="true" /> : <PanelLeftClose size={17} aria-hidden="true" />}
         </button>
       </div>
+      <button type="button" className="sidebar-search-trigger" onClick={onSearch} aria-label="搜索玉衡">
+        <Search size={15} aria-hidden="true" /><span>搜索玉衡</span><kbd>⌘K</kbd>
+      </button>
       <div className={`sidebar-mode-switch is-${mode}`} role="tablist" aria-label="工作区类型">
         <button type="button" role="tab" aria-selected={mode === 'conversation'} className={mode === 'conversation' ? 'is-selected' : ''} onClick={() => onModeChange('conversation')} title="对话">
-          <MessageSquare size={15} aria-hidden="true" /><span>对话</span>
+          <MessageSquare size={15} aria-hidden="true" />{mode === 'conversation' && <span>对话</span>}
         </button>
         <button type="button" role="tab" aria-selected={mode === 'tasks'} className={mode === 'tasks' ? 'is-selected' : ''} onClick={() => onModeChange('tasks')} title="任务">
-          <ListTodo size={15} aria-hidden="true" /><span>任务</span>
+          <ListTodo size={15} aria-hidden="true" />{mode === 'tasks' && <span>任务</span>}
         </button>
       </div>
 
       <div key={mode} className={`sidebar-mode-content is-${mode}`}>
       {mode === 'conversation' ? <>
-        {!collapsed && <div className="conversation-list-toolbar"><label className="conversation-search"><Search size={14} /><input value={conversationQuery} onChange={(event) => setConversationQuery(event.target.value)} placeholder="搜索会话" aria-label="搜索会话" />{conversationQuery && <button type="button" onClick={() => setConversationQuery('')} aria-label="清除会话搜索"><X size={12} /></button>}</label><button type="button" className={`conversation-archive-toggle ${showArchived ? 'is-selected' : ''}`} onClick={() => setShowArchived((current) => !current)} aria-pressed={showArchived} title={showArchived ? '查看进行中的会话' : '查看已归档会话'}>{showArchived ? <ArchiveRestore size={14} /> : <Archive size={14} />}</button></div>}
-        {!collapsed && <div className="conversation-label">{showArchived ? '已归档' : '最近会话'}</div>}
+        {!collapsed && <div className="conversation-list-heading"><div className="conversation-label">{showArchived ? '已归档' : '最近会话'}</div><button type="button" className={`conversation-archive-toggle ${showArchived ? 'is-selected' : ''}`} onClick={() => setShowArchived((current) => !current)} aria-pressed={showArchived} title={showArchived ? '查看进行中的会话' : '查看已归档会话'}>{showArchived ? <ArchiveRestore size={14} /> : <Archive size={14} />}</button></div>}
         <nav className="conversation-list" aria-label="最近会话">
           {visibleConversations.map((conversation) => (
             <div className={`conversation-row ${!settingsOpen && activeId === conversation.id ? 'is-selected' : ''}`} key={conversation.id}>
               {renamingConversationId === conversation.id && !collapsed ? <input className="conversation-rename-input" autoFocus value={renamingConversationTitle} onChange={(event) => setRenamingConversationTitle(event.target.value)} onBlur={() => void renameConversation()} onKeyDown={(event) => submitOnEnter(event, renameConversation)} aria-label="会话名称" /> : <><button type="button" className="conversation-item" onClick={() => onSelect(conversation.id)} title={conversation.title}><span className="conversation-title">{conversation.pinned && !collapsed && <Pin size={12} aria-label="已置顶" />}{collapsed ? conversation.title.slice(0, 1) : conversation.title}</span>{!collapsed && <time>{conversation.time ?? (conversation.updatedAt ? new Date(conversation.updatedAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) : '')}</time>}</button>{!collapsed && <button type="button" className="conversation-menu-button" onClick={() => setConversationMenuId((current) => current === conversation.id ? null : conversation.id)} aria-label={`管理${conversation.title}`} title="管理会话"><MoreHorizontal size={15} /></button>}{conversationMenuId === conversation.id && !collapsed && <div className="conversation-menu"><button type="button" onClick={() => { setRenamingConversationId(conversation.id); setRenamingConversationTitle(conversation.title); setConversationMenuId(null); }}><Pencil size={13} />重命名</button><button type="button" onClick={() => void pinConversation(conversation)}>{conversation.pinned ? <PinOff size={13} /> : <Pin size={13} />}{conversation.pinned ? '取消置顶' : '置顶'}</button><button type="button" onClick={() => void archiveConversation(conversation)}>{conversation.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}{conversation.archived ? '恢复归档' : '归档'}</button><button type="button" className="is-destructive" onClick={() => void deleteConversation(conversation)}><Trash2 size={13} />删除</button></div>}</>}
             </div>
           ))}
-          {!collapsed && visibleConversations.length === 0 && <div className="conversation-list-empty">{conversationQuery ? '没有匹配的会话' : showArchived ? '暂无已归档会话' : '暂无会话'}</div>}
+          {!collapsed && visibleConversations.length === 0 && <div className="conversation-list-empty">{showArchived ? '暂无已归档会话' : '暂无会话'}</div>}
         </nav>
         {conversationError && !collapsed && <p className="sidebar-board-error" role="alert">{conversationError}</p>}
       </> : <>
