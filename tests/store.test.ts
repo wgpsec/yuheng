@@ -151,6 +151,15 @@ describe('AppStore desktop pet settings', () => {
       assert.deepEqual(store.getDesktopPetConfig(), { enabled: true });
     } finally { store.close(); fs.rmSync(dataDir, { recursive: true, force: true }); }
   });
+
+  it('persists selected skin and clamps the display scale', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-pet-scale-'));
+    const store = new AppStore(dataDir);
+    try {
+      assert.deepEqual(store.saveDesktopPetConfig({ enabled: true, petId: 'guga', scale: 2 }), { enabled: true, petId: 'guga', scale: 1.4 });
+      assert.deepEqual(store.getDesktopPetConfig(), { enabled: true, petId: 'guga', scale: 1.4 });
+    } finally { store.close(); fs.rmSync(dataDir, { recursive: true, force: true }); }
+  });
 });
 
 describe('AppStore provider settings', () => {

@@ -1,8 +1,9 @@
-import { Bell, CalendarDays, ChevronsRight, CircleDot, Flag, GripVertical, LayoutDashboard, MoreHorizontal, Pencil, Plus, Search, SlidersHorizontal, Trash2, X } from 'lucide-react';
+import { Bell, Bookmark, CalendarDays, ChevronLeft, ChevronRight, ChevronsRight, CircleDot, Flag, GripVertical, LayoutDashboard, List, MoreHorizontal, Pencil, Plus, Search, SlidersHorizontal, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import type { CreateTaskInput, Task, TaskAsset, TaskPriority, TaskStatus, TaskType, UpdateTaskInput } from '../../contracts/desktop-bridge';
 import { MarkdownBlockEditor } from './markdown-block-editor';
 import { filterBoardTasks, type TaskFilter } from './task-filter';
+import { calendarDays, tasksByDueDate, type TaskView } from './task-views';
 
 const typeHints: Record<string, string> = {
   todo: '尚未开始',
@@ -21,6 +22,17 @@ const editorMinWidth = 360;
 const editorMaxWidth = 760;
 const editorCloseDurationMs = 200;
 export const TASK_EDITOR_WIDTH_STORAGE_KEY = 'yuheng-task-editor-width';
+const SAVED_TASK_FILTERS_STORAGE_KEY = 'yuheng-task-saved-filters';
+type SavedTaskFilter = { id: string; name: string; query: string; filter: TaskFilter };
+
+function loadSavedTaskFilters(): SavedTaskFilter[] {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    const value = JSON.parse(localStorage.getItem(SAVED_TASK_FILTERS_STORAGE_KEY) ?? '[]');
+    if (!Array.isArray(value)) return [];
+    return value.filter((item): item is SavedTaskFilter => Boolean(item && typeof item.id === 'string' && typeof item.name === 'string' && typeof item.query === 'string' && ['all', 'open', 'due', 'reminder'].includes(item.filter)));
+  } catch { return []; }
+}
 
 export function loadTaskEditorWidth(defaultWidth = 480): number {
   if (typeof localStorage === 'undefined') return defaultWidth;
@@ -144,6 +156,9 @@ export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loadin
   const [taskTypeMenuId, setTaskTypeMenuId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<TaskFilter>('all');
+  const [view, setView] = useState<TaskView>('board');
+  const [calendarMonth, setCalendarMonth] = useState(() => { const now = new Date(); return new Date(now.getFullYear(), now.getMonth(), 1); });
+  const [savedFilters, setSavedFilters] = useState<SavedTaskFilter[]>(loadSavedTaskFilters);
   const [taskMenuId, setTaskMenuId] = useState<string | null>(null);
   const [taskMenuClosingId, setTaskMenuClosingId] = useState<string | null>(null);
   const [boardAction, setBoardAction] = useState<'move' | 'copy' | null>(null);
@@ -434,6 +449,25 @@ export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loadin
   const filtering = Boolean(query.trim()) || filter !== 'all';
   const editedTask = editingId && editingId !== 'new' ? tasks.find((task) => task.id === editingId) : undefined;
   const reminderWasDelivered = Boolean(editedTask?.reminderFiredAt && editedTask.remindAt === (draft.remindAt ? new Date(draft.remindAt).toISOString() : null));
+  const dueTasks = tasksByDueDate(visibleTasks);
+  const calendarGrid = calendarDays(calendarMonth);
+  const changeStatus = async (task: Task, status: string) => {
+    try { await onUpdate(task.id, { status }); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '更新任务状态失败。'); }
+  };
+  const saveCurrentFilter = () => {
+    const name = window.prompt('保存筛选名称', query.trim() || filters.find((item) => item.value === filter)?.label || '我的筛选')?.trim();
+    if (!name) return;
+    const saved = { id: crypto.randomUUID(), name, query, filter };
+    const next = [...savedFilters.filter((item) => item.name !== name), saved].slice(-12);
+    setSavedFilters(next);
+    localStorage.setItem(SAVED_TASK_FILTERS_STORAGE_KEY, JSON.stringify(next));
+  };
+  const applySavedFilter = (id: string) => {
+    const saved = savedFilters.find((item) => item.id === id);
+    if (!saved) return;
+    setQuery(saved.query); setFilter(saved.filter);
+  };
 
   return <section
     className="task-page"
@@ -451,11 +485,33 @@ export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loadin
       <div className="task-board-actions">
         <label className="task-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务" aria-label="搜索当前看板任务" />{query && <button type="button" onClick={() => setQuery('')} aria-label="清除任务搜索"><X size={13} /></button>}</label>
         <div className="task-filter" role="group" aria-label="筛选任务"><SlidersHorizontal size={14} /><select value={filter} onChange={(event) => setFilter(event.target.value as TaskFilter)} aria-label="任务筛选">{filters.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>
+        <div className="task-saved-filter" aria-label="已保存筛选"><Bookmark size={14} /><select defaultValue="" onChange={(event) => applySavedFilter(event.target.value)} aria-label="应用已保存筛选"><option value="">筛选</option>{savedFilters.map((saved) => <option key={saved.id} value={saved.id}>{saved.name}</option>)}</select><button type="button" onClick={saveCurrentFilter} aria-label="保存当前筛选" title="保存当前筛选"><Plus size={13} /></button></div>
+        <div className="task-view-switcher" role="tablist" aria-label="任务视图">
+          <button type="button" role="tab" aria-selected={view === 'board'} className={view === 'board' ? 'is-selected' : ''} onClick={() => setView('board')}><LayoutDashboard size={14} />看板</button>
+          <button type="button" role="tab" aria-selected={view === 'list'} className={view === 'list' ? 'is-selected' : ''} onClick={() => setView('list')}><List size={14} />列表</button>
+          <button type="button" role="tab" aria-selected={view === 'calendar'} className={view === 'calendar' ? 'is-selected' : ''} onClick={() => setView('calendar')}><CalendarDays size={14} />日历</button>
+        </div>
         <button type="button" className="task-create-button" onClick={() => openNew(taskTypes[0]?.id)} disabled={taskTypes.length === 0}><Plus size={15} />新建任务</button>
       </div>
     </header>
     {error && !editingId && <div className="task-page-error" role="alert">{error}<button type="button" onClick={() => setError(null)} aria-label="关闭错误"><X size={14} /></button></div>}
-    <div key={`content:${boardId ?? 'empty-board'}`} className="task-board-scroll">
+    <div key={`content:${boardId ?? 'empty-board'}:${view}`} className={`task-board-scroll task-view-${view}`}>
+      {view === 'list' && <div className="task-list-view" role="table" aria-label="任务列表">
+        <div className="task-list-header" role="row"><span>任务</span><span>状态</span><span>优先级</span><span>截止日期</span></div>
+        {visibleTasks.length === 0 ? <div className="task-list-empty">{filtering ? '没有匹配任务' : '暂无任务'}</div> : visibleTasks.map((task) => <div className="task-list-row" role="row" key={task.id} onClick={() => openTask(task)} tabIndex={0} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openTask(task); } }}>
+          <div className="task-list-title"><strong>{task.title}</strong>{task.description && <small>{taskDescriptionPreview(task.description).split('\n')[0]}</small>}</div>
+          <select value={task.status} aria-label={`${task.title}状态`} onClick={(event) => event.stopPropagation()} onChange={(event) => void changeStatus(task, event.target.value)}>{taskTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</select>
+          <span className={`task-list-priority is-${task.priority}`}>{priorities.find((item) => item.value === task.priority)?.label}</span>
+          <span className="task-list-due">{task.dueAt ? dueLabel(task.dueAt) : '—'}</span>
+        </div>)}
+      </div>}
+      {view === 'calendar' && <div className="task-calendar-view" aria-label="任务日历">
+        <div className="task-calendar-toolbar"><button type="button" className="icon-button" onClick={() => setCalendarMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))} aria-label="上个月"><ChevronLeft size={16} /></button><strong>{new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long' }).format(calendarMonth)}</strong><button type="button" className="icon-button" onClick={() => setCalendarMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))} aria-label="下个月"><ChevronRight size={16} /></button></div>
+        <div className="task-calendar-weekdays" aria-hidden="true">{['日', '一', '二', '三', '四', '五', '六'].map((day) => <span key={day}>{day}</span>)}</div>
+        <div className="task-calendar-grid">{calendarGrid.map((day) => <div className={`task-calendar-day ${day.inMonth ? '' : 'is-outside'}`} key={day.key}><time>{day.date.getDate()}</time><div>{(dueTasks.get(day.key) ?? []).map((task) => <button type="button" className="task-calendar-item" key={task.id} onClick={() => openTask(task)} title={task.title}><span className="task-status-dot" />{task.title}</button>)}</div></div>)}</div>
+        {visibleTasks.length > 0 && dueTasks.size === 0 && <p className="task-calendar-empty">当前筛选结果没有设置截止日期的任务。</p>}
+      </div>}
+      {view === 'board' && <>
       <div className="task-board" style={{ gridTemplateColumns: `${taskTypes.length > 0 ? `repeat(${taskTypes.length}, 260px) ` : ''}230px` }}>
         {taskTypes.map((taskType, taskTypeIndex) => {
           const items = visibleTasks.filter((task) => task.status === taskType.id);
@@ -529,6 +585,7 @@ export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loadin
         })}
         <section className="task-add-type" aria-label="添加任务类型"><Plus size={15} /><input value={newTypeName} onChange={(event) => setNewTypeName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void createType(); } }} placeholder="添加任务类型" aria-label="新任务类型名称" /><button type="button" onClick={() => void createType()} disabled={!newTypeName.trim()}>添加</button></section>
       </div>
+      </>}
     </div>
     {editingId && <div className="task-editor-layer">
       <button type="button" tabIndex={-1} aria-hidden="true" className={`task-editor-backdrop ${editorClosing ? 'is-closing' : ''}`} />

@@ -55,6 +55,9 @@ contextBridge.exposeInMainWorld('desktopBridge', {
   },
   pet: {
     get: () => ipcRenderer.invoke('pet:get'),
+    list: () => ipcRenderer.invoke('pet:list'),
+    asset: (petId: string) => ipcRenderer.invoke('pet:asset', petId),
+    openFolder: () => ipcRenderer.invoke('pet:open-folder'),
     save: (config: unknown) => ipcRenderer.invoke('pet:save', config),
     focusMain: () => ipcRenderer.invoke('pet:focus-main'),
     beginDrag: (screenX: number, screenY: number) => ipcRenderer.send('pet:drag-start', screenX, screenY),
@@ -66,6 +69,13 @@ contextBridge.exposeInMainWorld('desktopBridge', {
       };
       ipcRenderer.on('pet:state', handler);
       return () => ipcRenderer.removeListener('pet:state', handler);
+    },
+    onConfig: (listener: (config: { enabled: boolean; petId?: string; scale?: number }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, config: unknown) => {
+        if (config && typeof config === 'object' && typeof (config as Record<string, unknown>).enabled === 'boolean') listener(config as { enabled: boolean; petId?: string; scale?: number });
+      };
+      ipcRenderer.on('pet:config', handler);
+      return () => ipcRenderer.removeListener('pet:config', handler);
     },
   },
   reasoning: {

@@ -14,7 +14,8 @@ export const AGENT_PROFILES: readonly AgentProfile[] = [
 export const DEFAULT_AGENT_PROFILE_ID: AgentProfileId = 'assistant';
 export type BrowserUseConfig = { enabled: boolean };
 export type ComputerUseConfig = { enabled: boolean };
-export type DesktopPetConfig = { enabled: boolean };
+export type DesktopPetConfig = { enabled: boolean; petId?: string; scale?: number };
+export type CodexPetManifest = { id: string; displayName: string; description?: string; spritesheetPath: string; spriteVersionNumber?: number; source: 'codex' | 'yuheng'; columns: number; rows: number; cellWidth: number; cellHeight: number };
 export type ConversationProject = { id: string; name: string; position: number };
 export type Conversation = { id: string; projectId: string; title: string; updatedAt: string; archived: boolean; pinned: boolean; providerId?: string; profileId: AgentProfileId };
 export type Message = { id: string; role: 'user' | 'assistant'; content: string; createdAt: string };
@@ -101,12 +102,16 @@ export type DesktopBridge = {
   };
   pet: {
     get: () => Promise<DesktopPetConfig>;
+    list: () => Promise<CodexPetManifest[]>;
+    asset: (petId: string) => Promise<{ manifest: CodexPetManifest; dataUrl: string } | null>;
+    openFolder: () => Promise<void>;
     save: (config: DesktopPetConfig) => Promise<DesktopPetConfig>;
     focusMain: () => Promise<void>;
     beginDrag: (screenX: number, screenY: number) => void;
     dragTo: (screenX: number, screenY: number) => void;
     endDrag: () => void;
     onState: (listener: (state: 'idle' | 'working' | 'celebrate') => void) => () => void;
+    onConfig: (listener: (config: DesktopPetConfig) => void) => () => void;
   };
   reasoning: {
     get: (conversationId: string) => Promise<ReasoningSelection>;

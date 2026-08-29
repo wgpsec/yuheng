@@ -5,7 +5,7 @@ import StarterKit from '@tiptap/starter-kit';
 import TaskItem from '@tiptap/extension-task-item';
 import TaskList from '@tiptap/extension-task-list';
 import Placeholder from '@tiptap/extension-placeholder';
-import { Bold, Braces, CheckSquare, GripVertical, Heading1, Heading2, Italic, Link, List, ListOrdered, Paperclip, Plus, Quote, Strikethrough, Text, Trash2 } from 'lucide-react';
+import { Bold, Braces, CheckSquare, GripVertical, Heading1, Heading2, Italic, Link, List, ListOrdered, Paperclip, Plus, Quote, Redo2, Strikethrough, Text, Trash2, Undo2 } from 'lucide-react';
 import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import type { TaskAsset } from '../../contracts/desktop-bridge';
 
@@ -47,6 +47,8 @@ export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAsse
   const [, refreshToolbar] = useState(0);
   const [assetBusy, setAssetBusy] = useState(false);
   const [assetError, setAssetError] = useState<string | null>(null);
+  const [editState, setEditState] = useState<'saved' | 'editing'>('saved');
+  const editStateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const blockControlHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const blockMenuCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const setBlockMenuOpen = (next: boolean | ((current: boolean) => boolean)) => {
@@ -61,6 +63,7 @@ export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAsse
   useEffect(() => () => {
     if (blockControlHideTimerRef.current !== null) clearTimeout(blockControlHideTimerRef.current);
     if (blockMenuCloseTimerRef.current !== null) clearTimeout(blockMenuCloseTimerRef.current);
+    if (editStateTimerRef.current !== null) clearTimeout(editStateTimerRef.current);
   }, []);
   const editor = useEditor({
     extensions: [
@@ -109,6 +112,9 @@ export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAsse
     onSelectionUpdate: () => refreshToolbar((current) => current + 1),
     onUpdate: ({ editor: currentEditor }) => {
       onChange(currentEditor.getMarkdown());
+      setEditState('editing');
+      if (editStateTimerRef.current !== null) clearTimeout(editStateTimerRef.current);
+      editStateTimerRef.current = setTimeout(() => { setEditState('saved'); editStateTimerRef.current = null; }, 700);
       const { $from } = currentEditor.state.selection;
       const textBefore = $from.parent.textBetween(0, $from.parentOffset, undefined, '\ufffc');
       const match = textBefore.match(/^\/([^\s/]*)$/u);
@@ -337,6 +343,10 @@ export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAsse
 
   return <div className={`block-editor ${draggedBlock ? 'is-dragging-block' : ''}`} ref={containerRef} onMouseMove={updateBlockControl} onMouseLeave={scheduleBlockControlHide} onDragOver={handleBlockDragOver} onDrop={handleBlockDrop}>
     <div className="block-editor-toolbar" aria-label="文本格式">
+      <button type="button" onClick={() => editor?.chain().focus().undo().run()} aria-label="撤销" title="撤销 (⌘Z)" disabled={!editor?.can().undo()}><Undo2 size={14} /></button>
+      <button type="button" onClick={() => editor?.chain().focus().redo().run()} aria-label="重做" title="重做 (⌘⇧Z)" disabled={!editor?.can().redo()}><Redo2 size={14} /></button>
+      <span className="block-editor-save-state" role="status" aria-live="polite">{editState === 'editing' ? '编辑中' : '已保存'}</span>
+      <span className="block-editor-divider" />
       <button type="button" className={editor?.isActive('bold') ? 'is-active' : ''} onClick={() => editor?.chain().focus().toggleBold().run()} aria-label="粗体" title="粗体"><Bold size={14} /></button>
       <button type="button" className={editor?.isActive('italic') ? 'is-active' : ''} onClick={() => editor?.chain().focus().toggleItalic().run()} aria-label="斜体" title="斜体"><Italic size={14} /></button>
       <button type="button" className={editor?.isActive('strike') ? 'is-active' : ''} onClick={() => editor?.chain().focus().toggleStrike().run()} aria-label="删除线" title="删除线"><Strikethrough size={14} /></button>

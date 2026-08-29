@@ -15,7 +15,7 @@ export type ProviderConfig = {
 };
 export type BrowserUseConfig = { enabled: boolean };
 export type ComputerUseConfig = { enabled: boolean };
-export type DesktopPetConfig = { enabled: boolean };
+export type DesktopPetConfig = { enabled: boolean; petId?: string; scale?: number };
 export type ReasoningSelection = 'default' | 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export const DEFAULT_CONVERSATION_PROJECT_ID = 'personal';
@@ -1145,15 +1145,19 @@ export class AppStore {
     const row = this.db.prepare("SELECT value FROM app_settings WHERE key = 'desktop_pet'").get() as Row | undefined;
     if (!row) return { enabled: false };
     try {
-      const value = JSON.parse(String(row.value)) as { enabled?: unknown };
-      return { enabled: value.enabled === true };
+      const value = JSON.parse(String(row.value)) as { enabled?: unknown; petId?: unknown; scale?: unknown };
+      const petId = typeof value.petId === 'string' && value.petId.trim() ? value.petId.trim() : undefined;
+      const scale = typeof value.scale === 'number' && Number.isFinite(value.scale) ? Math.min(1.4, Math.max(0.8, value.scale)) : undefined;
+      return { enabled: value.enabled === true, ...(petId ? { petId } : {}), ...(scale ? { scale } : {}) };
     } catch {
       return { enabled: false };
     }
   }
 
   saveDesktopPetConfig(config: DesktopPetConfig): DesktopPetConfig {
-    const value = { enabled: config.enabled === true } satisfies DesktopPetConfig;
+    const petId = typeof config.petId === 'string' && config.petId.trim() ? config.petId.trim() : undefined;
+    const scale = typeof config.scale === 'number' && Number.isFinite(config.scale) ? Math.min(1.4, Math.max(0.8, config.scale)) : undefined;
+    const value = { enabled: config.enabled === true, ...(petId ? { petId } : {}), ...(scale ? { scale } : {}) } satisfies DesktopPetConfig;
     this.db.prepare("INSERT INTO app_settings (key, value, updated_at) VALUES ('desktop_pet', ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at").run(JSON.stringify(value), new Date().toISOString());
     return value;
   }

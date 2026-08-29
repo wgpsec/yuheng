@@ -1,19 +1,20 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { AlertCircle, ArchiveRestore, ArrowLeft, Bell, BrainCircuit, CalendarCheck2, CalendarClock, ChevronDown, Download, Info, KeyRound, Palette, PanelLeftOpen, Upload, X } from 'lucide-react';
+import { AlertCircle, ArchiveRestore, ArrowLeft, Bell, BrainCircuit, CalendarCheck2, CalendarClock, Check, ChevronDown, Download, ExternalLink, FolderOpen, Info, KeyRound, Palette, PanelLeftOpen, PawPrint, RefreshCw, Upload, X } from 'lucide-react';
 import { ThinkingOrb } from 'thinking-orbs';
 import { Composer } from '../features/conversation/workspace/composer';
 import { ConversationStart } from '../features/conversation/workspace/conversation-start';
 import { Sidebar, type Conversation as SidebarConversation } from '../features/conversation/workspace/sidebar';
 import { Transcript, type ToolActivity, type TranscriptMessage } from '../features/conversation/workspace/transcript';
 import { GlobalSearch } from '../features/search/global-search';
-import { AGENT_PROFILES, DEFAULT_AGENT_PROFILE_ID, type AgentProfileId, type AppInfo, type Attachment, type BrowserUseConfig, type ComputerUseConfig, type ConversationProject, type CreateTaskInput, type DesktopBridge, type DesktopPetConfig, type Message, type ProviderConfig, type ProviderProtocol, type ProviderTestResult, type ReasoningLevel, type ReasoningSelection, type RunEvent, type RunSummary, type SearchResult, type Task, type TaskAsset, type TaskBoard, type TaskEvent, type TaskType, type UpdateTaskInput } from '../contracts/desktop-bridge';
+import { AGENT_PROFILES, DEFAULT_AGENT_PROFILE_ID, type AgentProfileId, type AppInfo, type Attachment, type BrowserUseConfig, type ComputerUseConfig, type ConversationProject, type CreateTaskInput, type DesktopBridge, type DesktopPetConfig, type CodexPetManifest, type Message, type ProviderConfig, type ProviderProtocol, type ProviderTestResult, type ReasoningLevel, type ReasoningSelection, type RunEvent, type RunSummary, type SearchResult, type Task, type TaskAsset, type TaskBoard, type TaskEvent, type TaskType, type UpdateTaskInput } from '../contracts/desktop-bridge';
 import { releaseNotes } from '../features/settings/releases';
 import { listTodayTasks, todayTaskKindLabel, type TodayTask } from '../features/tasks/today-overview';
+import { taskDraftFromMessage } from '../features/tasks/task-from-message';
 
 const TaskBoard = lazy(() => import('../features/tasks/task-board').then((module) => ({ default: module.TaskBoard })));
 
 type ThemeName = 'dark' | 'light' | 'graphite' | 'notion';
-type SettingsSection = 'provider' | 'capabilities' | 'appearance' | 'desktop' | 'backup' | 'about';
+type SettingsSection = 'provider' | 'capabilities' | 'appearance' | 'pet' | 'desktop' | 'backup' | 'about';
 
 const fallbackConversations: SidebarConversation[] = [
   { id: 'inbox', projectId: 'personal', title: '收件箱', time: '现在', pinned: false },
@@ -72,14 +73,59 @@ function platformLabel(appInfo: AppInfo | null): string {
   return `${platform} · ${arch}`;
 }
 
+function PetManagementSettings({ config, pets, assets, loading, onRefresh, onSelect, onToggle, onScaleChange, onOpenFolder }: { config: DesktopPetConfig; pets: CodexPetManifest[]; assets: Record<string, { dataUrl: string; manifest: CodexPetManifest }>; loading: boolean; onRefresh: () => void; onSelect: (petId?: string) => void; onToggle: () => void; onScaleChange: (scale: number) => void; onOpenFolder: () => void }) {
+  const builtinSelected = !config.petId;
+  const entries = [{ id: '', displayName: '玉衡', description: '玉衡的默认桌面宠物。', source: 'yuheng' as const }, ...pets];
+  return <div className="settings-section settings-section-first pet-management-section">
+    <div className="settings-section-heading pet-management-heading"><div><h3>选择宠物</h3><p>宠物会管理对话，并突出显示需要你关注的事项。</p></div><div className="pet-management-actions"><button type="button" className="icon-button pet-refresh-button" onClick={onRefresh} disabled={loading} aria-label="刷新宠物列表" title="刷新宠物列表"><RefreshCw size={16} className={loading ? 'is-spinning' : ''} /></button><button type="button" className="secondary-action" onClick={onOpenFolder}><FolderOpen size={15} aria-hidden="true" />打开文件夹</button><button type="button" className={`send-button ${config.enabled ? 'is-enabled' : ''}`} onClick={onToggle}>{config.enabled ? '关闭桌面宠物' : '唤醒虚拟宠物'}</button></div></div>
+    <div className="pet-catalog" aria-label="宠物列表">
+      {loading && <div className="pet-catalog-loading">正在扫描本地宠物...</div>}
+      {!loading && entries.map((pet) => {
+        const asset = pet.id ? assets[pet.id] : undefined;
+        const selected = pet.id ? config.petId === pet.id : builtinSelected;
+        const frameWidth = asset?.manifest.cellWidth ?? 192;
+        const frameHeight = asset?.manifest.cellHeight ?? 208;
+        const columns = asset?.manifest.columns ?? 8;
+        const rows = asset?.manifest.rows ?? 9;
+        return <div className={`pet-catalog-row ${selected ? 'is-selected' : ''}`} key={pet.id || 'builtin'}>
+          <span className={`pet-catalog-preview ${asset ? 'has-sprite' : ''}`} style={asset ? { backgroundImage: `url(${asset.dataUrl})`, backgroundSize: `${columns * 64}px ${rows * (64 * frameHeight / frameWidth)}px` } : undefined} aria-hidden="true"><span>{asset ? '' : '玉'}</span></span>
+          <div className="pet-catalog-copy"><strong>{pet.displayName}</strong><small>{pet.description ?? (pet.source === 'codex' ? '来自 Codex Pet 的本地皮肤。' : '玉衡内置宠物。')}</small></div>
+          <div className="pet-catalog-row-actions">{pet.source === 'codex' && <span className="pet-source-tag">Codex</span>}{selected ? <span className="pet-selected-state"><Check size={15} aria-hidden="true" />已选</span> : <button type="button" className="secondary-action" onClick={() => onSelect(pet.id || undefined)}>选择</button>}</div>
+        </div>;
+      })}
+      {!loading && pets.length === 0 && <div className="pet-catalog-empty">未发现 Codex Pet 皮肤。将皮肤目录放入 `~/.codex/pets` 后点击刷新。</div>}
+      <div className="pet-catalog-footer"><strong>自定义宠物</strong><span>支持 `pet.json` + `spritesheet.webp` 的 Codex Pet 格式</span><button type="button" className="text-button" onClick={onOpenFolder}>打开文件夹 <ExternalLink size={14} aria-hidden="true" /></button></div>
+    </div>
+    <div className="pet-appearance-panel"><div><strong>宠物大小</strong><small>桌面宠物窗口的显示比例 · {Math.round((config.scale ?? 1) * 100)}%</small></div><input type="range" min="80" max="140" step="5" value={Math.round((config.scale ?? 1) * 100)} onChange={(event) => onScaleChange(Number(event.target.value) / 100)} aria-label="宠物大小" /></div>
+  </div>;
+}
+
 function SettingsWorkspace({ appInfo, current, providers, browserUseConfig, computerUseConfig, desktopPetConfig: configuredDesktopPet, theme, onThemeChange, onClose, onSaved, onProvidersChange, onBrowserUseChange, onComputerUseChange, onDesktopPetChange }: { appInfo: AppInfo | null; current: ProviderConfig | null; providers: ProviderConfig[]; browserUseConfig: BrowserUseConfig; computerUseConfig: ComputerUseConfig; desktopPetConfig?: DesktopPetConfig; theme: ThemeName; onThemeChange: (theme: ThemeName) => void; onClose: () => void; onSaved: (provider: ProviderConfig) => void; onProvidersChange: (providers: ProviderConfig[]) => void; onBrowserUseChange: (config: BrowserUseConfig) => void; onComputerUseChange: (config: ComputerUseConfig) => void; onDesktopPetChange?: (config: DesktopPetConfig) => void }) {
   const [localDesktopPet, setLocalDesktopPet] = useState<DesktopPetConfig>(configuredDesktopPet ?? { enabled: false });
+  const [petOptions, setPetOptions] = useState<CodexPetManifest[]>([]);
+  const [petAssets, setPetAssets] = useState<Record<string, { dataUrl: string; manifest: CodexPetManifest }>>({});
+  const [petLoading, setPetLoading] = useState(false);
   const desktopPetConfig = configuredDesktopPet ?? localDesktopPet;
   useEffect(() => {
     if (configuredDesktopPet) return;
     const activeBridge = getBridge();
     if (activeBridge) void activeBridge.pet.get().then(setLocalDesktopPet).catch(() => undefined);
   }, [configuredDesktopPet]);
+  const refreshPets = async () => {
+    const activeBridge = getBridge();
+    if (!activeBridge || petLoading) return;
+    setPetLoading(true);
+    try {
+      const pets = await activeBridge.pet.list();
+      setPetOptions(pets);
+      const loaded = await Promise.all(pets.map(async (pet) => {
+        try { const asset = await activeBridge.pet.asset(pet.id); return asset ? [pet.id, asset] as const : null; } catch { return null; }
+      }));
+      setPetAssets(Object.fromEntries(loaded.filter((item): item is [string, { dataUrl: string; manifest: CodexPetManifest }] => Boolean(item))));
+    } catch { setPetOptions([]); setPetAssets({}); }
+    finally { setPetLoading(false); }
+  };
+  useEffect(() => { void refreshPets(); }, []);
   const [activeSection, setActiveSection] = useState<SettingsSection>('provider');
   const [protocol, setProtocol] = useState<ProviderProtocol>(current?.protocol ?? 'openai');
   const [editingProviderId, setEditingProviderId] = useState(current?.id ?? '');
@@ -148,17 +194,36 @@ function SettingsWorkspace({ appInfo, current, providers, browserUseConfig, comp
     const activeBridge = getBridge();
     if (!activeBridge) return;
     try {
-      const saved = await activeBridge.pet.save({ enabled: !desktopPetConfig.enabled });
+      const saved = await activeBridge.pet.save({ enabled: !desktopPetConfig.enabled, ...(desktopPetConfig.petId ? { petId: desktopPetConfig.petId } : {}), ...(desktopPetConfig.scale ? { scale: desktopPetConfig.scale } : {}) });
       setLocalDesktopPet(saved);
       onDesktopPetChange?.(saved);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '更新桌面宠物设置失败。');
     }
   };
+  const selectDesktopPet = async (petId?: string) => {
+    const activeBridge = getBridge();
+    if (!activeBridge) return;
+    try {
+      const saved = await activeBridge.pet.save({ enabled: desktopPetConfig.enabled, ...(petId ? { petId } : {}), ...(desktopPetConfig.scale ? { scale: desktopPetConfig.scale } : {}) });
+      setLocalDesktopPet(saved);
+      onDesktopPetChange?.(saved);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '切换宠物失败。'); }
+  };
+  const scaleDesktopPet = async (scale: number) => {
+    const activeBridge = getBridge();
+    if (!activeBridge) return;
+    try {
+      const saved = await activeBridge.pet.save({ enabled: desktopPetConfig.enabled, ...(desktopPetConfig.petId ? { petId: desktopPetConfig.petId } : {}), scale });
+      setLocalDesktopPet(saved);
+      onDesktopPetChange?.(saved);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '调整宠物大小失败。'); }
+  };
   const sectionCopy: Record<SettingsSection, { title: string; description: string }> = {
     provider: { title: '模型服务', description: '配置玉衡用于会话和任务处理的语言模型。' },
     capabilities: { title: 'Agent 能力', description: '管理需要额外运行环境或系统权限的可选能力。' },
     appearance: { title: '界面外观', description: '调整玉衡在这台设备上的显示方式。' },
+    pet: { title: '宠物', description: '选择、管理和唤醒玉衡桌面宠物。' },
     desktop: { title: '通知与驻留', description: '控制任务提醒和 macOS 菜单栏驻留行为。' },
     backup: { title: '数据备份', description: '导出或导入这台 Mac 上的玉衡数据。' },
     about: { title: '关于玉衡', description: '查看当前安装版本和历次版本更新。' },
@@ -174,6 +239,7 @@ function SettingsWorkspace({ appInfo, current, providers, browserUseConfig, comp
         <button type="button" className={activeSection === 'capabilities' ? 'is-selected' : ''} aria-current={activeSection === 'capabilities' ? 'page' : undefined} onClick={() => setActiveSection('capabilities')}><BrainCircuit size={15} aria-hidden="true" /><span>Agent 能力</span></button>
         <span className="settings-navigation-label">应用</span>
         <button type="button" className={activeSection === 'appearance' ? 'is-selected' : ''} aria-current={activeSection === 'appearance' ? 'page' : undefined} onClick={() => setActiveSection('appearance')}><Palette size={15} aria-hidden="true" /><span>界面外观</span></button>
+        <button type="button" className={activeSection === 'pet' ? 'is-selected' : ''} aria-current={activeSection === 'pet' ? 'page' : undefined} onClick={() => setActiveSection('pet')}><PawPrint size={15} aria-hidden="true" /><span>宠物</span></button>
         <button type="button" className={activeSection === 'desktop' ? 'is-selected' : ''} aria-current={activeSection === 'desktop' ? 'page' : undefined} onClick={() => setActiveSection('desktop')}><Bell size={15} aria-hidden="true" /><span>通知与驻留</span></button>
         <button type="button" className={activeSection === 'backup' ? 'is-selected' : ''} aria-current={activeSection === 'backup' ? 'page' : undefined} onClick={() => setActiveSection('backup')}><ArchiveRestore size={15} aria-hidden="true" /><span>数据备份</span></button>
         <button type="button" className={activeSection === 'about' ? 'is-selected' : ''} aria-current={activeSection === 'about' ? 'page' : undefined} onClick={() => setActiveSection('about')}><Info size={15} aria-hidden="true" /><span>关于玉衡</span></button>
@@ -208,7 +274,7 @@ function SettingsWorkspace({ appInfo, current, providers, browserUseConfig, comp
 
       {activeSection === 'appearance' && <div className="settings-section settings-section-first appearance-section"><div className="settings-section-heading"><div><h3>主题</h3><p>选择玉衡工作区的基础配色。</p></div></div><div className="theme-options" role="radiogroup" aria-label="界面配色"><button type="button" className={`theme-option ${theme === 'dark' ? 'is-selected' : ''}`} onClick={() => onThemeChange('dark')} role="radio" aria-checked={theme === 'dark'}><span className="theme-swatch theme-swatch-dark" /><span><strong>深色</strong><small>适合长时间专注</small></span></button><button type="button" className={`theme-option ${theme === 'light' ? 'is-selected' : ''}`} onClick={() => onThemeChange('light')} role="radio" aria-checked={theme === 'light'}><span className="theme-swatch theme-swatch-light" /><span><strong>浅色</strong><small>明亮清晰</small></span></button><button type="button" className={`theme-option ${theme === 'graphite' ? 'is-selected' : ''}`} onClick={() => onThemeChange('graphite')} role="radio" aria-checked={theme === 'graphite'}><span className="theme-swatch theme-swatch-graphite" /><span><strong>石墨灰</strong><small>低对比度</small></span></button><button type="button" className={`theme-option ${theme === 'notion' ? 'is-selected' : ''}`} onClick={() => onThemeChange('notion')} role="radio" aria-checked={theme === 'notion'}><span className="theme-swatch theme-swatch-notion" /><span><strong>Notion</strong><small>温和中性</small></span></button></div></div>}
 
-      {activeSection === 'appearance' && <div className="settings-section desktop-pet-settings"><div className="settings-section-heading"><div><h3>桌面宠物</h3><p>在桌面显示可拖动的玉衡宠物；Agent 工作时会切换状态。</p></div><span className={`settings-state ${desktopPetConfig.enabled ? 'is-ready' : ''}`}>{desktopPetConfig.enabled ? '已启用' : '已关闭'}</span></div><div className="plugin-toggle-row"><div><strong>显示桌面宠物</strong><small>宠物窗口透明、始终置顶，点击可快速回到玉衡。</small></div><button type="button" className={`switch-control ${desktopPetConfig.enabled ? 'is-on' : ''}`} role="switch" aria-checked={desktopPetConfig.enabled} aria-label={desktopPetConfig.enabled ? '关闭桌面宠物' : '开启桌面宠物'} onClick={() => void toggleDesktopPet()}><span /></button></div></div>}
+      {activeSection === 'pet' && <PetManagementSettings config={desktopPetConfig} pets={petOptions} assets={petAssets} loading={petLoading} onRefresh={() => void refreshPets()} onSelect={(petId) => void selectDesktopPet(petId)} onToggle={() => void toggleDesktopPet()} onScaleChange={(scale) => void scaleDesktopPet(scale)} onOpenFolder={() => { const activeBridge = getBridge(); if (activeBridge) void activeBridge.pet.openFolder(); }} />}
 
       {activeSection === 'backup' && <BackupSettings />}
       {activeSection === 'desktop' && <DesktopPresenceSettings />}
@@ -763,6 +829,15 @@ export function ProductionRenderer() {
     setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
     return task;
   };
+  const createTaskFromMessage = async (message: TranscriptMessage) => {
+    if (!activeTaskBoardId) { setError('请先创建一个任务看板。'); return; }
+    try {
+      const task = await createTask({ ...taskDraftFromMessage(message.content), sourceConversationId: activeConversation });
+      setActiveTaskBoardId(task.boardId);
+      setRequestedOpenTaskId(task.id);
+      setActiveView('tasks');
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '从消息创建任务失败。'); }
+  };
   const updateTask = async (id: string, patch: UpdateTaskInput): Promise<Task> => {
     if (!activeBridge) throw new Error('任务存储仅在桌面应用中可用。');
     const task = await activeBridge.tasks.update(id, patch);
@@ -900,14 +975,14 @@ export function ProductionRenderer() {
       {error && <div className="inline-error" role="alert">{error}<button type="button" onClick={() => setError(null)} aria-label="关闭错误提示">×</button></div>}
       <div className={`conversation-body ${conversationIsEmpty ? 'is-empty' : ''}`}>
         {conversationIsEmpty ? <ConversationStart composer={<Composer variant="start" prefill={composerPrefill} busy={Boolean(isThinking)} attachments={attachments} reasoningSelection={reasoningSelection} onReasoningSelectionChange={(selection) => { setReasoningSelection(selection); void activeBridge?.reasoning.save(activeConversation, selection); }} onAttach={pickAttachments} onRemoveAttachment={removeAttachment} onSubmit={submitMessage} onCancel={cancelRun} />} onSelectPrompt={(value) => setComposerPrefill((current) => ({ id: (current?.id ?? 0) + 1, value }))} /> : <>
-          <Transcript messages={activeMessages} isThinking={isThinking} activities={activeActivities} runs={conversationRuns[activeConversation] ?? []} latestUsage={latestUsage} recoveryNotice={interruptedRun ? { message: interruptedRun.error ?? '应用重启时运行被中断。', onRetry: interruptedMessage ? () => void retryLastTurn(false, interruptedRun.inputMessageId ?? undefined) : undefined, busy: retryingRun } : null} requestedMessageId={requestedMessageId} onRequestedMessageHandled={() => setRequestedMessageId(null)} onEditLastUser={(message) => { setRetryDraft({ messageId: message.id, content: message.content }); setComposerPrefill((current) => ({ id: (current?.id ?? 0) + 1, value: message.content })); }} onRegenerate={() => void retryLastTurn()} onOpenTask={(boardId, taskId) => { closeSettings(); setActiveTaskBoardId(boardId); setActiveView('tasks'); setRequestedOpenTaskId(taskId); }} />
+          <Transcript messages={activeMessages} isThinking={isThinking} activities={activeActivities} runs={conversationRuns[activeConversation] ?? []} latestUsage={latestUsage} recoveryNotice={interruptedRun ? { message: interruptedRun.error ?? '应用重启时运行被中断。', onRetry: interruptedMessage ? () => void retryLastTurn(false, interruptedRun.inputMessageId ?? undefined) : undefined, busy: retryingRun } : null} requestedMessageId={requestedMessageId} onRequestedMessageHandled={() => setRequestedMessageId(null)} onCreateTask={(message) => void createTaskFromMessage(message)} onEditLastUser={(message) => { setRetryDraft({ messageId: message.id, content: message.content }); setComposerPrefill((current) => ({ id: (current?.id ?? 0) + 1, value: message.content })); }} onRegenerate={() => void retryLastTurn()} onOpenTask={(boardId, taskId) => { closeSettings(); setActiveTaskBoardId(boardId); setActiveView('tasks'); setRequestedOpenTaskId(taskId); }} />
           <Composer editing={Boolean(retryDraft)} prefill={composerPrefill} onCancelEdit={() => { setRetryDraft(null); setComposerPrefill(null); }} busy={Boolean(isThinking) || retryingRun} attachments={attachments} reasoningSelection={reasoningSelection} onReasoningSelectionChange={(selection) => { setReasoningSelection(selection); void activeBridge?.reasoning.save(activeConversation, selection); }} onAttach={pickAttachments} onRemoveAttachment={removeAttachment} onSubmit={submitMessage} onCancel={cancelRun} />
         </>}
       </div>
       </>}
     </section>
     {activeView === 'conversation' && <aside className="context-panel" aria-label="今日概览" aria-hidden={contextCollapsed}><div className="panel-heading"><div><span>今日概览</span><small>{todayTasks.length > 0 ? `${todayTasks.length} 项需要关注` : '暂无需要关注的任务'}</small></div><button type="button" className="icon-button" onClick={() => setContextCollapsed(true)} aria-label="关闭详情面板">×</button></div><div className="activity-card"><div className="activity-icon"><ThinkingOrb state={isThinking ? 'working' : 'breathing'} size={20} theme="dark" /></div><div><strong>{isThinking ? '正在整理请求' : todayTasks.length > 0 ? '今天有待处理事项' : '安排得很轻松'}</strong><p>{isThinking ? '完成后会在这里显示结果。' : todayTasks.length > 0 ? '优先处理逾期和今天到期的任务。' : '确认后的待办会出现在这里。'}</p></div></div><div className="panel-section"><div className="section-heading"><span className="section-label">待办</span><button type="button" className="text-button" onClick={() => setActiveView('tasks')}>查看全部</button></div>{todayTasks.length === 0 ? <div className="empty-state"><span className="empty-state-icon">✓</span><p>今天还没有待办</p><small>确认后的事项会显示在这里</small></div> : <div className="today-task-list">{todayTasks.map(({ task, kind }) => <button type="button" className={`today-task today-task-${kind}`} key={task.id} onClick={() => { setActiveTaskBoardId(task.boardId); setActiveView('tasks'); setRequestedOpenTaskId(task.id); }}><span className="today-task-icon">{kind === 'overdue' ? <AlertCircle size={14} /> : kind === 'due_today' ? <CalendarCheck2 size={14} /> : <CalendarClock size={14} />}</span><span className="today-task-copy"><strong>{task.title}</strong><small>{todayTaskKindLabel(kind)}{task.priority === 'high' ? ' · 高优先级' : ''}</small></span></button>)}</div>}</div></aside>}
-    {searchOpen && <GlobalSearch onQuery={(query) => activeBridge?.search.query(query) ?? Promise.resolve([])} onOpen={openSearchResult} onClose={() => setSearchOpen(false)} />}
+    {searchOpen && <GlobalSearch onQuery={(query) => activeBridge?.search.query(query) ?? Promise.resolve([])} onOpen={openSearchResult} onClose={() => setSearchOpen(false)} onNewConversation={() => { closeSettings(); void createConversation(); }} onOpenTasks={() => { closeSettings(); setActiveView('tasks'); }} />}
     {pendingApproval && <div className={`approval-backdrop ${approvalClosing ? 'is-closing' : ''}`} role="presentation"><section className="approval-dialog" role="alertdialog" aria-modal="true" aria-labelledby="approval-title" aria-describedby="approval-description"><div className="approval-dialog-header"><span>Agent Runtime</span><h2 id="approval-title">允许这次工具操作？</h2><p id="approval-description">玉衡准备执行 <code>{pendingApproval.toolName}</code></p></div>{pendingApproval.input && <pre>{pendingApproval.input}</pre>}<div className="approval-actions"><button type="button" className="secondary-action" onClick={() => void resolveApproval(false)} disabled={approvalClosing}>拒绝</button><button type="button" className="send-button" autoFocus onClick={() => void resolveApproval(true)} disabled={approvalClosing}>允许一次</button></div></section></div>}
   </main>;
 }

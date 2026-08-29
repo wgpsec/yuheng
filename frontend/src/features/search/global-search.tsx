@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { Archive, LayoutDashboard, ListTodo, MessageSquare, Search, X } from 'lucide-react';
+import { Archive, LayoutDashboard, ListTodo, MessageSquare, Plus, Search, X } from 'lucide-react';
 import type { SearchResult, SearchResultKind } from '../../contracts/desktop-bridge';
 
 type SearchFilter = 'all' | 'conversation' | 'tasks';
@@ -31,10 +31,12 @@ function matchesFilter(result: SearchResult, filter: SearchFilter): boolean {
   return result.kind === 'task' || result.kind === 'board';
 }
 
-export function GlobalSearch({ onQuery, onOpen, onClose }: {
+export function GlobalSearch({ onQuery, onOpen, onClose, onNewConversation, onOpenTasks }: {
   onQuery: (query: string) => Promise<SearchResult[]>;
   onOpen: (result: SearchResult) => void;
   onClose: () => void;
+  onNewConversation?: () => void;
+  onOpenTasks?: () => void;
 }) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -124,6 +126,10 @@ export function GlobalSearch({ onQuery, onOpen, onClose }: {
         {([['all', '全部'], ['conversation', '对话'], ['tasks', '任务']] as const).map(([value, label]) => <button type="button" role="tab" aria-selected={filter === value} className={filter === value ? 'is-selected' : ''} key={value} onClick={() => { setFilter(value); setSelectedIndex(0); }}>{label}</button>)}
       </div>
       <div className="global-search-results" role="listbox" aria-label="搜索结果" ref={resultsRef}>
+        {!query.trim() && <div className="global-search-actions" aria-label="快捷操作">
+          {onNewConversation && <button type="button" className="global-search-action" onClick={() => { onNewConversation(); requestClose(); }}><Plus size={15} aria-hidden="true" /><span>新建会话</span><kbd>⌘ N</kbd></button>}
+          {onOpenTasks && <button type="button" className="global-search-action" onClick={() => { onOpenTasks(); requestClose(); }}><ListTodo size={15} aria-hidden="true" /><span>打开任务</span><kbd>⌘ ⇧ T</kbd></button>}
+        </div>}
         {groupOrder.map((kind) => {
           const group = filtered.filter((result) => result.kind === kind);
           if (group.length === 0) return null;

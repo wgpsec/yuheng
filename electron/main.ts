@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { homedir } from 'node:os';
 import { AppStore, DEFAULT_PROVIDER_CONTEXT_WINDOW, MAX_PROVIDER_CONTEXT_WINDOW, MIN_PROVIDER_CONTEXT_WINDOW, type BackupConfig, type BrowserUseConfig, type ComputerUseConfig, type ConversationProject, type CreateTaskInput, type DesktopPetConfig, type DesktopPresenceConfig, type ProviderConfig, type ReasoningSelection, type RunUsage, type Task, type TaskBoard, type TaskPriority, type TaskStatus, type TaskType, type UpdateTaskInput } from './store';
 import { SecretStore } from './secrets';
 import { createPiRuntime, createPiSessionFactory, type ReasoningLevel } from './pi-runtime';
@@ -19,6 +20,7 @@ import { testProviderConnection, type ProviderTestResult } from './provider-test
 import { externalHttpUrl } from './external-links';
 import { createFullBackup, restoreFullBackup } from './full-backup';
 import { trayReminderTitle } from './tray-state';
+import { readCodexPetAsset, scanCodexPets, type CodexPetManifest } from './pets';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: TASK_ASSET_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
@@ -830,11 +832,39 @@ app.whenReady().then(() => {
     return desktopPresenceConfig;
   });
   ipcMain.handle('pet:get', (): DesktopPetConfig => store.getDesktopPetConfig());
+  ipcMain.handle('pet:list', async (): Promise<CodexPetManifest[]> => scanCodexPets([
+    { path: path.join(process.env.CODEX_HOME || path.join(homedir(), '.codex'), 'pets'), source: 'codex' },
+    { path: path.join(app.getPath('userData'), 'pets'), source: 'yuheng' },
+  ]));
+  ipcMain.handle('pet:asset', async (_event, rawPetId: unknown) => {
+    if (typeof rawPetId !== 'string' || !rawPetId.trim()) return null;
+    const manifests = await scanCodexPets([
+      { path: path.join(process.env.CODEX_HOME || path.join(homedir(), '.codex'), 'pets'), source: 'codex' },
+      { path: path.join(app.getPath('userData'), 'pets'), source: 'yuheng' },
+    ]);
+    const manifest = manifests.find((item) => item.id === rawPetId.trim());
+    if (!manifest) return null;
+    const buffer = await readCodexPetAsset(manifest);
+    const size = nativeImage.createFromBuffer(buffer).getSize();
+    if ((size.width > 0 || size.height > 0) && (size.width !== manifest.columns * manifest.cellWidth || size.height !== manifest.rows * manifest.cellHeight)) {
+      throw new Error('宠物精灵表尺寸与 Codex Pet 规范不匹配。');
+    }
+    return { manifest, dataUrl: `data:image/webp;base64,${buffer.toString('base64')}` };
+  });
+  ipcMain.handle('pet:open-folder', async () => {
+    const folder = path.join(process.env.CODEX_HOME || path.join(homedir(), '.codex'), 'pets');
+    await fs.mkdir(folder, { recursive: true });
+    const error = await shell.openPath(folder);
+    if (error) throw new Error(error);
+  });
   ipcMain.handle('pet:save', (_event, raw: unknown): DesktopPetConfig => {
     if (!raw || typeof raw !== 'object' || typeof (raw as Record<string, unknown>).enabled !== 'boolean') {
       throw new Error('无效的桌面宠物设置。');
     }
-    const config = store.saveDesktopPetConfig({ enabled: (raw as Record<string, unknown>).enabled === true });
+    const input = raw as Record<string, unknown>;
+    const scale = typeof input.scale === 'number' && Number.isFinite(input.scale) ? Math.min(1.4, Math.max(0.8, input.scale)) : undefined;
+    const config = store.saveDesktopPetConfig({ enabled: input.enabled === true, ...(typeof input.petId === 'string' ? { petId: input.petId } : {}), ...(scale ? { scale } : {}) });
+    if (petWindow && !petWindow.isDestroyed()) petWindow.webContents.send('pet:config', config);
     if (config.enabled) createPetWindow();
     else if (petWindow && !petWindow.isDestroyed()) petWindow.close();
     return config;
