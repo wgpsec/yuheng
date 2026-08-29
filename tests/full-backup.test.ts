@@ -5,23 +5,78 @@ import os from 'node:os';
 import path from 'node:path';
 import { AppStore } from '../electron/store';
 import { createFullBackup, restoreFullBackup } from '../electron/full-backup';
+import { TaskAssetStore } from '../electron/task-assets';
+import { BrowserArtifactStore } from '../electron/browser-artifacts';
 
-test('full backup round-trips database data without secrets', async () => {
+test('full backup round-trips database data and explicitly supplied provider keys', async () => {
   const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-full-source-'));
   const targetDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-full-target-'));
   const source = new AppStore(sourceDir); const target = new AppStore(targetDir);
   try {
     const conversation = source.createConversation();
     source.addMessage(conversation.id, 'user', '完整备份');
+    source.saveDesktopPresenceConfig({ notificationsEnabled: false, menuBarEnabled: false });
+    source.saveDesktopPetConfig({ enabled: true, petId: 'demo', scale: 1.1 });
     fs.mkdirSync(path.join(sourceDir, 'workspace'), { recursive: true }); fs.writeFileSync(path.join(sourceDir, 'workspace', 'secret.txt'), 'do not include');
     fs.mkdirSync(path.join(sourceDir, 'task-assets'), { recursive: true }); fs.writeFileSync(path.join(sourceDir, 'task-assets', 'asset.txt'), 'asset');
     fs.writeFileSync(path.join(sourceDir, 'secrets.json'), 'API-KEY');
-    const archive = await createFullBackup({ dataDir: sourceDir, store: source, appVersion: '0.1.4', platform: 'darwin-arm64' });
+    const archive = await createFullBackup({ dataDir: sourceDir, store: source, providerKeys: { default: 'sk-test-secret' }, appVersion: '0.1.4', platform: 'darwin-arm64' });
     assert.equal(archive.includes(Buffer.from('API-KEY')), false);
     assert.equal(archive.includes(Buffer.from('do not include')), false);
-    const report = await restoreFullBackup({ dataDir: targetDir, store: target, archive });
+      const report = await restoreFullBackup({ dataDir: targetDir, store: target, archive });
+      assert.deepEqual(report.providerKeys, { default: 'sk-test-secret' });
     assert.ok(report.conversations >= 1);
     assert.equal(report.contextUnavailable, false);
+    assert.deepEqual(target.getDesktopPresenceConfig(), { notificationsEnabled: false, menuBarEnabled: false });
+    assert.deepEqual(target.getDesktopPetConfig(), { enabled: true, petId: 'demo', scale: 1.1 });
     assert.ok(fs.readdirSync(path.join(targetDir, 'task-assets')).length >= 1);
   } finally { source.close(); target.close(); fs.rmSync(sourceDir, { recursive: true, force: true }); fs.rmSync(targetDir, { recursive: true, force: true }); }
+});
+
+test('full backup remaps restored task attachment and run artifact URLs to readable files', async () => {
+  const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-assets-source-'));
+  const targetDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-assets-target-'));
+  const source = new AppStore(sourceDir);
+  const target = new AppStore(targetDir);
+  try {
+    const sourceTaskAssets = new TaskAssetStore(path.join(sourceDir, 'task-assets'));
+    const attachment = await sourceTaskAssets.import('brief.txt', 'text/plain', Buffer.from('attachment-body'));
+    source.createTask({ title: '含附件任务', description: `[附件](${attachment.url})` });
+
+    const conversation = source.createConversation('含截图会话');
+    const input = source.addMessage(conversation.id, 'user', '截图');
+    source.startRun('run-with-artifact', conversation.id, input.id);
+    source.startToolActivity('run-with-artifact', 'tool-1', 'browser_screenshot');
+    const sourceArtifacts = new BrowserArtifactStore(path.join(sourceDir, 'browser-use', 'screenshots'));
+    const artifact = sourceArtifacts.saveImage(Buffer.from('screenshot-body').toString('base64'), 'image/png');
+    source.addRunArtifact('run-with-artifact', 'tool-1', artifact);
+    source.finishToolActivity('run-with-artifact', 'tool-1', 'browser_screenshot', false);
+    source.finishRun('run-with-artifact', 'completed');
+
+    const archive = await createFullBackup({ dataDir: sourceDir, store: source, appVersion: '0.2.0', platform: 'darwin-arm64' });
+    await restoreFullBackup({ dataDir: targetDir, store: target, archive });
+
+    const importedBoard = target.listTaskBoards().find((board) => board.name === '默认看板');
+    assert.ok(importedBoard);
+    const importedTask = target.listTasks(importedBoard.id).find((task) => task.title === '含附件任务');
+    assert.ok(importedTask);
+    const taskUrl = importedTask.description.match(/\((yuheng-task-asset:[^)]+)\)/)?.[1];
+    assert.ok(taskUrl);
+    const targetTaskAssets = new TaskAssetStore(path.join(targetDir, 'task-assets'));
+    assert.equal(fs.readFileSync(targetTaskAssets.resolveUrl(taskUrl), 'utf8'), 'attachment-body');
+    assert.notEqual(taskUrl, attachment.url);
+
+    const importedConversation = target.listConversations(true).find((item) => item.title === '含截图会话');
+    assert.ok(importedConversation);
+    const importedArtifact = target.listRuns(importedConversation.id)[0]?.activities[0]?.artifacts[0];
+    assert.ok(importedArtifact);
+    const targetArtifacts = new BrowserArtifactStore(path.join(targetDir, 'browser-use', 'screenshots'));
+    assert.equal(fs.readFileSync(targetArtifacts.resolveUrl(importedArtifact.url), 'utf8'), 'screenshot-body');
+    assert.notEqual(importedArtifact.url, artifact.url);
+  } finally {
+    source.close();
+    target.close();
+    fs.rmSync(sourceDir, { recursive: true, force: true });
+    fs.rmSync(targetDir, { recursive: true, force: true });
+  }
 });

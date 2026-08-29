@@ -25,6 +25,29 @@ export class SecretStore {
     return Boolean(this.getProviderKey(providerId));
   }
 
+  exportProviderKeys(): Record<string, string> {
+    const keys: Record<string, string> = {};
+    for (const providerId of this.providerIds()) {
+      const key = this.getProviderKey(providerId);
+      if (key) keys[providerId] = key;
+    }
+    return keys;
+  }
+
+  private providerIds(): string[] {
+    if (!fs.existsSync(this.filePath)) return [];
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf8')) as { providerKey?: string; providerKeys?: Record<string, string> };
+      return [...new Set(['default', ...Object.keys(raw.providerKeys ?? {})])];
+    } catch { return []; }
+  }
+
+  saveProviderKeys(keys: Record<string, string>): void {
+    for (const [providerId, key] of Object.entries(keys)) {
+      if (typeof providerId === 'string' && providerId.trim() && typeof key === 'string' && key.trim()) this.saveProviderKey(providerId, key);
+    }
+  }
+
   saveProviderKey(providerId: string, key: string): void {
     if (!safeStorage.isEncryptionAvailable()) throw new Error('macOS Keychain encryption is unavailable.');
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });

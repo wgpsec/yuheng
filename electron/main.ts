@@ -19,6 +19,7 @@ import { MAX_CONVERSATION_BACKUP_BYTES, conversationBackupMarkdown, parseConvers
 import { testProviderConnection, type ProviderTestResult } from './provider-test';
 import { externalHttpUrl } from './external-links';
 import { createFullBackup, restoreFullBackup } from './full-backup';
+import { BackupRunAdmission } from './backup-run-admission';
 import { trayReminderTitle } from './tray-state';
 import { readCodexPetAsset, scanCodexPets, type CodexPetManifest } from './pets';
 
@@ -41,6 +42,7 @@ const computerUseLease = new ComputerUseLease();
 let taskReminders: TaskReminderScheduler;
 let pendingTaskOpen: { boardId: string; taskId: string } | null = null;
 const activeRuns = new Map<string, { controller: AbortController; conversationId: string; inputMessageId: string; replayUser?: { ordinal: number; content: string } }>();
+const backupRunAdmission = new BackupRunAdmission();
 const pendingApprovals = new Map<string, { runId: string; senderId: number; finish: (approved: boolean) => void }>();
 let shutdownRequested = false;
 let shutdownReady = false;
@@ -506,22 +508,29 @@ function defaultBackupDirectory(): string { return path.join(app.getPath('userDa
 
 async function runAutomaticBackup(): Promise<void> {
   if (!store || activeRuns.size > 0) return;
-  const config = store.getBackupConfig(defaultBackupDirectory());
-  if (!config.enabled) return;
-  const today = new Date().toISOString().slice(0, 10);
-  await fs.mkdir(config.directory, { recursive: true });
-  const existing = (await fs.readdir(config.directory).catch(() => [])).filter((name) => name.endsWith('.yuheng') && name.includes(today));
-  if (existing.length > 0) return;
   try {
-    const archive = await createFullBackup({ dataDir: app.getPath('userData'), store, appVersion: applicationVersionValue, platform: `${process.platform}-${process.arch}` });
-    const target = path.join(config.directory, `yuheng-auto-${today}.yuheng`);
-    await fs.writeFile(`${target}.tmp`, archive, { flag: 'wx', mode: 0o600 });
-    await fs.rename(`${target}.tmp`, target);
-    const files = (await fs.readdir(config.directory)).filter((name) => name.startsWith('yuheng-auto-') && name.endsWith('.yuheng')).sort().reverse();
-    for (const stale of files.slice(config.retention)) await fs.rm(path.join(config.directory, stale), { force: true });
-    store.saveBackupConfig({ ...config, lastRunAt: new Date().toISOString(), lastError: null });
-  } catch (error) {
-    store.saveBackupConfig({ ...config, lastError: error instanceof Error ? error.message.slice(0, 500) : '自动备份失败。' });
+    await backupRunAdmission.run(async () => {
+      if (activeRuns.size > 0) return;
+      const config = store.getBackupConfig(defaultBackupDirectory());
+      if (!config.enabled) return;
+      const today = new Date().toISOString().slice(0, 10);
+      await fs.mkdir(config.directory, { recursive: true });
+      const existing = (await fs.readdir(config.directory).catch(() => [])).filter((name) => name.endsWith('.yuheng') && name.includes(today));
+      if (existing.length > 0) return;
+      try {
+        const archive = await createFullBackup({ dataDir: app.getPath('userData'), store, providerKeys: secrets.exportProviderKeys(), appVersion: applicationVersionValue, platform: `${process.platform}-${process.arch}` });
+        const target = path.join(config.directory, `yuheng-auto-${today}.yuheng`);
+        await fs.writeFile(`${target}.tmp`, archive, { flag: 'wx', mode: 0o600 });
+        await fs.rename(`${target}.tmp`, target);
+        const files = (await fs.readdir(config.directory)).filter((name) => name.startsWith('yuheng-auto-') && name.endsWith('.yuheng')).sort().reverse();
+        for (const stale of files.slice(config.retention)) await fs.rm(path.join(config.directory, stale), { force: true });
+        store.saveBackupConfig({ ...config, lastRunAt: new Date().toISOString(), lastError: null });
+      } catch (error) {
+        store.saveBackupConfig({ ...config, lastError: error instanceof Error ? error.message.slice(0, 500) : '自动备份失败。' });
+      }
+    });
+  } catch {
+    // A manual export already owns the admission gate.
   }
 }
 
@@ -744,6 +753,26 @@ app.whenReady().then(() => {
   ipcMain.handle('conversation-projects:rename', (_event, projectId: unknown, name: unknown): ConversationProject => store.renameConversationProject(assertText(projectId, 'projectId'), assertText(name, 'name')));
   ipcMain.handle('conversation-projects:delete', (_event, projectId: unknown) => store.deleteConversationProject(assertText(projectId, 'projectId')));
   ipcMain.handle('conversations:messages', (_event, conversationId: unknown) => store.listMessages(assertText(conversationId, 'conversationId')));
+  ipcMain.handle('conversations:branch', (_event, conversationId: unknown, messageId: unknown) => store.branchConversation(assertText(conversationId, 'conversationId'), assertText(messageId, 'messageId')));
+  ipcMain.handle('notes:list', (_event, includeArchived: unknown) => store.listNotes(includeArchived === true));
+  ipcMain.handle('notes:get', (_event, id: unknown) => store.getNote(assertText(id, 'noteId')));
+  ipcMain.handle('notes:create', (_event, title: unknown, parentId: unknown) => {
+    const normalizedParentId = parentId == null || parentId === '' ? null : assertText(parentId, 'parentId');
+    return store.createNote(typeof title === 'string' ? title : undefined, normalizedParentId);
+  });
+  ipcMain.handle('notes:update', (_event, id: unknown, rawPatch: unknown) => {
+    const noteId = assertText(id, 'noteId');
+    if (!rawPatch || typeof rawPatch !== 'object') throw new Error('Note patch is required.');
+    const input = rawPatch as Record<string, unknown>;
+    const patch = {
+      ...(input.title === undefined ? {} : { title: assertText(input.title, 'title') }),
+      ...(input.content === undefined ? {} : { content: typeof input.content === 'string' ? input.content : (() => { throw new Error('content must be text.'); })() }),
+      ...(input.archived === undefined ? {} : { archived: input.archived === true }),
+    };
+    return store.updateNote(noteId, patch);
+  });
+  ipcMain.handle('notes:move', (_event, id: unknown, parentId: unknown, targetId: unknown) => store.moveNote(assertText(id, 'noteId'), parentId == null || parentId === '' ? null : assertText(parentId, 'parentId'), targetId == null || targetId === '' ? undefined : assertText(targetId, 'targetId')));
+  ipcMain.handle('notes:delete', (_event, id: unknown) => store.deleteNote(assertText(id, 'noteId')));
   ipcMain.handle('conversations:create', (_event, title: unknown, projectId: unknown, providerId: unknown, profileId: unknown) => {
     const selectedProfile = profileId == null ? undefined : (isAgentProfileId(profileId) ? profileId : (() => { throw new Error('Profile not found.'); })());
     return store.createConversation(typeof title === 'string' && title.trim() ? title.trim() : undefined, typeof projectId === 'string' && projectId.trim() ? projectId.trim() : undefined, typeof providerId === 'string' && providerId.trim() ? providerId.trim() : undefined, selectedProfile);
@@ -794,21 +823,24 @@ app.whenReady().then(() => {
     return store.importConversation(parsed);
   });
   ipcMain.handle('backup:export', async () => {
-    await waitForActiveRuns(10 * 60 * 1000);
-    if (activeRuns.size > 0) throw new Error('当前仍有运行中的任务，请稍后再试。');
-    const target = await dialog.showSaveDialog({ defaultPath: path.join(app.getPath('documents'), `yuheng-backup-${new Date().toISOString().slice(0, 10)}.yuheng`), filters: [{ name: '玉衡备份', extensions: ['yuheng'] }] });
-    if (target.canceled || !target.filePath) return null;
-    const archive = await createFullBackup({ dataDir: app.getPath('userData'), store, appVersion: applicationVersionValue, platform: `${process.platform}-${process.arch}` });
-    const temp = `${target.filePath}.tmp-${crypto.randomUUID()}`;
-    try { await fs.writeFile(temp, archive, { flag: 'wx', mode: 0o600 }); await fs.rename(temp, target.filePath); return target.filePath; }
-    catch (error) { await fs.rm(temp, { force: true }); throw error; }
+    return backupRunAdmission.run(async () => {
+      await waitForActiveRuns(10 * 60 * 1000);
+      if (activeRuns.size > 0) throw new Error('当前仍有运行中的任务，请稍后再试。');
+      const target = await dialog.showSaveDialog({ defaultPath: path.join(app.getPath('documents'), `yuheng-backup-${new Date().toISOString().slice(0, 10)}.yuheng`), filters: [{ name: '玉衡备份', extensions: ['yuheng'] }] });
+      if (target.canceled || !target.filePath) return null;
+      const archive = await createFullBackup({ dataDir: app.getPath('userData'), store, providerKeys: secrets.exportProviderKeys(), appVersion: applicationVersionValue, platform: `${process.platform}-${process.arch}` });
+      const temp = `${target.filePath}.tmp-${crypto.randomUUID()}`;
+      try { await fs.writeFile(temp, archive, { flag: 'wx' }); await fs.rename(temp, target.filePath); return target.filePath; }
+      catch (error) { await fs.rm(temp, { force: true }); throw error; }
+    });
   });
   ipcMain.handle('backup:import', async () => {
     const selected = await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: '玉衡备份', extensions: ['yuheng'] }] });
     if (selected.canceled || !selected.filePaths[0]) return null;
     const archive = await fs.readFile(selected.filePaths[0]);
     const report = await restoreFullBackup({ dataDir: app.getPath('userData'), store, archive });
-    const { conversationMap: _conversationMap, ...publicReport } = report;
+    secrets.saveProviderKeys(report.providerKeys);
+    const { conversationMap: _conversationMap, providerKeys: _providerKeys, ...publicReport } = report;
     return publicReport;
   });
   ipcMain.handle('backup:get-config', (): BackupConfig => store.getBackupConfig(defaultBackupDirectory()));
@@ -1082,6 +1114,7 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('runs:start', (event, conversationId: unknown, content: unknown, attachmentIds: unknown, rawReasoningLevel: unknown) => {
     const id = assertText(conversationId, 'conversationId');
+    backupRunAdmission.assertRunAllowed();
     const text = typeof content === 'string' ? content.trim() : '';
     const providerId = store.getConversationProviderId(id);
     const config = providerId ? store.getProvider(providerId) : null;
@@ -1109,6 +1142,7 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('runs:retry', (event, conversationId: unknown, inputMessageId: unknown, content: unknown, rawReasoningLevel: unknown) => {
     const id = assertText(conversationId, 'conversationId');
+    backupRunAdmission.assertRunAllowed();
     const messageId = assertText(inputMessageId, 'inputMessageId');
     const text = assertText(content, 'content');
     const providerId = store.getConversationProviderId(id);

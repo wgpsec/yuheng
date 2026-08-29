@@ -11,3 +11,5 @@
 目前项目尚未锁定技术栈，具体设计在相关 spec 中记录。
 
 界面字号、层级和开发检查规则见 [`ui-typography.md`](ui-typography.md)。
+
+笔记模式的产品、数据模型、AI 协作边界和分 slice 实施计划见 [`notes-mode-spec.md`](notes-mode-spec.md)。

@@ -1,10 +1,12 @@
-import { Archive, ArchiveRestore, Check, ChevronDown, Folder, FolderOpen, LayoutDashboard, ListTodo, MessageSquare, MessageSquarePlus, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Pin, PinOff, Plus, Search, Settings, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, ChevronDown, Folder, FolderOpen, LayoutDashboard, ListTodo, MessageSquare, MessageSquarePlus, MoreHorizontal, NotebookPen, PanelLeftClose, PanelLeftOpen, Pencil, Pin, PinOff, Plus, Search, Settings, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState, type KeyboardEvent, type SetStateAction } from 'react';
 import type { AgentProfileId, ConversationProject, TaskBoard } from '../../../contracts/desktop-bridge';
 import type { ProviderConfig } from '../../../contracts/desktop-bridge';
+import type { DesktopBridge } from '../../../contracts/desktop-bridge';
+import { NotesNavigation } from '../../notes/notes-navigation';
 
 export type Conversation = { id: string; projectId: string; title: string; providerId?: string; profileId?: AgentProfileId; updatedAt?: string; time?: string; archived?: boolean; pinned?: boolean };
-type WorkspaceMode = 'conversation' | 'tasks';
+type WorkspaceMode = 'conversation' | 'tasks' | 'notes';
 type ConversationSection = 'pinned' | 'projects' | 'recent';
 type SidebarSort = 'priority' | 'recent' | 'manual';
 type SidebarOrganization = 'projects' | 'list';
@@ -36,7 +38,7 @@ export function conversationMenuKey(conversationId: string, placement: string) {
   return `${placement}:${conversationId}`;
 }
 
- export function Sidebar({ conversations, projects, boards, providers, newProviderId, onNewProviderChange, activeId, activeProjectId, activeBoardId, mode, settingsOpen, collapsed, appVersion, onSearch, onSelect, onSelectProject, onSelectBoard, onModeChange, onNew, onRenameConversation, onMoveConversation, onArchiveConversation, onPinConversation, onDeleteConversation, onCreateProject, onRenameProject, onDeleteProject, onCreateBoard, onRenameBoard, onDeleteBoard, onReorderBoard, onMoveTaskToBoard, onSettings, onToggle }: {
+export function Sidebar({ conversations, projects, boards, providers, newProviderId, onNewProviderChange, activeId, activeProjectId, activeBoardId, activeNoteId, notesBridge, notesRevision, onNotesChanged, mode, settingsOpen, collapsed, appVersion, onSearch, onSelect, onSelectProject, onSelectBoard, onSelectNote, onModeChange, onNew, onRenameConversation, onMoveConversation, onArchiveConversation, onPinConversation, onDeleteConversation, onCreateProject, onRenameProject, onDeleteProject, onCreateBoard, onRenameBoard, onDeleteBoard, onReorderBoard, onMoveTaskToBoard, onSettings, onToggle }: {
   conversations: Conversation[];
   projects: ConversationProject[];
   boards: TaskBoard[];
@@ -46,6 +48,10 @@ export function conversationMenuKey(conversationId: string, placement: string) {
   activeId: string;
   activeProjectId: string;
   activeBoardId: string;
+  activeNoteId: string | null;
+  notesBridge?: DesktopBridge;
+  notesRevision?: number;
+  onNotesChanged?: () => void;
   mode: WorkspaceMode;
   settingsOpen: boolean;
   collapsed: boolean;
@@ -54,6 +60,7 @@ export function conversationMenuKey(conversationId: string, placement: string) {
   onSelect: (id: string) => void;
   onSelectProject: (id: string) => void;
   onSelectBoard: (id: string) => void;
+  onSelectNote: (id: string | null) => void;
   onModeChange: (mode: WorkspaceMode) => void;
   onNew: (projectId?: string, providerId?: string) => void;
   onRenameConversation: (id: string, title: string) => Promise<void>;
@@ -359,6 +366,9 @@ export function conversationMenuKey(conversationId: string, placement: string) {
         <button type="button" role="tab" aria-selected={mode === 'tasks'} className={mode === 'tasks' ? 'is-selected' : ''} onClick={() => onModeChange('tasks')} title="任务">
           <ListTodo size={15} aria-hidden="true" />{mode === 'tasks' && <span>任务</span>}
         </button>
+        <button type="button" role="tab" aria-selected={mode === 'notes'} className={mode === 'notes' ? 'is-selected' : ''} onClick={() => onModeChange('notes')} title="笔记">
+          <NotebookPen size={15} aria-hidden="true" />{mode === 'notes' && <span>笔记</span>}
+        </button>
       </div>
 
       <div key={mode} className={`sidebar-mode-content is-${mode}`}>
@@ -382,7 +392,7 @@ export function conversationMenuKey(conversationId: string, placement: string) {
         </nav>
         {projectError && !collapsed && <p className="sidebar-board-error" role="alert">{projectError}</p>}
         {conversationError && !collapsed && <p className="sidebar-board-error" role="alert">{conversationError}</p>}
-      </> : <>
+      </> : mode === 'tasks' ? <>
         <div className="task-board-list-heading">
           {!collapsed && <span>任务看板</span>}
           <button type="button" onClick={() => { if (collapsed) onToggle(); setCreatingBoard(true); }} aria-label="新建任务看板" title="新建任务看板"><Plus size={14} /></button>
@@ -401,7 +411,7 @@ export function conversationMenuKey(conversationId: string, placement: string) {
           {creatingBoard && !collapsed && <div className="task-board-create-row"><LayoutDashboard size={15} /><input autoFocus value={newBoardName} onChange={(event) => setNewBoardName(event.target.value)} onBlur={() => { if (!newBoardName.trim()) setCreatingBoard(false); }} onKeyDown={(event) => submitOnEnter(event, createBoard)} placeholder="看板名称" aria-label="新任务看板名称" /><button type="button" onClick={() => void createBoard()} disabled={!newBoardName.trim()}>添加</button></div>}
           {boardError && !collapsed && <p className="sidebar-board-error" role="alert">{boardError}</p>}
         </nav>
-      </>}
+      </> : <NotesNavigation bridge={notesBridge} activeNoteId={activeNoteId} refreshKey={notesRevision} onSelect={onSelectNote} onChanged={onNotesChanged} />}
       </div>
 
       <div className="sidebar-bottom">

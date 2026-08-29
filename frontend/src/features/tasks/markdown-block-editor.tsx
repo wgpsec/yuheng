@@ -32,9 +32,9 @@ const slashItems = [
 export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAssets, onOpenAsset }: {
   value: string;
   onChange: (markdown: string) => void;
-  onImportAsset: (file: File) => Promise<TaskAsset>;
-  onPickAssets: () => Promise<TaskAsset[]>;
-  onOpenAsset: (url: string) => Promise<void>;
+  onImportAsset?: (file: File) => Promise<TaskAsset>;
+  onPickAssets?: () => Promise<TaskAsset[]>;
+  onOpenAsset?: (url: string) => Promise<void>;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [slash, setSlash] = useState<SlashState | null>(null);
@@ -105,7 +105,7 @@ export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAsse
         const href = target?.getAttribute('href');
         if (!href) return false;
         event.preventDefault();
-        void onOpenAsset(href).catch((reason) => setAssetError(reason instanceof Error ? reason.message : '打开附件失败。'));
+        if (onOpenAsset) void onOpenAsset(href).catch((reason) => setAssetError(reason instanceof Error ? reason.message : '打开附件失败。'));
         return true;
       },
     },
@@ -142,6 +142,7 @@ export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAsse
     setAssetError(null);
     try {
       const imported: TaskAsset[] = [];
+      if (!onImportAsset) return;
       for (const file of files) imported.push(await onImportAsset(file));
       insertAssets(imported);
     } catch (reason) {
@@ -152,6 +153,7 @@ export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAsse
   };
 
   const pickAssets = async () => {
+    if (!onPickAssets) return;
     setAssetBusy(true);
     setAssetError(null);
     try {
@@ -358,7 +360,7 @@ export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAsse
       <button type="button" className={editor?.isActive('blockquote') ? 'is-active' : ''} onClick={() => editor?.chain().focus().toggleBlockquote().run()} aria-label="引用" title="引用"><Quote size={14} /></button>
       <button type="button" className={editor?.isActive('link') ? 'is-active' : ''} onClick={setLink} aria-label="链接" title="链接"><Link size={14} /></button>
       <span className="block-editor-divider" />
-      <button type="button" onClick={() => void pickAssets()} aria-label="添加图片或附件" title="添加图片或附件" disabled={assetBusy}><Paperclip size={14} /></button>
+      {(onPickAssets || onImportAsset) && <button type="button" onClick={() => void pickAssets()} aria-label="添加图片或附件" title="添加图片或附件" disabled={assetBusy}><Paperclip size={14} /></button>}
       {assetBusy && <span className="block-editor-uploading">保存中...</span>}
     </div>
     <EditorContent editor={editor} className="block-editor-content" />

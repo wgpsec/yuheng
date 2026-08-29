@@ -23,6 +23,7 @@ export const DEFAULT_PROVIDER_ID = 'default';
 export const DEFAULT_PROVIDER_CONTEXT_WINDOW = 200_000;
 export const MIN_PROVIDER_CONTEXT_WINDOW = 4_096;
 export const MAX_PROVIDER_CONTEXT_WINDOW = 10_000_000;
+export const CURRENT_SCHEMA_VERSION = 1;
 export type ConversationProject = { id: string; name: string; position: number };
 export type Conversation = { id: string; projectId: string; title: string; updatedAt: string; archived: boolean; pinned: boolean; providerId?: string; profileId: AgentProfileId };
 export type Message = { id: string; role: 'user' | 'assistant'; content: string; createdAt: string };
@@ -51,9 +52,21 @@ export type Task = {
   createdAt: string;
   updatedAt: string;
 };
+export type Note = {
+  id: string;
+  parentId: string | null;
+  title: string;
+  content: string;
+  position: number;
+  archived: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+export type CreateNoteInput = { title?: string; parentId?: string | null };
+export type UpdateNoteInput = Partial<Pick<Note, 'title' | 'content' | 'archived'>>;
 export type CreateTaskInput = Pick<Task, 'title'> & Partial<Pick<Task, 'description' | 'status' | 'priority' | 'dueAt' | 'remindAt' | 'sourceConversationId'>>;
 export type UpdateTaskInput = Partial<Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'dueAt' | 'remindAt'>>;
-export type SearchResultKind = 'conversation' | 'message' | 'task' | 'board';
+export type SearchResultKind = 'conversation' | 'message' | 'task' | 'board' | 'note';
 export type SearchResult = {
   kind: SearchResultKind;
   id: string;
@@ -77,6 +90,7 @@ export type FullBackupSnapshot = {
   taskBoards: Array<{ id: string; name: string; position: number }>;
   taskTypes: Array<{ id: string; boardId: string; name: string; position: number }>;
   tasks: Array<{ id: string; boardId: string; title: string; description: string; position: number; status: string; priority: TaskPriority; dueAt: string | null; remindAt: string | null; reminderFiredAt: string | null; sourceConversationId: string | null; createdAt: string; updatedAt: string }>;
+  notes?: Array<{ id: string; parentId: string | null; title: string; content: string; position: number; archived: boolean; createdAt: string; updatedAt: string }>;
 };
 export type BackupConfig = { enabled: boolean; directory: string; retention: number; lastRunAt: string | null; lastError: string | null };
 export type DesktopPresenceConfig = { notificationsEnabled: boolean; menuBarEnabled: boolean };
@@ -208,6 +222,16 @@ export class AppStore {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS notes (
+        id TEXT PRIMARY KEY,
+        parent_id TEXT REFERENCES notes(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL DEFAULT '',
+        position INTEGER NOT NULL DEFAULT 0,
+        archived INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
     `);
     const providerSchema = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'provider_profiles'").get() as Row | undefined;
     if (typeof providerSchema?.sql === 'string' && providerSchema.sql.includes('CHECK (id = 1)')) this.migrateProviderProfiles();
@@ -248,8 +272,13 @@ export class AppStore {
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_board_status_updated ON tasks(board_id, status, updated_at DESC)');
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_conversations_project_updated ON conversations(project_id, updated_at DESC)');
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_run_artifacts_activity ON run_artifacts(run_id, tool_call_id, created_at ASC)');
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_notes_parent_position ON notes(parent_id, archived, position, id)');
     this.seed();
     this.setupSearchIndex();
+    // Keep a monotonic marker for future migrations without introducing a
+    // separate metadata table. Existing field migrations remain idempotent.
+    const schemaVersion = Number((this.db.prepare('PRAGMA user_version').get() as Row | undefined)?.user_version ?? 0);
+    if (schemaVersion < CURRENT_SCHEMA_VERSION) this.db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
   }
 
   private setupSearchIndex(): void {
@@ -323,6 +352,18 @@ export class AppStore {
         CREATE TRIGGER IF NOT EXISTS search_tasks_delete AFTER DELETE ON tasks BEGIN
           DELETE FROM search_index WHERE kind = 'task' AND entity_id = OLD.id;
         END;
+        CREATE TRIGGER IF NOT EXISTS search_notes_insert AFTER INSERT ON notes BEGIN
+          INSERT INTO search_index(kind, entity_id, parent_id, title, content, context, updated_at, archived)
+          VALUES ('note', NEW.id, NEW.parent_id, NEW.title, NEW.content, '笔记', NEW.updated_at, NEW.archived);
+        END;
+        CREATE TRIGGER IF NOT EXISTS search_notes_update AFTER UPDATE ON notes BEGIN
+          DELETE FROM search_index WHERE kind = 'note' AND entity_id = OLD.id;
+          INSERT INTO search_index(kind, entity_id, parent_id, title, content, context, updated_at, archived)
+          VALUES ('note', NEW.id, NEW.parent_id, NEW.title, NEW.content, '笔记', NEW.updated_at, NEW.archived);
+        END;
+        CREATE TRIGGER IF NOT EXISTS search_notes_delete AFTER DELETE ON notes BEGIN
+          DELETE FROM search_index WHERE kind = 'note' AND entity_id = OLD.id;
+        END;
       `);
       this.rebuildSearchIndex();
       this.searchIndexAvailable = true;
@@ -352,6 +393,8 @@ export class AppStore {
       INSERT INTO search_index(kind, entity_id, parent_id, title, content, context, updated_at, archived)
       SELECT 'task', tasks.id, board_id, tasks.title, tasks.description, task_boards.name, tasks.updated_at, 0
       FROM tasks JOIN task_boards ON task_boards.id = tasks.board_id;
+      INSERT INTO search_index(kind, entity_id, parent_id, title, content, context, updated_at, archived)
+      SELECT 'note', id, parent_id, title, content, '笔记', updated_at, archived FROM notes;
     `);
   }
 
@@ -387,6 +430,10 @@ export class AppStore {
       SELECT 'task' AS kind, tasks.id, board_id AS parentId, tasks.title, tasks.description AS content,
         task_boards.name AS context, tasks.updated_at AS updatedAt, 0 AS archived
       FROM tasks JOIN task_boards ON task_boards.id = tasks.board_id
+      UNION ALL
+      SELECT 'note' AS kind, id, parent_id AS parentId, title, content,
+        '笔记' AS context, updated_at AS updatedAt, archived
+      FROM notes
       ORDER BY updatedAt DESC
       LIMIT ?
     `).all(limit) as Row[];
@@ -414,9 +461,13 @@ export class AppStore {
       SELECT 'board' AS kind, id, NULL AS parentId, name AS title, '' AS content,
         '任务看板' AS context, '' AS updatedAt, 0 AS archived
       FROM task_boards WHERE name LIKE ? ESCAPE '\\'
+      UNION ALL
+      SELECT 'note' AS kind, id, parent_id AS parentId, title, content,
+        '笔记' AS context, updated_at AS updatedAt, archived
+      FROM notes WHERE title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\'
       ORDER BY updatedAt DESC
       LIMIT ?
-    `).all(pattern, pattern, pattern, pattern, pattern, pattern, limit) as Row[];
+    `).all(pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, limit) as Row[];
     return rows.map((row) => this.mapSearchResult(row, query));
   }
 
@@ -531,6 +582,7 @@ export class AppStore {
         board_id TEXT NOT NULL REFERENCES task_boards(id) ON DELETE CASCADE,
         title TEXT NOT NULL,
         description TEXT NOT NULL DEFAULT '',
+        position INTEGER NOT NULL DEFAULT 0,
         status TEXT NOT NULL REFERENCES task_types(id),
         priority TEXT NOT NULL CHECK (priority IN ('low', 'medium', 'high')),
         due_at TEXT,
@@ -540,8 +592,8 @@ export class AppStore {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
-      INSERT INTO tasks (id, board_id, title, description, status, priority, due_at, remind_at, reminder_fired_at, source_conversation_id, created_at, updated_at)
-      SELECT id, board_id, title, description, status, priority, due_at, remind_at, reminder_fired_at, source_conversation_id, created_at, updated_at FROM tasks_legacy;
+      INSERT INTO tasks (id, board_id, title, description, position, status, priority, due_at, remind_at, reminder_fired_at, source_conversation_id, created_at, updated_at)
+      SELECT id, board_id, title, description, position, status, priority, due_at, remind_at, reminder_fired_at, source_conversation_id, created_at, updated_at FROM tasks_legacy;
       DROP TABLE tasks_legacy;
       COMMIT;
     `);
@@ -665,6 +717,28 @@ export class AppStore {
     if (!isAgentProfileId(profileId)) throw new Error('Profile not found.');
     this.db.prepare('INSERT INTO conversations (id, project_id, title, provider_id, profile_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, projectId, title, selectedProviderId, profileId, now, now);
     return { id, projectId, title, updatedAt: now, archived: false, pinned: false, profileId, ...(selectedProviderId ? { providerId: selectedProviderId } : {}) };
+  }
+
+  branchConversation(conversationId: string, messageId: string): Conversation {
+    const source = this.getConversation(conversationId);
+    const messages = this.listMessages(conversationId);
+    const index = messages.findIndex((message) => message.id === messageId);
+    if (index < 0) throw new Error('Message not found.');
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const title = `${source.title} · 分支`;
+    this.db.exec('BEGIN');
+    try {
+      this.db.prepare('INSERT INTO conversations (id, project_id, title, provider_id, profile_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(id, source.projectId, title, source.providerId ?? this.defaultProviderId(), source.profileId, now, now);
+      const insert = this.db.prepare('INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)');
+      for (const message of messages.slice(0, index + 1)) insert.run(crypto.randomUUID(), id, message.role, message.content, message.createdAt);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return this.getConversation(id);
   }
 
   getConversationProviderId(conversationId: string): string | null {
@@ -841,6 +915,109 @@ export class AppStore {
       createdAt: String(row.createdAt),
       updatedAt: String(row.updatedAt),
     };
+  }
+
+  private noteFromRow(row: Row): Note {
+    return {
+      id: String(row.id),
+      parentId: row.parentId == null ? null : String(row.parentId),
+      title: String(row.title),
+      content: String(row.content ?? ''),
+      position: Number(row.position ?? 0),
+      archived: Number(row.archived) === 1,
+      createdAt: String(row.createdAt),
+      updatedAt: String(row.updatedAt),
+    };
+  }
+
+  listNotes(includeArchived = false): Note[] {
+    const query = includeArchived
+      ? `SELECT id, parent_id AS parentId, title, content, position, archived, created_at AS createdAt, updated_at AS updatedAt FROM notes ORDER BY CASE WHEN parent_id IS NULL THEN 0 ELSE 1 END, parent_id, position, id`
+      : `WITH RECURSIVE archived_tree(id) AS (
+          SELECT id FROM notes WHERE archived = 1
+          UNION ALL
+          SELECT notes.id FROM notes JOIN archived_tree ON notes.parent_id = archived_tree.id
+        )
+        SELECT id, parent_id AS parentId, title, content, position, archived, created_at AS createdAt, updated_at AS updatedAt
+        FROM notes WHERE archived = 0 AND id NOT IN (SELECT id FROM archived_tree)
+        ORDER BY CASE WHEN parent_id IS NULL THEN 0 ELSE 1 END, parent_id, position, id`;
+    const rows = this.db.prepare(query).all() as Row[];
+    return rows.map((row) => this.noteFromRow(row));
+  }
+
+  getNote(id: string): Note | null {
+    const row = this.db.prepare(`SELECT id, parent_id AS parentId, title, content, position, archived,
+      created_at AS createdAt, updated_at AS updatedAt FROM notes WHERE id = ?`).get(id) as Row | undefined;
+    return row ? this.noteFromRow(row) : null;
+  }
+
+  createNote(input?: CreateNoteInput | string, parentId?: string | null): Note {
+    const values = typeof input === 'string'
+      ? { title: input, parentId }
+      : { ...(input ?? {}), ...(parentId !== undefined ? { parentId } : {}) };
+    const title = typeof values.title === 'string' && values.title.trim() ? values.title.trim() : '未命名笔记';
+    const normalizedParentId = values.parentId == null ? null : String(values.parentId);
+    if (normalizedParentId && !this.db.prepare('SELECT 1 FROM notes WHERE id = ?').get(normalizedParentId)) throw new Error('Parent note not found.');
+    const id = crypto.randomUUID();
+    const position = Number((this.db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM notes WHERE parent_id IS ?').get(normalizedParentId) as Row).position);
+    const now = new Date().toISOString();
+    this.db.prepare('INSERT INTO notes (id, parent_id, title, content, position, archived, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?)').run(id, normalizedParentId, title, '', position, now, now);
+    return this.getNote(id)!;
+  }
+
+  updateNote(id: string, patch: UpdateNoteInput): Note {
+    const current = this.getNote(id);
+    if (!current) throw new Error('Note not found.');
+    const title = patch.title === undefined ? current.title : patch.title.trim();
+    if (!title) throw new Error('Note title is required.');
+    const content = patch.content === undefined ? current.content : patch.content;
+    const archived = patch.archived === undefined ? current.archived : patch.archived === true;
+    const updatedAt = new Date().toISOString();
+    this.db.prepare('UPDATE notes SET title = ?, content = ?, archived = ?, updated_at = ? WHERE id = ?').run(title, content, archived ? 1 : 0, updatedAt, id);
+    return this.getNote(id)!;
+  }
+
+  moveNote(id: string, parentId: string | null = null, targetId?: string): Note {
+    const note = this.getNote(id);
+    if (!note) throw new Error('Note not found.');
+    if (parentId === id) throw new Error('A note cannot be moved into itself.');
+    if (parentId !== null && !this.getNote(parentId)) throw new Error('Parent note not found.');
+    let ancestor = parentId;
+    while (ancestor) {
+      if (ancestor === id) throw new Error('A note cannot be moved into its descendant.');
+      const row = this.db.prepare('SELECT parent_id AS parentId FROM notes WHERE id = ?').get(ancestor) as Row | undefined;
+      ancestor = row?.parentId == null ? null : String(row.parentId);
+    }
+    if (targetId && targetId !== id) {
+      const target = this.getNote(targetId);
+      if (!target || target.parentId !== parentId) throw new Error('Target note not found.');
+    }
+
+    const siblings = this.listNotes(true).filter((item) => item.parentId === parentId && item.id !== id);
+    const targetIndex = targetId && targetId !== id ? siblings.findIndex((item) => item.id === targetId) : -1;
+    const insertAt = targetIndex < 0 ? siblings.length : targetIndex;
+    siblings.splice(insertAt, 0, note);
+    this.db.exec('BEGIN');
+    try {
+      this.db.prepare('UPDATE notes SET parent_id = ?, updated_at = ? WHERE id = ?').run(parentId, new Date().toISOString(), id);
+      const update = this.db.prepare('UPDATE notes SET position = ? WHERE id = ?');
+      siblings.forEach((item, position) => update.run(position, item.id));
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return this.getNote(id)!;
+  }
+
+  deleteNote(id: string): void {
+    const note = this.getNote(id);
+    if (!note) throw new Error('Note not found.');
+    const result = this.db.prepare('DELETE FROM notes WHERE id = ?').run(id);
+    if (Number(result.changes) === 0) throw new Error('Note not found.');
+    const siblings = this.db.prepare('SELECT id FROM notes WHERE parent_id IS ? ORDER BY position ASC, id ASC').all(note.parentId) as Row[];
+    const update = this.db.prepare('UPDATE notes SET position = ? WHERE id = ?');
+    siblings.forEach((row, position) => update.run(position, String(row.id)));
   }
 
   listTaskBoards(): TaskBoard[] {
@@ -1241,14 +1418,15 @@ export class AppStore {
       runActivities: mapRows('SELECT id, run_id AS runId, tool_call_id AS toolCallId, tool_name AS toolName, status, input, output, started_at AS startedAt, finished_at AS finishedAt FROM run_activities').map((r) => ({ id: String(r.id), runId: String(r.runId), toolCallId: String(r.toolCallId), toolName: String(r.toolName), status: r.status as RunActivityStatus, input: r.input == null ? null : String(r.input), output: r.output == null ? null : String(r.output), startedAt: String(r.startedAt), finishedAt: r.finishedAt == null ? null : String(r.finishedAt) })),
       runArtifacts: mapRows('SELECT id, run_id AS runId, tool_call_id AS toolCallId, kind, mime_type AS mimeType, size, url, created_at AS createdAt FROM run_artifacts').map((r) => ({ id: String(r.id), runId: String(r.runId), toolCallId: String(r.toolCallId), kind: r.kind as RunArtifact['kind'], mimeType: String(r.mimeType), size: Number(r.size), url: String(r.url), createdAt: String(r.createdAt) })),
       providers: mapRows('SELECT id, protocol, base_url AS baseUrl, model, display_name AS displayName, context_window AS contextWindow, updated_at AS updatedAt FROM provider_profiles').map((r) => ({ id: String(r.id), protocol: r.protocol as ProviderConfig['protocol'], baseUrl: String(r.baseUrl), model: String(r.model), displayName: String(r.displayName), contextWindow: Number(r.contextWindow), updatedAt: String(r.updatedAt) })),
-      appSettings: mapRows("SELECT key, value, updated_at AS updatedAt FROM app_settings WHERE key IN ('browser_use', 'computer_use')").map((r) => ({ key: String(r.key), value: String(r.value), updatedAt: String(r.updatedAt) })),
+      appSettings: mapRows("SELECT key, value, updated_at AS updatedAt FROM app_settings WHERE key IN ('browser_use', 'computer_use', 'desktop_presence', 'desktop_pet')").map((r) => ({ key: String(r.key), value: String(r.value), updatedAt: String(r.updatedAt) })),
       taskBoards: mapRows('SELECT id, name, position FROM task_boards').map((r) => ({ id: String(r.id), name: String(r.name), position: Number(r.position) })),
       taskTypes: mapRows('SELECT id, board_id AS boardId, name, position FROM task_types').map((r) => ({ id: String(r.id), boardId: String(r.boardId), name: String(r.name), position: Number(r.position) })),
       tasks: mapRows('SELECT id, board_id AS boardId, title, description, position, status, priority, due_at AS dueAt, remind_at AS remindAt, reminder_fired_at AS reminderFiredAt, source_conversation_id AS sourceConversationId, created_at AS createdAt, updated_at AS updatedAt FROM tasks').map((r) => ({ id: String(r.id), boardId: String(r.boardId), title: String(r.title), description: String(r.description ?? ''), position: Number(r.position ?? 0), status: String(r.status), priority: r.priority as TaskPriority, dueAt: r.dueAt == null ? null : String(r.dueAt), remindAt: r.remindAt == null ? null : String(r.remindAt), reminderFiredAt: r.reminderFiredAt == null ? null : String(r.reminderFiredAt), sourceConversationId: r.sourceConversationId == null ? null : String(r.sourceConversationId), createdAt: String(r.createdAt), updatedAt: String(r.updatedAt) })),
+      notes: mapRows('SELECT id, parent_id AS parentId, title, content, position, archived, created_at AS createdAt, updated_at AS updatedAt FROM notes ORDER BY CASE WHEN parent_id IS NULL THEN 0 ELSE 1 END, parent_id, position, id').map((r) => ({ id: String(r.id), parentId: r.parentId == null ? null : String(r.parentId), title: String(r.title), content: String(r.content ?? ''), position: Number(r.position ?? 0), archived: Number(r.archived) === 1, createdAt: String(r.createdAt), updatedAt: String(r.updatedAt) })),
     };
   }
 
-  importFullBackupSnapshot(snapshot: FullBackupSnapshot): { conversations: number; messages: number; tasks: number; missingProviders: number; conversationMap: Record<string, string> } {
+  importFullBackupSnapshot(snapshot: FullBackupSnapshot): { conversations: number; messages: number; tasks: number; notes: number; missingProviders: number; conversationMap: Record<string, string> } {
     const projectMap = new Map<string, string>();
     const boardMap = new Map<string, string>();
     const typeMap = new Map<string, string>();
@@ -1256,6 +1434,8 @@ export class AppStore {
     const messageMap = new Map<string, string>();
     const runMap = new Map<string, string>();
     let importedTasks = 0;
+    let importedNotes = 0;
+    const noteMap = new Map<string, string>();
     const providerIds = new Set(this.listProviders().map((p) => p.id));
     const defaultProvider = this.defaultProviderId();
     const now = new Date().toISOString();
@@ -1277,12 +1457,30 @@ export class AppStore {
       for (const item of snapshot.taskBoards) { const id = crypto.randomUUID(); boardMap.set(item.id, id); this.db.prepare('INSERT INTO task_boards (id, name, position) VALUES (?, ?, ?)').run(id, item.name, item.position); }
       for (const item of snapshot.taskTypes) { const boardId = boardMap.get(item.boardId); if (!boardId) continue; const id = crypto.randomUUID(); typeMap.set(item.id, id); this.db.prepare('INSERT INTO task_types (id, board_id, name, position) VALUES (?, ?, ?, ?)').run(id, boardId, item.name, item.position); }
       for (const item of snapshot.tasks) { const boardId = boardMap.get(item.boardId); const status = typeMap.get(item.status); if (!boardId || !status) continue; this.db.prepare('INSERT INTO tasks (id, board_id, title, description, position, status, priority, due_at, remind_at, reminder_fired_at, source_conversation_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(crypto.randomUUID(), boardId, item.title, item.description, item.position, status, item.priority, item.dueAt, item.remindAt, item.reminderFiredAt, item.sourceConversationId ? conversationMap.get(item.sourceConversationId) ?? null : null, item.createdAt || now, item.updatedAt || now); importedTasks += 1; }
+      const pendingNotes = [...(snapshot.notes ?? [])];
+      const insertNote = this.db.prepare('INSERT INTO notes (id, parent_id, title, content, position, archived, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+      while (pendingNotes.length) {
+        let progressed = false;
+        for (let index = pendingNotes.length - 1; index >= 0; index -= 1) {
+          const item = pendingNotes[index];
+          const mappedParentId = item.parentId == null ? null : noteMap.get(item.parentId);
+          if (item.parentId != null && !mappedParentId) continue;
+          const parentId = mappedParentId ?? null;
+          const id = crypto.randomUUID();
+          noteMap.set(item.id, id);
+          insertNote.run(id, parentId, item.title, item.content, item.position, item.archived ? 1 : 0, item.createdAt || now, item.updatedAt || now);
+          pendingNotes.splice(index, 1);
+          importedNotes += 1;
+          progressed = true;
+        }
+        if (!progressed) break;
+      }
       const insertSetting = this.db.prepare("INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)");
       // Automatic backup is an opt-in local policy and is never enabled by an import.
-      for (const item of snapshot.appSettings) if (item.key === 'browser_use' || item.key === 'computer_use') insertSetting.run(item.key, item.value, item.updatedAt || now);
+      for (const item of snapshot.appSettings) if (item.key === 'browser_use' || item.key === 'computer_use' || item.key === 'desktop_presence' || item.key === 'desktop_pet') insertSetting.run(item.key, item.value, item.updatedAt || now);
       this.db.exec('COMMIT');
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
-    return { conversations: conversationMap.size, messages: messageMap.size, tasks: importedTasks, missingProviders: snapshot.providers.filter((p) => !providerIds.has(p.id)).length, conversationMap: Object.fromEntries(conversationMap) };
+    return { conversations: conversationMap.size, messages: messageMap.size, tasks: importedTasks, notes: importedNotes, missingProviders: snapshot.providers.filter((p) => !providerIds.has(p.id)).length, conversationMap: Object.fromEntries(conversationMap) };
   }
 
   close(): void {

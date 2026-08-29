@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('desktopBridge', {
       delete: (projectId: string) => ipcRenderer.invoke('conversation-projects:delete', projectId),
     },
     messages: (conversationId: string) => ipcRenderer.invoke('conversations:messages', conversationId),
+    branch: (conversationId: string, messageId: string) => ipcRenderer.invoke('conversations:branch', conversationId, messageId),
     create: (title?: string, projectId?: string, providerId?: string, profileId?: 'assistant' | 'analyst' | 'auditor') => ipcRenderer.invoke('conversations:create', title, projectId, providerId, profileId),
     setProvider: (conversationId: string, providerId: string) => ipcRenderer.invoke('conversations:set-provider', conversationId, providerId),
     setProfile: (conversationId: string, profileId: 'assistant' | 'analyst' | 'auditor') => ipcRenderer.invoke('conversations:set-profile', conversationId, profileId),
@@ -118,6 +119,14 @@ contextBridge.exposeInMainWorld('desktopBridge', {
       pick: () => ipcRenderer.invoke('tasks:assets:pick'),
       open: (url: string) => ipcRenderer.invoke('tasks:assets:open', url),
     },
+  },
+  notes: {
+    list: (includeArchived?: boolean) => ipcRenderer.invoke('notes:list', includeArchived),
+    get: (id: string) => ipcRenderer.invoke('notes:get', id),
+    create: (title?: string, parentId?: string | null) => ipcRenderer.invoke('notes:create', title, parentId),
+    update: (id: string, patch: unknown) => ipcRenderer.invoke('notes:update', id, patch),
+    move: (id: string, parentId: string | null, targetId?: string) => ipcRenderer.invoke('notes:move', id, parentId, targetId),
+    delete: (id: string) => ipcRenderer.invoke('notes:delete', id),
   },
   runs: {
     list: (conversationId: string) => ipcRenderer.invoke('runs:list', conversationId),

@@ -1,20 +1,22 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { Archive, LayoutDashboard, ListTodo, MessageSquare, Plus, Search, X } from 'lucide-react';
+import { Archive, LayoutDashboard, ListTodo, MessageSquare, NotebookPen, Plus, Search, X } from 'lucide-react';
 import type { SearchResult, SearchResultKind } from '../../contracts/desktop-bridge';
 
-type SearchFilter = 'all' | 'conversation' | 'tasks';
+type SearchFilter = 'all' | 'conversation' | 'tasks' | 'notes';
 
-const groupOrder: SearchResultKind[] = ['conversation', 'message', 'task', 'board'];
+const groupOrder: SearchResultKind[] = ['conversation', 'message', 'task', 'board', 'note'];
 const groupLabels: Record<SearchResultKind, string> = {
   conversation: '会话',
   message: '消息',
   task: '任务',
   board: '看板',
+  note: '笔记',
 };
 
 function ResultIcon({ kind }: { kind: SearchResultKind }) {
   if (kind === 'task') return <ListTodo size={15} aria-hidden="true" />;
   if (kind === 'board') return <LayoutDashboard size={15} aria-hidden="true" />;
+  if (kind === 'note') return <NotebookPen size={15} aria-hidden="true" />;
   return <MessageSquare size={15} aria-hidden="true" />;
 }
 
@@ -28,7 +30,8 @@ function resultDate(value: string): string {
 function matchesFilter(result: SearchResult, filter: SearchFilter): boolean {
   if (filter === 'all') return true;
   if (filter === 'conversation') return result.kind === 'conversation' || result.kind === 'message';
-  return result.kind === 'task' || result.kind === 'board';
+  if (filter === 'tasks') return result.kind === 'task' || result.kind === 'board';
+  return result.kind === 'note';
 }
 
 export function GlobalSearch({ onQuery, onOpen, onClose, onNewConversation, onOpenTasks }: {
@@ -119,11 +122,11 @@ export function GlobalSearch({ onQuery, onOpen, onClose, onNewConversation, onOp
       <h2 id="global-search-title" className="sr-only">搜索玉衡</h2>
       <div className="global-search-input-row">
         <Search size={18} aria-hidden="true" />
-        <input ref={inputRef} type="search" value={query} onChange={(event) => { setQuery(event.target.value); setSelectedIndex(0); }} placeholder="搜索会话、消息和任务" aria-label="搜索玉衡" autoComplete="off" />
+        <input ref={inputRef} type="search" value={query} onChange={(event) => { setQuery(event.target.value); setSelectedIndex(0); }} placeholder="搜索会话、消息、任务和笔记" aria-label="搜索玉衡" autoComplete="off" />
         {query && <button type="button" onClick={() => setQuery('')} aria-label="清除搜索"><X size={15} /></button>}
       </div>
       <div className="global-search-filters" role="tablist" aria-label="搜索范围" data-filter={filter}>
-        {([['all', '全部'], ['conversation', '对话'], ['tasks', '任务']] as const).map(([value, label]) => <button type="button" role="tab" aria-selected={filter === value} className={filter === value ? 'is-selected' : ''} key={value} onClick={() => { setFilter(value); setSelectedIndex(0); }}>{label}</button>)}
+        {([['all', '全部'], ['conversation', '对话'], ['tasks', '任务'], ['notes', '笔记']] as const).map(([value, label]) => <button type="button" role="tab" aria-selected={filter === value} className={filter === value ? 'is-selected' : ''} key={value} onClick={() => { setFilter(value); setSelectedIndex(0); }}>{label}</button>)}
       </div>
       <div className="global-search-results" role="listbox" aria-label="搜索结果" ref={resultsRef}>
         {!query.trim() && <div className="global-search-actions" aria-label="快捷操作">

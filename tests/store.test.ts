@@ -102,6 +102,18 @@ describe('AppStore run activities', () => {
   });
 });
 
+describe('AppStore schema marker', () => {
+  it('records the current schema version without changing business tables', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-schema-'));
+    const store = new AppStore(dataDir);
+    try {
+      const database = new DatabaseSync(path.join(dataDir, 'yuheng.sqlite'));
+      try { assert.equal(Number((database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version), 1); }
+      finally { database.close(); }
+    } finally { store.close(); fs.rmSync(dataDir, { recursive: true, force: true }); }
+  });
+});
+
 describe('AppStore full backup snapshot', () => {
   it('exports and merges a snapshot with fresh identities and terminal runs', () => {
     const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-source-'));
@@ -289,6 +301,28 @@ describe('AppStore conversations', () => {
       const custom = store.createConversation('自定义标题');
       store.addMessage(custom.id, 'user', '这条消息不应覆盖标题');
       assert.equal(store.getConversation(custom.id).title, '自定义标题');
+    } finally {
+      store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('creates an independent conversation branch through a selected message', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
+    const store = new AppStore(dataDir);
+    try {
+      const source = store.createConversation('原会话');
+      const first = store.addMessage(source.id, 'user', '先分析这份资料');
+      store.addMessage(source.id, 'assistant', '我先列出关键事实。');
+      const third = store.addMessage(source.id, 'user', '再给出两个方案');
+      const branch = store.branchConversation(source.id, third.id);
+      assert.notEqual(branch.id, source.id);
+      assert.equal(branch.title, '原会话 · 分支');
+      assert.equal(branch.projectId, source.projectId);
+      assert.deepEqual(store.listMessages(branch.id).map((message) => message.content), ['先分析这份资料', '我先列出关键事实。', '再给出两个方案']);
+      assert.equal(store.listMessages(source.id).length, 3);
+      assert.throws(() => store.branchConversation(source.id, 'missing'), /Message not found/);
+      assert.notEqual(first.id, store.listMessages(branch.id)[0].id);
     } finally {
       store.close();
       fs.rmSync(dataDir, { recursive: true, force: true });
@@ -651,6 +685,10 @@ describe('AppStore tasks', () => {
       assert.equal(store.getTask('legacy-task').boardId, defaultBoard.id);
       assert.equal(store.getTask('legacy-task').description, '保留说明');
       assert.equal(store.listTaskTypes(defaultBoard.id).find((type) => type.id === 'in_progress')?.name, '进行中');
+      const first = store.createTask({ title: '升级后任务一' }, defaultBoard.id);
+      const second = store.createTask({ title: '升级后任务二' }, defaultBoard.id);
+      store.reorderTask(second.id, first.id);
+      assert.deepEqual(store.listTasks(defaultBoard.id).filter((task) => task.status === first.status).map((task) => task.title), ['升级后任务二', '升级后任务一']);
     } finally {
       store.close();
       fs.rmSync(dataDir, { recursive: true, force: true });

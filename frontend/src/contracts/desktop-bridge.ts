@@ -30,9 +30,10 @@ export type TaskStatus = string;
 export type TaskType = { id: string; boardId: string; name: string; position: number };
 export type TaskPriority = 'low' | 'medium' | 'high';
 export type Task = { id: string; boardId: string; title: string; description: string; status: TaskStatus; priority: TaskPriority; dueAt: string | null; remindAt: string | null; reminderFiredAt: string | null; sourceConversationId: string | null; createdAt: string; updatedAt: string };
+export type Note = { id: string; parentId: string | null; title: string; content: string; position: number; archived: boolean; createdAt: string; updatedAt: string };
 export type CreateTaskInput = Pick<Task, 'title'> & Partial<Pick<Task, 'description' | 'status' | 'priority' | 'dueAt' | 'remindAt' | 'sourceConversationId'>>;
 export type UpdateTaskInput = Partial<Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'dueAt' | 'remindAt'>>;
-export type SearchResultKind = 'conversation' | 'message' | 'task' | 'board';
+export type SearchResultKind = 'conversation' | 'message' | 'task' | 'board' | 'note';
 export type SearchResult = { kind: SearchResultKind; id: string; parentId: string | null; title: string; snippet: string; context: string; updatedAt: string; archived: boolean };
 export type TaskEvent = { type: 'changed'; task: Task } | { type: 'types_changed'; boardId: string } | { type: 'boards_changed' } | { type: 'open'; boardId: string; taskId: string };
 export type TaskAsset = { id: string; name: string; mimeType: string; size: number; url: string };
@@ -54,7 +55,7 @@ export type DesktopBridge = {
   };
   backup: {
     export: () => Promise<string | null>;
-    import: () => Promise<{ conversations: number; messages: number; tasks: number; missingProviders: number; contextUnavailable: boolean } | null>;
+    import: () => Promise<{ conversations: number; messages: number; tasks: number; notes: number; missingProviders: number; contextUnavailable: boolean } | null>;
     getConfig: () => Promise<{ enabled: boolean; directory: string; retention: number; lastRunAt: string | null; lastError: string | null }>;
     saveConfig: (config: { enabled: boolean; directory: string; retention: number }) => Promise<{ enabled: boolean; directory: string; retention: number; lastRunAt: string | null; lastError: string | null }>;
   };
@@ -74,6 +75,7 @@ export type DesktopBridge = {
       delete: (projectId: string) => Promise<void>;
     };
     messages: (conversationId: string) => Promise<Message[]>;
+    branch: (conversationId: string, messageId: string) => Promise<Conversation>;
     create: (title?: string, projectId?: string, providerId?: string, profileId?: AgentProfileId) => Promise<Conversation>;
     setProvider: (conversationId: string, providerId: string) => Promise<Conversation>;
     setProfile: (conversationId: string, profileId: AgentProfileId) => Promise<Conversation>;
@@ -149,6 +151,14 @@ export type DesktopBridge = {
       pick: () => Promise<TaskAsset[]>;
       open: (url: string) => Promise<void>;
     };
+  };
+  notes: {
+    list: (includeArchived?: boolean) => Promise<Note[]>;
+    get: (id: string) => Promise<Note | null>;
+    create: (title?: string, parentId?: string | null) => Promise<Note>;
+    update: (id: string, patch: { title?: string; content?: string; archived?: boolean }) => Promise<Note>;
+    move: (id: string, parentId: string | null, targetId?: string) => Promise<Note>;
+    delete: (id: string) => Promise<void>;
   };
   runs: {
     list: (conversationId: string) => Promise<RunSummary[]>;
