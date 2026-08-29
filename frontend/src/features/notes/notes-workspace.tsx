@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { DesktopBridge, Note } from '../../contracts/desktop-bridge';
 import { MarkdownBlockEditor } from '../tasks/markdown-block-editor';
-import { buildNoteTree, type NoteTreeNode } from './note-tree';
+import { buildNoteTree, getNotePath, sortNotes, type NoteTreeNode } from './note-tree';
 import { resolveNoteDrop, type NoteDropPlacement } from './note-drop';
 import { applyNoteAiResult, type NoteAiAction } from './note-ai';
 
@@ -56,11 +56,22 @@ export function NotesWorkspace({ bridge, initialNoteId, refreshKey = 0, showNavi
   const [undoContent, setUndoContent] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshGeneration = useRef(0);
   const tree = useMemo(() => buildNoteTree(notes.filter((note) => !note.archived)), [notes]);
   const activeNote = notes.find((note) => note.id === activeId) ?? null;
+  const activePath = useMemo(() => activeNote ? getNotePath(notes, activeNote.id) : [], [notes, activeNote?.id]);
+  const childNotes = useMemo(() => activeNote ? sortNotes(notes.filter((note) => note.parentId === activeNote.id && !note.archived)) : [], [notes, activeNote?.id]);
 
-  const setActive = (id: string | null) => {
+  const setActive = (id: string | null, sourceNotes: Note[] = notes) => {
     setActiveId(id);
+    if (id) {
+      const ancestors = getNotePath(sourceNotes, id).slice(0, -1);
+      if (ancestors.length) setExpanded((current) => {
+        const next = { ...current };
+        ancestors.forEach((ancestor) => { next[ancestor.id] = true; });
+        return next;
+      });
+    }
     onActiveNoteChange?.(id);
     if (typeof localStorage !== 'undefined') {
       if (id) localStorage.setItem('yuheng-active-note', id);
@@ -70,16 +81,20 @@ export function NotesWorkspace({ bridge, initialNoteId, refreshKey = 0, showNavi
 
   const refresh = async (preferredId?: string | null) => {
     if (!bridge) return;
+    const generation = ++refreshGeneration.current;
     setLoading(true);
     try {
       const items = await bridge.notes.list(true);
+      if (generation !== refreshGeneration.current) return;
       setNotes(items);
       const nextId = preferredId && items.some((item) => item.id === preferredId) ? preferredId : activeId && items.some((item) => item.id === activeId) ? activeId : items.find((item) => !item.archived)?.id ?? null;
-      setActive(nextId);
+      setActive(nextId, items);
       setError(null);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '加载笔记失败。');
-    } finally { setLoading(false); }
+      if (generation === refreshGeneration.current) setError(reason instanceof Error ? reason.message : '加载笔记失败。');
+    } finally {
+      if (generation === refreshGeneration.current) setLoading(false);
+    }
   };
 
   useEffect(() => { void refresh(initialNoteId); }, [bridge, initialNoteId, refreshKey]);
@@ -104,9 +119,9 @@ export function NotesWorkspace({ bridge, initialNoteId, refreshKey = 0, showNavi
     if (!bridge) return;
     try {
       const created = await bridge.notes.create(undefined, parentId);
-      setNotes((current) => [...current, created]);
-      if (parentId) setExpanded((current) => ({ ...current, [parentId]: true }));
-      setActive(created.id);
+      const nextNotes = [...notes, created];
+      setNotes(nextNotes);
+      setActive(created.id, nextNotes);
       onNotesChanged?.();
       setDirty(false);
     } catch (reason) { setError(reason instanceof Error ? reason.message : '新建笔记失败。'); }
@@ -197,10 +212,15 @@ export function NotesWorkspace({ bridge, initialNoteId, refreshKey = 0, showNavi
     <section className="notes-editor-shell" aria-label="笔记编辑器">
       {error && <div className="notes-error" role="alert">{error}<button type="button" onClick={() => setError(null)} aria-label="关闭错误">×</button></div>}
       {!activeNote && !loading && <div className="notes-empty-state"><NotebookPen size={32} /><h1>从一页笔记开始</h1><p>记录想法、整理资料，再交给玉衡协助完善。</p><button type="button" className="notes-primary-action" onClick={() => void createNote()}><Plus size={16} />新建笔记</button></div>}
-      {activeNote && <div className="notes-editor" key={activeNote.id}>
+      {activePath.length > 1 && <nav className="notes-breadcrumb notes-shell-breadcrumb" aria-label="笔记路径">{activePath.map((item, index) => <span className="notes-breadcrumb-item" key={item.id}>{index > 0 && <ChevronRight size={13} aria-hidden="true" />}{index === activePath.length - 1 ? <span aria-current="page">{item.title}</span> : <button type="button" onClick={() => setActive(item.id)}>{item.title}</button>}</span>)}</nav>}
+      {activeNote && <div className={`notes-editor ${activePath.length > 1 ? 'has-breadcrumb' : ''}`} key={activeNote.id}>
         <div className="notes-editor-header"><input autoFocus={activeNote.title === UNTITLED_NOTE_TITLE} className="notes-title-input" value={activeNote.title} onFocus={(event) => { if (event.currentTarget.value === UNTITLED_NOTE_TITLE) event.currentTarget.select(); }} onChange={(event) => { const title = event.target.value; setNotes((current) => current.map((item) => item.id === activeNote.id ? { ...item, title } : item)); setDirty(true); }} aria-label="笔记标题" placeholder={UNTITLED_NOTE_TITLE} /><div className="notes-editor-meta"><span className={dirty ? 'is-saving' : ''}>{dirty ? '保存中' : '已保存'}</span>{(onAskAi || onRunAi) && <span className="notes-ai-menu-wrap"><button type="button" className="notes-ai-action" aria-expanded={aiMenuOpen} disabled={aiBusy} onClick={() => setAiMenuOpen((current) => !current)}><Sparkles size={15} />{aiBusy ? '处理中' : '交给玉衡'}</button>{aiMenuOpen && <div className="notes-ai-menu" role="menu" aria-label="笔记 AI 操作">{([['summarize', '总结'], ['rewrite', '改写'], ['expand', '扩展'], ['extract_tasks', '提取任务']] as const).map(([action, label]) => <button type="button" role="menuitem" key={action} onClick={() => void requestAi(action)}>{label}</button>)}<button type="button" role="menuitem" onClick={() => { const instruction = window.prompt('告诉玉衡如何处理这篇笔记'); if (instruction?.trim()) void requestAi('custom', instruction.trim()); }}>自定义指令</button></div>}</span>}{undoContent !== null && <button type="button" className="notes-ai-action" onClick={undoAiApply}>撤销应用</button>}{onCreateTask && <button type="button" className="notes-ai-action" onClick={() => onCreateTask(activeNote)}><ListTodo size={15} />转为任务</button>}<button type="button" className="icon-button" onClick={() => void createNote(activeNote.id)} aria-label="新建子页面" title="新建子页面"><FilePlus2 size={16} /></button><button type="button" className="icon-button" onClick={() => void bridge.notes.update(activeNote.id, { archived: !activeNote.archived }).then((updated) => { setNotes((current) => current.map((item) => item.id === updated.id ? updated : item)); onNotesChanged?.(); })} aria-label={activeNote.archived ? '恢复归档' : '归档笔记'} title={activeNote.archived ? '恢复归档' : '归档笔记'}>{activeNote.archived ? <ArchiveRestore size={16} /> : <Archive size={16} />}</button><button type="button" className="icon-button is-destructive" onClick={() => void deleteNote(activeNote)} aria-label="删除笔记" title="删除笔记"><Trash2 size={16} /></button></div></div>
         {aiPreview && <div className="notes-ai-preview" aria-label="AI 结果预览"><div className="notes-ai-preview-heading"><strong>结果预览</strong><span>应用前请确认内容</span></div><div className="notes-ai-preview-content"><ReactMarkdown remarkPlugins={[remarkGfm]}>{aiPreview.content}</ReactMarkdown></div><div className="notes-ai-preview-actions"><button type="button" className="notes-ai-action" onClick={applyAiPreview}>应用到笔记</button><button type="button" className="icon-button" onClick={() => setAiPreview(null)} aria-label="取消预览" title="取消预览"><Trash2 size={15} /></button></div></div>}
         <MarkdownBlockEditor value={activeNote.content} onChange={(content) => { setNotes((current) => current.map((item) => item.id === activeNote.id ? { ...item, content } : item)); setDirty(true); }} />
+        <section className="notes-child-pages" aria-labelledby="notes-child-pages-title">
+          <div className="notes-child-pages-heading"><div><h2 id="notes-child-pages-title">子页面</h2>{childNotes.length > 0 && <small>{childNotes.length} 个页面</small>}</div><button type="button" className="notes-child-pages-add" onClick={() => void createNote(activeNote.id)} aria-label="新建子页面" title="新建子页面"><Plus size={15} />新建</button></div>
+          {childNotes.length > 0 ? <div className="notes-child-pages-list">{childNotes.map((child) => <button type="button" className="notes-child-page-row" key={child.id} onClick={() => setActive(child.id)}><NotebookPen size={16} aria-hidden="true" /><span><strong>{child.title}</strong><small>子页面 · {new Date(child.updatedAt).toLocaleDateString('zh-CN')}</small></span><ChevronRight size={15} aria-hidden="true" /></button>)}</div> : <button type="button" className="notes-child-pages-empty" onClick={() => void createNote(activeNote.id)}><FilePlus2 size={15} />在此页面下新建子页面</button>}
+        </section>
       </div>}
     </section>
   </div>;

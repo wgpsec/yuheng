@@ -1,7 +1,7 @@
 import { Archive, ArchiveRestore, ChevronRight, FilePlus2, MoreHorizontal, NotebookPen, Plus, Trash2 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DesktopBridge, Note } from '../../contracts/desktop-bridge';
-import { buildNoteTree, type NoteTreeNode } from './note-tree';
+import { buildNoteTree, getNotePath, type NoteTreeNode } from './note-tree';
 import { resolveNoteDrop, type NoteDropPlacement } from './note-drop';
 
 export function NoteTreeItem({ node, activeId, expanded, onToggle, onSelect, onCreateChild, onRename, onArchive, onDelete, notes, onMove }: {
@@ -45,28 +45,54 @@ export function NotesNavigation({ bridge, activeNoteId, refreshKey = 0, onSelect
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     try { return typeof localStorage === 'undefined' ? {} : JSON.parse(localStorage.getItem('yuheng-expanded-notes') ?? '{}') as Record<string, boolean>; } catch { return {}; }
   });
+  const refreshGeneration = useRef(0);
   const tree = useMemo(() => buildNoteTree(notes.filter((note) => note.archived === showArchived)), [notes, showArchived]);
+  const revealNote = (id: string, sourceNotes: Note[]) => {
+    const ancestors = getNotePath(sourceNotes, id).slice(0, -1);
+    if (!ancestors.length) return;
+    setExpanded((current) => {
+      const next = { ...current };
+      ancestors.forEach((ancestor) => { next[ancestor.id] = true; });
+      return next;
+    });
+  };
+  const selectNote = (id: string | null, sourceNotes: Note[] = notes) => {
+    if (id) revealNote(id, sourceNotes);
+    onSelect(id);
+  };
   const refresh = async (preferredId?: string | null) => {
     if (!bridge) return;
+    const generation = ++refreshGeneration.current;
     setLoading(true);
     try {
       const items = await bridge.notes.list(true);
+      if (generation !== refreshGeneration.current) return;
       setNotes(items);
       const nextId = preferredId && items.some((item) => item.id === preferredId && item.archived === showArchived)
         ? preferredId
         : activeNoteId && items.some((item) => item.id === activeNoteId && item.archived === showArchived)
           ? activeNoteId
           : items.find((item) => item.archived === showArchived)?.id ?? null;
+      if (nextId) revealNote(nextId, items);
       if (nextId !== activeNoteId) onSelect(nextId);
       setError(null);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : '加载笔记失败。'); }
-    finally { setLoading(false); }
+    } catch (reason) {
+      if (generation === refreshGeneration.current) setError(reason instanceof Error ? reason.message : '加载笔记失败。');
+    } finally {
+      if (generation === refreshGeneration.current) setLoading(false);
+    }
   };
   useEffect(() => { void refresh(activeNoteId); }, [bridge, refreshKey, showArchived]);
   useEffect(() => { if (typeof localStorage !== 'undefined') localStorage.setItem('yuheng-expanded-notes', JSON.stringify(expanded)); }, [expanded]);
   const createNote = async (parentId: string | null = null) => {
     if (!bridge) return;
-    try { const created = await bridge.notes.create(undefined, parentId); setNotes((current) => [...current, created]); if (parentId) setExpanded((current) => ({ ...current, [parentId]: true })); onSelect(created.id); onChanged?.(); }
+    try {
+      const created = await bridge.notes.create(undefined, parentId);
+      const nextNotes = [...notes, created];
+      setNotes(nextNotes);
+      selectNote(created.id, nextNotes);
+      onChanged?.();
+    }
     catch (reason) { setError(reason instanceof Error ? reason.message : '新建笔记失败。'); }
   };
   const renameNote = async (node: Pick<Note, 'id' | 'title'>) => {
@@ -96,7 +122,7 @@ export function NotesNavigation({ bridge, activeNoteId, refreshKey = 0, onSelect
     <div className="notes-tree notes-nav-tree">
       {loading && <div className="notes-tree-empty">正在加载笔记...</div>}
       {!loading && tree.length === 0 && <div className="notes-tree-empty">{showArchived ? '没有归档页面' : '还没有笔记'}</div>}
-      {!loading && tree.map((node) => <NoteTreeItem key={node.id} node={node} activeId={activeNoteId} expanded={expanded} onToggle={(id) => setExpanded((current) => ({ ...current, [id]: !(current[id] !== false) }))} onSelect={(id) => onSelect(id)} onCreateChild={(id) => void createNote(id)} onRename={renameNote} onArchive={archiveNote} onDelete={deleteNote} notes={notes} onMove={(id, parentId, targetId) => void moveNote(id, parentId, targetId)} />)}
+      {!loading && tree.map((node) => <NoteTreeItem key={node.id} node={node} activeId={activeNoteId} expanded={expanded} onToggle={(id) => setExpanded((current) => ({ ...current, [id]: !(current[id] !== false) }))} onSelect={(id) => selectNote(id)} onCreateChild={(id) => void createNote(id)} onRename={renameNote} onArchive={archiveNote} onDelete={deleteNote} notes={notes} onMove={(id, parentId, targetId) => void moveNote(id, parentId, targetId)} />)}
     </div>
     {error && <p className="notes-nav-error" role="alert">{error}</p>}
     <button type="button" className={`notes-nav-archive ${showArchived ? 'is-active' : ''}`} onClick={() => setShowArchived((current) => !current)}>{showArchived ? <ArchiveRestore size={14} /> : <Archive size={14} />}{showArchived ? '返回笔记' : '归档页面'}</button>
