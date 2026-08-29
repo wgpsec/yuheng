@@ -12,4 +12,6 @@
 
 界面字号、层级和开发检查规则见 [`ui-typography.md`](ui-typography.md)。
 
+Electron 无边框窗口中的拖拽区域、上下文菜单命中和溢出裁剪约束见 [`electron-ui-interaction.md`](electron-ui-interaction.md)。
+
 笔记模式的产品、数据模型、AI 协作边界和分 slice 实施计划见 [`notes-mode-spec.md`](notes-mode-spec.md)。
