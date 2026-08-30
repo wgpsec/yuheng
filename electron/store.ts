@@ -57,13 +57,15 @@ export type Note = {
   parentId: string | null;
   title: string;
   content: string;
+  icon: string | null;
+  cover: string | null;
   position: number;
   archived: boolean;
   createdAt: string;
   updatedAt: string;
 };
 export type CreateNoteInput = { title?: string; parentId?: string | null };
-export type UpdateNoteInput = Partial<Pick<Note, 'title' | 'content' | 'archived'>>;
+export type UpdateNoteInput = Partial<Pick<Note, 'title' | 'content' | 'archived' | 'icon' | 'cover'>>;
 export type CreateTaskInput = Pick<Task, 'title'> & Partial<Pick<Task, 'description' | 'status' | 'priority' | 'dueAt' | 'remindAt' | 'sourceConversationId'>>;
 export type UpdateTaskInput = Partial<Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'dueAt' | 'remindAt'>>;
 export type SearchResultKind = 'conversation' | 'message' | 'task' | 'board' | 'note';
@@ -90,7 +92,7 @@ export type FullBackupSnapshot = {
   taskBoards: Array<{ id: string; name: string; position: number }>;
   taskTypes: Array<{ id: string; boardId: string; name: string; position: number }>;
   tasks: Array<{ id: string; boardId: string; title: string; description: string; position: number; status: string; priority: TaskPriority; dueAt: string | null; remindAt: string | null; reminderFiredAt: string | null; sourceConversationId: string | null; createdAt: string; updatedAt: string }>;
-  notes?: Array<{ id: string; parentId: string | null; title: string; content: string; position: number; archived: boolean; createdAt: string; updatedAt: string }>;
+  notes?: Array<{ id: string; parentId: string | null; title: string; content: string; icon?: string | null; cover?: string | null; position: number; archived: boolean; createdAt: string; updatedAt: string }>;
 };
 export type BackupConfig = { enabled: boolean; directory: string; retention: number; lastRunAt: string | null; lastError: string | null };
 export type DesktopPresenceConfig = { notificationsEnabled: boolean; menuBarEnabled: boolean };
@@ -99,6 +101,14 @@ type Row = Record<string, unknown>;
 
 const MAX_SEARCH_QUERY_LENGTH = 120;
 const MAX_SEARCH_RESULTS = 50;
+const NOTE_COVER_ID_PATTERN = /^[a-z][a-z0-9-]{0,40}$/;
+const NOTE_COVER_URL_PATTERN = /^yuheng-note-cover:\/\/local\/[0-9a-f-]{36}\.(?:png|jpg|webp)$/i;
+
+function normalizeNoteCover(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const cover = value.trim();
+  return NOTE_COVER_ID_PATTERN.test(cover) || NOTE_COVER_URL_PATTERN.test(cover) ? cover : null;
+}
 
 function searchSnippet(value: string, query: string): string {
   const normalized = value.replace(/\s+/g, ' ').trim();
@@ -227,6 +237,8 @@ export class AppStore {
         parent_id TEXT REFERENCES notes(id) ON DELETE CASCADE,
         title TEXT NOT NULL,
         content TEXT NOT NULL DEFAULT '',
+        icon TEXT,
+        cover TEXT,
         position INTEGER NOT NULL DEFAULT 0,
         archived INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
@@ -247,6 +259,9 @@ export class AppStore {
       ['context_window', 'ALTER TABLE runs ADD COLUMN context_window INTEGER'],
       ['context_percent', 'ALTER TABLE runs ADD COLUMN context_percent REAL'],
     ] as const) if (!runColumns.some((column) => column.name === name)) this.db.exec(sql);
+    const noteColumns = this.db.prepare('PRAGMA table_info(notes)').all() as Row[];
+    if (!noteColumns.some((column) => column.name === 'icon')) this.db.exec('ALTER TABLE notes ADD COLUMN icon TEXT');
+    if (!noteColumns.some((column) => column.name === 'cover')) this.db.exec('ALTER TABLE notes ADD COLUMN cover TEXT');
     this.seedConversationProject();
     const conversationColumns = this.db.prepare('PRAGMA table_info(conversations)').all() as Row[];
     if (!conversationColumns.some((column) => column.name === 'description')) this.db.exec("ALTER TABLE conversations ADD COLUMN description TEXT NOT NULL DEFAULT ''");
@@ -923,6 +938,8 @@ export class AppStore {
       parentId: row.parentId == null ? null : String(row.parentId),
       title: String(row.title),
       content: String(row.content ?? ''),
+      icon: row.icon == null ? null : String(row.icon),
+      cover: normalizeNoteCover(row.cover),
       position: Number(row.position ?? 0),
       archived: Number(row.archived) === 1,
       createdAt: String(row.createdAt),
@@ -932,13 +949,13 @@ export class AppStore {
 
   listNotes(includeArchived = false): Note[] {
     const query = includeArchived
-      ? `SELECT id, parent_id AS parentId, title, content, position, archived, created_at AS createdAt, updated_at AS updatedAt FROM notes ORDER BY CASE WHEN parent_id IS NULL THEN 0 ELSE 1 END, parent_id, position, id`
+      ? `SELECT id, parent_id AS parentId, title, content, icon, cover, position, archived, created_at AS createdAt, updated_at AS updatedAt FROM notes ORDER BY CASE WHEN parent_id IS NULL THEN 0 ELSE 1 END, parent_id, position, id`
       : `WITH RECURSIVE archived_tree(id) AS (
           SELECT id FROM notes WHERE archived = 1
           UNION ALL
           SELECT notes.id FROM notes JOIN archived_tree ON notes.parent_id = archived_tree.id
         )
-        SELECT id, parent_id AS parentId, title, content, position, archived, created_at AS createdAt, updated_at AS updatedAt
+        SELECT id, parent_id AS parentId, title, content, icon, cover, position, archived, created_at AS createdAt, updated_at AS updatedAt
         FROM notes WHERE archived = 0 AND id NOT IN (SELECT id FROM archived_tree)
         ORDER BY CASE WHEN parent_id IS NULL THEN 0 ELSE 1 END, parent_id, position, id`;
     const rows = this.db.prepare(query).all() as Row[];
@@ -946,7 +963,7 @@ export class AppStore {
   }
 
   getNote(id: string): Note | null {
-    const row = this.db.prepare(`SELECT id, parent_id AS parentId, title, content, position, archived,
+    const row = this.db.prepare(`SELECT id, parent_id AS parentId, title, content, icon, cover, position, archived,
       created_at AS createdAt, updated_at AS updatedAt FROM notes WHERE id = ?`).get(id) as Row | undefined;
     return row ? this.noteFromRow(row) : null;
   }
@@ -961,7 +978,7 @@ export class AppStore {
     const id = crypto.randomUUID();
     const position = Number((this.db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM notes WHERE parent_id IS ?').get(normalizedParentId) as Row).position);
     const now = new Date().toISOString();
-    this.db.prepare('INSERT INTO notes (id, parent_id, title, content, position, archived, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?)').run(id, normalizedParentId, title, '', position, now, now);
+    this.db.prepare('INSERT INTO notes (id, parent_id, title, content, icon, cover, position, archived, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, NULL, ?, 0, ?, ?)').run(id, normalizedParentId, title, '', position, now, now);
     return this.getNote(id)!;
   }
 
@@ -971,9 +988,11 @@ export class AppStore {
     const title = patch.title === undefined ? current.title : patch.title.trim();
     if (!title) throw new Error('Note title is required.');
     const content = patch.content === undefined ? current.content : patch.content;
+    const icon = patch.icon === undefined ? current.icon : (patch.icon == null ? null : patch.icon.trim() || null);
+    const cover = patch.cover === undefined ? current.cover : normalizeNoteCover(patch.cover);
     const archived = patch.archived === undefined ? current.archived : patch.archived === true;
     const updatedAt = new Date().toISOString();
-    this.db.prepare('UPDATE notes SET title = ?, content = ?, archived = ?, updated_at = ? WHERE id = ?').run(title, content, archived ? 1 : 0, updatedAt, id);
+    this.db.prepare('UPDATE notes SET title = ?, content = ?, icon = ?, cover = ?, archived = ?, updated_at = ? WHERE id = ?').run(title, content, icon, cover, archived ? 1 : 0, updatedAt, id);
     return this.getNote(id)!;
   }
 
@@ -1422,7 +1441,7 @@ export class AppStore {
       taskBoards: mapRows('SELECT id, name, position FROM task_boards').map((r) => ({ id: String(r.id), name: String(r.name), position: Number(r.position) })),
       taskTypes: mapRows('SELECT id, board_id AS boardId, name, position FROM task_types').map((r) => ({ id: String(r.id), boardId: String(r.boardId), name: String(r.name), position: Number(r.position) })),
       tasks: mapRows('SELECT id, board_id AS boardId, title, description, position, status, priority, due_at AS dueAt, remind_at AS remindAt, reminder_fired_at AS reminderFiredAt, source_conversation_id AS sourceConversationId, created_at AS createdAt, updated_at AS updatedAt FROM tasks').map((r) => ({ id: String(r.id), boardId: String(r.boardId), title: String(r.title), description: String(r.description ?? ''), position: Number(r.position ?? 0), status: String(r.status), priority: r.priority as TaskPriority, dueAt: r.dueAt == null ? null : String(r.dueAt), remindAt: r.remindAt == null ? null : String(r.remindAt), reminderFiredAt: r.reminderFiredAt == null ? null : String(r.reminderFiredAt), sourceConversationId: r.sourceConversationId == null ? null : String(r.sourceConversationId), createdAt: String(r.createdAt), updatedAt: String(r.updatedAt) })),
-      notes: mapRows('SELECT id, parent_id AS parentId, title, content, position, archived, created_at AS createdAt, updated_at AS updatedAt FROM notes ORDER BY CASE WHEN parent_id IS NULL THEN 0 ELSE 1 END, parent_id, position, id').map((r) => ({ id: String(r.id), parentId: r.parentId == null ? null : String(r.parentId), title: String(r.title), content: String(r.content ?? ''), position: Number(r.position ?? 0), archived: Number(r.archived) === 1, createdAt: String(r.createdAt), updatedAt: String(r.updatedAt) })),
+      notes: mapRows('SELECT id, parent_id AS parentId, title, content, icon, cover, position, archived, created_at AS createdAt, updated_at AS updatedAt FROM notes ORDER BY CASE WHEN parent_id IS NULL THEN 0 ELSE 1 END, parent_id, position, id').map((r) => ({ id: String(r.id), parentId: r.parentId == null ? null : String(r.parentId), title: String(r.title), content: String(r.content ?? ''), icon: r.icon == null ? null : String(r.icon), cover: normalizeNoteCover(r.cover), position: Number(r.position ?? 0), archived: Number(r.archived) === 1, createdAt: String(r.createdAt), updatedAt: String(r.updatedAt) })),
     };
   }
 
@@ -1458,7 +1477,7 @@ export class AppStore {
       for (const item of snapshot.taskTypes) { const boardId = boardMap.get(item.boardId); if (!boardId) continue; const id = crypto.randomUUID(); typeMap.set(item.id, id); this.db.prepare('INSERT INTO task_types (id, board_id, name, position) VALUES (?, ?, ?, ?)').run(id, boardId, item.name, item.position); }
       for (const item of snapshot.tasks) { const boardId = boardMap.get(item.boardId); const status = typeMap.get(item.status); if (!boardId || !status) continue; this.db.prepare('INSERT INTO tasks (id, board_id, title, description, position, status, priority, due_at, remind_at, reminder_fired_at, source_conversation_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(crypto.randomUUID(), boardId, item.title, item.description, item.position, status, item.priority, item.dueAt, item.remindAt, item.reminderFiredAt, item.sourceConversationId ? conversationMap.get(item.sourceConversationId) ?? null : null, item.createdAt || now, item.updatedAt || now); importedTasks += 1; }
       const pendingNotes = [...(snapshot.notes ?? [])];
-      const insertNote = this.db.prepare('INSERT INTO notes (id, parent_id, title, content, position, archived, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+      const insertNote = this.db.prepare('INSERT INTO notes (id, parent_id, title, content, icon, cover, position, archived, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
       while (pendingNotes.length) {
         let progressed = false;
         for (let index = pendingNotes.length - 1; index >= 0; index -= 1) {
@@ -1468,7 +1487,7 @@ export class AppStore {
           const parentId = mappedParentId ?? null;
           const id = crypto.randomUUID();
           noteMap.set(item.id, id);
-          insertNote.run(id, parentId, item.title, item.content, item.position, item.archived ? 1 : 0, item.createdAt || now, item.updatedAt || now);
+          insertNote.run(id, parentId, item.title, item.content, typeof item.icon === 'string' ? item.icon.trim().slice(0, 32) || null : null, normalizeNoteCover(item.cover), item.position, item.archived ? 1 : 0, item.createdAt || now, item.updatedAt || now);
           pendingNotes.splice(index, 1);
           importedNotes += 1;
           progressed = true;

@@ -127,6 +127,7 @@ contextBridge.exposeInMainWorld('desktopBridge', {
     update: (id: string, patch: unknown) => ipcRenderer.invoke('notes:update', id, patch),
     move: (id: string, parentId: string | null, targetId?: string) => ipcRenderer.invoke('notes:move', id, parentId, targetId),
     delete: (id: string) => ipcRenderer.invoke('notes:delete', id),
+    covers: { pick: () => ipcRenderer.invoke('notes:covers:pick') },
   },
   runs: {
     list: (conversationId: string) => ipcRenderer.invoke('runs:list', conversationId),

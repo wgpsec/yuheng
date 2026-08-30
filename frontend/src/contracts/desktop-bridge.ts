@@ -30,7 +30,8 @@ export type TaskStatus = string;
 export type TaskType = { id: string; boardId: string; name: string; position: number };
 export type TaskPriority = 'low' | 'medium' | 'high';
 export type Task = { id: string; boardId: string; title: string; description: string; status: TaskStatus; priority: TaskPriority; dueAt: string | null; remindAt: string | null; reminderFiredAt: string | null; sourceConversationId: string | null; createdAt: string; updatedAt: string };
-export type Note = { id: string; parentId: string | null; title: string; content: string; position: number; archived: boolean; createdAt: string; updatedAt: string };
+export type Note = { id: string; parentId: string | null; title: string; content: string; icon: string | null; cover: string | null; position: number; archived: boolean; createdAt: string; updatedAt: string };
+export type NoteCover = { id: string; mimeType: string; size: number; url: string };
 export type CreateTaskInput = Pick<Task, 'title'> & Partial<Pick<Task, 'description' | 'status' | 'priority' | 'dueAt' | 'remindAt' | 'sourceConversationId'>>;
 export type UpdateTaskInput = Partial<Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'dueAt' | 'remindAt'>>;
 export type SearchResultKind = 'conversation' | 'message' | 'task' | 'board' | 'note';
@@ -156,9 +157,10 @@ export type DesktopBridge = {
     list: (includeArchived?: boolean) => Promise<Note[]>;
     get: (id: string) => Promise<Note | null>;
     create: (title?: string, parentId?: string | null) => Promise<Note>;
-    update: (id: string, patch: { title?: string; content?: string; archived?: boolean }) => Promise<Note>;
+    update: (id: string, patch: { title?: string; content?: string; archived?: boolean; icon?: string | null; cover?: string | null }) => Promise<Note>;
     move: (id: string, parentId: string | null, targetId?: string) => Promise<Note>;
     delete: (id: string) => Promise<void>;
+    covers: { pick: () => Promise<NoteCover | null> };
   };
   runs: {
     list: (conversationId: string) => Promise<RunSummary[]>;

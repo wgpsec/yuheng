@@ -9,6 +9,7 @@ import { SecretStore } from './secrets';
 import { createPiRuntime, createPiSessionFactory, type ReasoningLevel } from './pi-runtime';
 import { loadYuhengSystemPrompt } from './system-prompt';
 import { MAX_TASK_ASSET_BYTES, TASK_ASSET_SCHEME, TaskAssetStore, type TaskAsset } from './task-assets';
+import { MAX_NOTE_COVER_BYTES, NOTE_COVER_SCHEME, NoteCoverStore } from './note-covers';
 import { BrowserUseSupervisor, redactBrowserToolInput, type BrowserToolName } from './browser-use';
 import { TaskReminderScheduler } from './task-reminders';
 import { BROWSER_ARTIFACT_SCHEME, BrowserArtifactStore, browserImagesFromToolResult, type BrowserArtifact } from './browser-artifacts';
@@ -26,6 +27,7 @@ import { readCodexPetAsset, scanCodexPets, type CodexPetManifest } from './pets'
 protocol.registerSchemesAsPrivileged([
   { scheme: TASK_ASSET_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
   { scheme: BROWSER_ARTIFACT_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+  { scheme: NOTE_COVER_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
 ]);
 
 const isDevelopment = Boolean(process.env.ELECTRON_RENDERER_URL);
@@ -33,6 +35,7 @@ const applicationVersionValue = applicationVersion(path.resolve(__dirname, '..')
 let store: AppStore;
 let secrets: SecretStore;
 let taskAssets: TaskAssetStore;
+let noteCovers: NoteCoverStore;
 let browserUse: BrowserUseSupervisor;
 let browserArtifacts: BrowserArtifactStore;
 let petWindow: BrowserWindow | null = null;
@@ -191,6 +194,12 @@ type RunEvent =
 function assertText(value: unknown, label: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} is required.`);
   return value.trim();
+}
+
+function assertNoteCover(value: unknown): string {
+  const cover = assertText(value, 'cover');
+  if (/^[a-z][a-z0-9-]{0,40}$/.test(cover) || /^yuheng-note-cover:\/\/local\/[0-9a-f-]{36}\.(?:png|jpg|webp)$/i.test(cover)) return cover;
+  throw new Error('Invalid note cover.');
 }
 
 function emit(sender: WebContents, event: RunEvent): void {
@@ -692,6 +701,7 @@ app.whenReady().then(() => {
   desktopPresenceConfig = store.getDesktopPresenceConfig();
   secrets = new SecretStore(app.getPath('userData'));
   taskAssets = new TaskAssetStore(path.join(app.getPath('userData'), 'task-assets'));
+  noteCovers = new NoteCoverStore(path.join(app.getPath('userData'), 'note-covers'));
   browserUse = new BrowserUseSupervisor({ dataDir: path.join(app.getPath('userData'), 'browser-use') });
   browserArtifacts = new BrowserArtifactStore(path.join(app.getPath('userData'), 'browser-use', 'screenshots'));
   const artifactCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
@@ -724,6 +734,10 @@ app.whenReady().then(() => {
     } catch {
       return new Response('Not found', { status: 404 });
     }
+  });
+  void protocol.handle(NOTE_COVER_SCHEME, (request) => {
+    try { return net.fetch(pathToFileURL(noteCovers.resolveUrl(request.url)).toString()); }
+    catch { return new Response('Not found', { status: 404 }); }
   });
   store.recoverRunningRuns();
   taskReminders.refresh();
@@ -768,11 +782,33 @@ app.whenReady().then(() => {
       ...(input.title === undefined ? {} : { title: assertText(input.title, 'title') }),
       ...(input.content === undefined ? {} : { content: typeof input.content === 'string' ? input.content : (() => { throw new Error('content must be text.'); })() }),
       ...(input.archived === undefined ? {} : { archived: input.archived === true }),
+      ...(input.icon === undefined ? {} : { icon: input.icon == null ? null : assertText(input.icon, 'icon') }),
+      ...(input.cover === undefined ? {} : { cover: input.cover == null ? null : assertNoteCover(input.cover) }),
     };
-    return store.updateNote(noteId, patch);
+    const previous = store.getNote(noteId);
+    const updated = store.updateNote(noteId, patch);
+    if (previous?.cover && previous.cover !== updated.cover && previous.cover.startsWith(`${NOTE_COVER_SCHEME}://`)) noteCovers.remove(previous.cover);
+    return updated;
   });
   ipcMain.handle('notes:move', (_event, id: unknown, parentId: unknown, targetId: unknown) => store.moveNote(assertText(id, 'noteId'), parentId == null || parentId === '' ? null : assertText(parentId, 'parentId'), targetId == null || targetId === '' ? undefined : assertText(targetId, 'targetId')));
-  ipcMain.handle('notes:delete', (_event, id: unknown) => store.deleteNote(assertText(id, 'noteId')));
+  ipcMain.handle('notes:delete', (_event, id: unknown) => {
+    const noteId = assertText(id, 'noteId');
+    const notes = store.listNotes(true);
+    const ids = new Set<string>([noteId]);
+    let changed = true;
+    while (changed) { changed = false; for (const note of notes) if (note.parentId && ids.has(note.parentId) && !ids.has(note.id)) { ids.add(note.id); changed = true; } }
+    for (const note of notes) if (ids.has(note.id) && note.cover?.startsWith(`${NOTE_COVER_SCHEME}://`)) noteCovers.remove(note.cover);
+    store.deleteNote(noteId);
+  });
+  ipcMain.handle('notes:covers:pick', async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const result = owner ? await dialog.showOpenDialog(owner, { properties: ['openFile'], filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] }) : await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] });
+    if (result.canceled || !result.filePaths[0]) return null;
+    const filePath = result.filePaths[0];
+    const stats = await fs.stat(filePath);
+    if (stats.size > MAX_NOTE_COVER_BYTES) throw new Error('封面图片不能超过 15 MB。');
+    return noteCovers.import(path.basename(filePath), attachmentMimeType(filePath), await fs.readFile(filePath));
+  });
   ipcMain.handle('conversations:create', (_event, title: unknown, projectId: unknown, providerId: unknown, profileId: unknown) => {
     const selectedProfile = profileId == null ? undefined : (isAgentProfileId(profileId) ? profileId : (() => { throw new Error('Profile not found.'); })());
     return store.createConversation(typeof title === 'string' && title.trim() ? title.trim() : undefined, typeof projectId === 'string' && projectId.trim() ? projectId.trim() : undefined, typeof providerId === 'string' && providerId.trim() ? providerId.trim() : undefined, selectedProfile);

@@ -1,4 +1,5 @@
 import { Markdown } from '@tiptap/markdown';
+import type { AnyExtension } from '@tiptap/core';
 import ImageExtension from '@tiptap/extension-image';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
@@ -29,12 +30,13 @@ const slashItems = [
   { id: 'codeBlock', label: '代码块', hint: '等宽代码内容', icon: Braces },
 ] as const;
 
-export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAssets, onOpenAsset }: {
+export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAssets, onOpenAsset, extensions = [] }: {
   value: string;
   onChange: (markdown: string) => void;
   onImportAsset?: (file: File) => Promise<TaskAsset>;
   onPickAssets?: () => Promise<TaskAsset[]>;
   onOpenAsset?: (url: string) => Promise<void>;
+  extensions?: AnyExtension[];
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [slash, setSlash] = useState<SlashState | null>(null);
@@ -67,6 +69,7 @@ export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAsse
   }, []);
   const editor = useEditor({
     extensions: [
+      ...extensions,
       StarterKit.configure({ link: { openOnClick: false, protocols: ['yuheng-task-asset'] } }),
       TaskList,
       TaskItem.configure({ nested: true }),
@@ -125,6 +128,13 @@ export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAsse
       setSlash({ query: match[1].toLowerCase(), from: $from.start(), to: $from.pos, left: Math.max(8, cursor.left - bounds.left), top: cursor.bottom - bounds.top + 8 });
     },
   });
+
+  useEffect(() => {
+    if (!editor) return;
+    const current = editor.getMarkdown();
+    if (current === value) return;
+    editor.commands.setContent(value, { contentType: 'markdown' });
+  }, [editor, value]);
 
   const insertAssets = (assets: TaskAsset[]) => {
     if (!editor || assets.length === 0) return;

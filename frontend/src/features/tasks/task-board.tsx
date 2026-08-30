@@ -4,6 +4,7 @@ import type { CreateTaskInput, Task, TaskAsset, TaskPriority, TaskStatus, TaskTy
 import { MarkdownBlockEditor } from './markdown-block-editor';
 import { filterBoardTasks, type TaskFilter } from './task-filter';
 import { calendarDays, tasksByDueDate, type TaskView } from './task-views';
+import { ContextAiDrawer } from '../ai/context-ai-drawer';
 
 const typeHints: Record<string, string> = {
   todo: '尚未开始',
@@ -116,7 +117,7 @@ function taskDescriptionPreview(value: string): string {
     .trim();
 }
 
-export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loading, headerControl, requestedOpenTaskId, onOpenTaskHandled, sourceConversations = [], onOpenConversation, onCreate, onUpdate, onDelete, onReorder, onMoveToBoard, onCopyToBoard, onCreateType, onRenameType, onDeleteType, onImportAsset, onPickAssets, onOpenAsset }: {
+export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loading, headerControl, requestedOpenTaskId, onOpenTaskHandled, sourceConversations = [], onOpenConversation, onCreate, onUpdate, onDelete, onReorder, onMoveToBoard, onCopyToBoard, onCreateType, onRenameType, onDeleteType, onImportAsset, onPickAssets, onOpenAsset, onRunAi }: {
   boardId?: string;
   boardName: string;
   boards: { id: string; name: string }[];
@@ -140,6 +141,7 @@ export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loadin
   onImportAsset: (file: File) => Promise<TaskAsset>;
   onPickAssets: () => Promise<TaskAsset[]>;
   onOpenAsset: (url: string) => Promise<void>;
+  onRunAi?: (prompt: string, signal: AbortSignal) => Promise<string>;
 }) {
   const [editingId, setEditingId] = useState<string | 'new' | null>(null);
   const [editorClosing, setEditorClosing] = useState(false);
@@ -587,6 +589,7 @@ export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loadin
       </div>
       </>}
     </div>
+    {onRunAi && <ContextAiDrawer sourceLabel={`“${boardName}”看板`} onSend={onRunAi} />}
     {editingId && <div className="task-editor-layer">
       <button type="button" tabIndex={-1} aria-hidden="true" className={`task-editor-backdrop ${editorClosing ? 'is-closing' : ''}`} />
       <aside className={`task-editor ${resizingEditor ? 'is-resizing' : ''} ${editorClosing ? 'is-closing' : ''}`} style={{ width: editorWidth }} aria-label={editingId === 'new' ? '新建任务' : '编辑任务'} onAnimationEnd={(event) => { if (editorClosing && event.currentTarget === event.target && event.animationName === 'task-editor-slide-out') finishEditorClose(editorSessionKeyRef.current); }}>

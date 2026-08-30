@@ -6,6 +6,15 @@ export type ReleaseNote = {
 
 export const releaseNotes: readonly ReleaseNote[] = [
   {
+    version: '0.2.1',
+    title: '页面与看板 AI 助手',
+    changes: [
+      '笔记页面和任务看板新增右下角 AI 快速入口，可在当前上下文中直接发起对话。',
+      'AI 抽屉支持上下文边界控制、多轮短对话、即时处理中反馈和停止请求。',
+      '笔记子页面可作为编辑器块移动和打开，并修复页面块渲染稳定性问题。',
+    ],
+  },
+  {
     version: '0.2.0',
     title: '玉衡工作台',
     changes: [

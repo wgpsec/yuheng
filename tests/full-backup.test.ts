@@ -7,6 +7,7 @@ import { AppStore } from '../electron/store';
 import { createFullBackup, restoreFullBackup } from '../electron/full-backup';
 import { TaskAssetStore } from '../electron/task-assets';
 import { BrowserArtifactStore } from '../electron/browser-artifacts';
+import { NoteCoverStore } from '../electron/note-covers';
 
 test('full backup round-trips database data and explicitly supplied provider keys', async () => {
   const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-full-source-'));
@@ -79,4 +80,22 @@ test('full backup remaps restored task attachment and run artifact URLs to reada
     fs.rmSync(sourceDir, { recursive: true, force: true });
     fs.rmSync(targetDir, { recursive: true, force: true });
   }
+});
+
+test('full backup remaps custom note cover files', async () => {
+  const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-cover-backup-source-'));
+  const targetDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-cover-backup-target-'));
+  const source = new AppStore(sourceDir); const target = new AppStore(targetDir);
+  try {
+    const cover = new NoteCoverStore(path.join(sourceDir, 'note-covers')).import('cover.jpg', 'image/jpeg', Buffer.from('cover-body'));
+    const note = source.createNote('封面页面');
+    source.updateNote(note.id, { cover: cover.url });
+    const archive = await createFullBackup({ dataDir: sourceDir, store: source, appVersion: '0.2.1', platform: 'darwin-arm64' });
+    await restoreFullBackup({ dataDir: targetDir, store: target, archive });
+    const restored = target.listNotes().find((item) => item.title === '封面页面');
+    assert.ok(restored?.cover);
+    assert.notEqual(restored.cover, cover.url);
+    const targetCovers = new NoteCoverStore(path.join(targetDir, 'note-covers'));
+    assert.equal(fs.readFileSync(targetCovers.resolveUrl(restored.cover!), 'utf8'), 'cover-body');
+  } finally { source.close(); target.close(); fs.rmSync(sourceDir, { recursive: true, force: true }); fs.rmSync(targetDir, { recursive: true, force: true }); }
 });

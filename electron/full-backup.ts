@@ -4,6 +4,7 @@ import path from 'node:path';
 import { buildBackupArchive, readBackupArchive } from './backup-archive';
 import { TASK_ASSET_SCHEME } from './task-assets';
 import { BROWSER_ARTIFACT_SCHEME } from './browser-artifacts';
+import { NOTE_COVER_SCHEME } from './note-covers';
 import type { AppStore, FullBackupSnapshot } from './store';
 
 const DATA_FILES: Array<[keyof FullBackupSnapshot, string]> = [
@@ -32,6 +33,7 @@ export async function createFullBackup(options: { dataDir: string; store: AppSto
   for (const [key, filename] of DATA_FILES) files[filename] = Buffer.from(JSON.stringify(snapshot[key]));
   if (options.providerKeys && Object.keys(options.providerKeys).length > 0) files['data/provider-keys.json'] = Buffer.from(JSON.stringify(options.providerKeys));
   await collectFiles(path.join(options.dataDir, 'task-assets'), 'files/task-assets', files);
+  await collectFiles(path.join(options.dataDir, 'note-covers'), 'files/note-covers', files);
   await collectFiles(path.join(options.dataDir, 'browser-use', 'screenshots'), 'files/run-artifacts', files);
   await collectFiles(path.join(options.dataDir, 'pi-agent', 'sessions'), 'sessions', files);
   return buildBackupArchive(files, {
@@ -68,6 +70,7 @@ export async function restoreFullBackup(options: { dataDir: string; store: AppSt
     let destinationRoot: string | null = null;
     let relative = '';
     if (name.startsWith('files/task-assets/')) { destinationRoot = path.join(options.dataDir, 'task-assets'); relative = name.slice('files/task-assets/'.length); }
+    else if (name.startsWith('files/note-covers/')) { destinationRoot = path.join(options.dataDir, 'note-covers'); relative = name.slice('files/note-covers/'.length); }
     else if (name.startsWith('files/run-artifacts/')) { destinationRoot = path.join(options.dataDir, 'browser-use', 'screenshots'); relative = name.slice('files/run-artifacts/'.length); }
     if (!destinationRoot) continue;
     await fsp.mkdir(destinationRoot, { recursive: true });
@@ -75,7 +78,7 @@ export async function restoreFullBackup(options: { dataDir: string; store: AppSt
     const target = path.join(destinationRoot, targetName);
     await fsp.writeFile(target, data, { flag: 'wx', mode: 0o600 });
     copied.push(target);
-    const scheme = name.startsWith('files/task-assets/') ? TASK_ASSET_SCHEME : BROWSER_ARTIFACT_SCHEME;
+    const scheme = name.startsWith('files/task-assets/') ? TASK_ASSET_SCHEME : name.startsWith('files/note-covers/') ? NOTE_COVER_SCHEME : BROWSER_ARTIFACT_SCHEME;
     managedUrlMap.set(`${scheme}://local/${path.basename(relative)}`, `${scheme}://local/${targetName}`);
   }
   } catch (error) {
@@ -85,6 +88,10 @@ export async function restoreFullBackup(options: { dataDir: string; store: AppSt
   snapshot.tasks = snapshot.tasks.map((task) => ({
     ...task,
     description: [...managedUrlMap].reduce((description, [source, target]) => description.replaceAll(source, target), task.description),
+  }));
+  snapshot.notes = (snapshot.notes ?? []).map((note) => ({
+    ...note,
+    cover: note.cover ? managedUrlMap.get(note.cover) ?? note.cover : note.cover,
   }));
   snapshot.runArtifacts = snapshot.runArtifacts.map((artifact) => ({
     ...artifact,

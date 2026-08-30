@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { AppStore } from '../electron/store';
+import { NoteCoverStore } from '../electron/note-covers';
 
 test('creates and persists a note tree with editable markdown content', () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-notes-'));
@@ -29,6 +30,40 @@ test('creates and persists a note tree with editable markdown content', () => {
     store.close();
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
+});
+
+test('persists note icon and cover metadata and includes it in backups', () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-notes-decoration-'));
+  let store = new AppStore(dataDir);
+  try {
+    const note = store.createNote('带装饰的页面');
+    const updated = store.updateNote(note.id, { icon: '📚', cover: 'landscape-03' });
+    assert.equal(updated.icon, '📚');
+    assert.equal(updated.cover, 'landscape-03');
+    store.close();
+    store = new AppStore(dataDir);
+    assert.equal(store.getNote(note.id)?.icon, '📚');
+    assert.equal(store.getNote(note.id)?.cover, 'landscape-03');
+    assert.equal(store.exportFullBackupSnapshot().notes?.[0]?.cover, 'landscape-03');
+    assert.equal(store.updateNote(note.id, { cover: 'https://example.com/remote.jpg' }).cover, null);
+  } finally {
+    store.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('stores custom note covers inside the managed directory and rejects unsafe input', () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-note-covers-'));
+  const covers = new NoteCoverStore(dataDir);
+  try {
+    const cover = covers.import('banner.png', 'image/png', Buffer.from('png-data'));
+    assert.match(cover.url, /^yuheng-note-cover:\/\/local\//);
+    assert.equal(fs.readFileSync(covers.resolveUrl(cover.url), 'utf8'), 'png-data');
+    assert.throws(() => covers.import('banner.svg', 'image/svg+xml', Buffer.from('svg')), /PNG|JPEG|WebP/);
+    assert.throws(() => covers.resolveUrl('yuheng-note-cover://local/../../secrets'), /Invalid/);
+    covers.remove(cover.url);
+    assert.equal(fs.existsSync(path.join(dataDir, path.basename(new URL(cover.url).pathname))), false);
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
 test('creates an untitled child when the parent is supplied separately', () => {
