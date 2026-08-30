@@ -53,6 +53,7 @@ export type DesktopBridge = {
   app: {
     getInfo: () => Promise<AppInfo>;
     openExternal: (url: string) => Promise<void>;
+    onFullscreen: (listener: (fullscreen: boolean) => void) => () => void;
   };
   backup: {
     export: () => Promise<string | null>;

@@ -4,6 +4,11 @@ contextBridge.exposeInMainWorld('desktopBridge', {
   app: {
     getInfo: () => ipcRenderer.invoke('app:get-info'),
     openExternal: (url: string) => ipcRenderer.invoke('app:open-external', url),
+    onFullscreen: (listener: (fullscreen: boolean) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, fullscreen: unknown) => listener(fullscreen === true);
+      ipcRenderer.on('window:fullscreen', handler);
+      return () => ipcRenderer.removeListener('window:fullscreen', handler);
+    },
   },
   backup: {
     export: () => ipcRenderer.invoke('backup:export'),

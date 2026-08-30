@@ -604,6 +604,8 @@ function createWindow(): BrowserWindow {
   };
   window.on('resize', scheduleBoundsSave);
   window.on('move', scheduleBoundsSave);
+  window.on('enter-full-screen', () => window.webContents.send('window:fullscreen', true));
+  window.on('leave-full-screen', () => window.webContents.send('window:fullscreen', false));
   window.on('close', (event) => {
     if (!allowWindowClose && process.platform === 'darwin' && desktopPresenceConfig.menuBarEnabled) {
       event.preventDefault();

@@ -65,7 +65,7 @@ function sortConversations(items: SidebarConversation[]): SidebarConversation[] 
 
 function SidebarExpandControl({ onExpand }: { onExpand: () => void }) {
   return <div className="sidebar-expand-control">
-    <button type="button" className="collapsed-sidebar-toggle" onClick={onExpand} aria-label="展开侧栏" title="展开侧栏"><PanelLeftOpen size={17} aria-hidden="true" /></button>
+    <button type="button" className="collapsed-sidebar-toggle" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onExpand(); }} aria-label="展开侧栏" title="展开侧栏"><PanelLeftOpen size={17} aria-hidden="true" /></button>
   </div>;
 }
 
@@ -348,6 +348,7 @@ function BackupSettings() {
 
 export function ProductionRenderer() {
   const activeBridge = getBridge();
+  const [windowFullscreen, setWindowFullscreen] = useState(false);
   const [conversationItems, setConversationItems] = useState<SidebarConversation[]>(fallbackConversations);
   const [conversationProjects, setConversationProjects] = useState<ConversationProject[]>(fallbackProjects);
   const [activeConversation, setActiveConversation] = useState('inbox');
@@ -435,6 +436,10 @@ export function ProductionRenderer() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [requestedMessageId, setRequestedMessageId] = useState<string | null>(null);
   const [composerPrefill, setComposerPrefill] = useState<{ id: number; value: string } | null>(null);
+  useEffect(() => {
+    if (!activeBridge) return;
+    return activeBridge.app.onFullscreen(setWindowFullscreen);
+  }, [activeBridge]);
   useEffect(() => {
     if (typeof localStorage === 'undefined') return;
     localStorage.setItem('yuheng-workspace-tabs', JSON.stringify(workspaceTabs));
@@ -1141,6 +1146,8 @@ export function ProductionRenderer() {
   const tabMenuTarget = tabContextMenu ? workspaceTabs.find((tab) => tab.id === tabContextMenu.tabId) : null;
   const tabMenuIndex = tabMenuTarget ? workspaceTabs.findIndex((tab) => tab.id === tabMenuTarget.id) : -1;
   const tabMenu = tabContextMenu && tabMenuTarget && typeof document !== 'undefined' ? createPortal(<div className="workspace-tab-menu" role="menu" style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onClick={(event) => event.stopPropagation()}><button type="button" role="menuitem" onClick={() => closeWorkspaceTab(tabMenuTarget.id)}>关闭标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.filter((item) => item.id !== tabMenuTarget.id).map((item) => item.id))}>关闭其他标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.slice(tabMenuIndex + 1).map((item) => item.id))}>关闭右侧标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.slice(0, tabMenuIndex).map((item) => item.id))}>关闭左侧标签页</button></div>, document.body) : null;
+  const collapsedSidebarControl = !settingsMounted && sidebarCollapsed && typeof document !== 'undefined' ? createPortal(<SidebarExpandControl onExpand={() => setSidebarCollapsed(false)} />, document.body) : null;
+  useEffect(() => { document.documentElement.dataset.windowFullscreen = windowFullscreen ? 'true' : 'false'; return () => { delete document.documentElement.dataset.windowFullscreen; }; }, [windowFullscreen]);
   return <main className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''} ${activeView === 'tasks' || activeView === 'notes' ? 'tasks-is-active' : ''} ${activeView === 'notes' ? 'notes-is-active' : ''} ${settingsMounted ? 'settings-is-active' : ''} ${settingsClosing ? 'settings-is-closing' : ''} ${profileMenuClosing || providerMenuClosing ? 'header-menu-closing' : ''}`}>
     <Sidebar conversations={conversationItems} projects={conversationProjects} boards={taskBoards} providers={providers} newProviderId={newProviderId} activeId={activeConversation} activeProjectId={activeConversationProject} activeBoardId={activeTaskBoardId} activeNoteId={activeNoteId} notesBridge={activeBridge} notesRevision={notesRevision} onNotesChanged={() => setNotesRevision((value) => value + 1)} mode={sidebarMode} settingsOpen={providerOpen} collapsed={sidebarCollapsed} appVersion={appInfo?.version} onSearch={() => setSearchOpen(true)} onSelect={(id) => { closeSettings(); selectConversation(id); }} onSelectProject={setActiveConversationProject} onSelectBoard={(id) => { closeSettings(); setRequestedOpenTaskId(null); openWorkspaceTab('tasks', id); }} onSelectNote={(id) => { closeSettings(); if (id) openWorkspaceTab('notes', id); }} onModeChange={(mode) => { setSidebarModeState(mode); closeSettings(); }} onNew={(projectId, providerId) => void createConversation(projectId, providerId)} onNewProviderChange={setNewProviderId} onRenameConversation={renameConversation} onMoveConversation={moveConversation} onArchiveConversation={archiveConversation} onPinConversation={pinConversation} onDeleteConversation={deleteConversation} onCreateProject={createConversationProject} onRenameProject={renameConversationProject} onDeleteProject={deleteConversationProject} onCreateBoard={createTaskBoard} onRenameBoard={renameTaskBoard} onDeleteBoard={deleteTaskBoard} onReorderBoard={reorderTaskBoard} onMoveTaskToBoard={async (id, boardId) => { await moveTaskToBoard(id, boardId); }} onSettings={openSettings} onToggle={() => setSidebarCollapsed((current) => !current)} />
     <section className="workspace" aria-label="会话工作区">
@@ -1159,5 +1166,6 @@ export function ProductionRenderer() {
     {searchOpen && <GlobalSearch onQuery={(query) => activeBridge?.search.query(query) ?? Promise.resolve([])} onOpen={openSearchResult} onClose={() => setSearchOpen(false)} onNewConversation={() => { closeSettings(); void createConversation(); }} onOpenTasks={() => { closeSettings(); setActiveView('tasks'); }} />}
     {pendingApproval && <div className={`approval-backdrop ${approvalClosing ? 'is-closing' : ''}`} role="presentation"><section className="approval-dialog" role="alertdialog" aria-modal="true" aria-labelledby="approval-title" aria-describedby="approval-description"><div className="approval-dialog-header"><span>Agent Runtime</span><h2 id="approval-title">允许这次工具操作？</h2><p id="approval-description">玉衡准备执行 <code>{pendingApproval.toolName}</code></p></div>{pendingApproval.input && <pre>{pendingApproval.input}</pre>}<div className="approval-actions"><button type="button" className="secondary-action" onClick={() => void resolveApproval(false)} disabled={approvalClosing}>拒绝</button><button type="button" className="send-button" autoFocus onClick={() => void resolveApproval(true)} disabled={approvalClosing}>允许一次</button></div></section></div>}
     {tabMenu}
+    {collapsedSidebarControl}
   </main>;
 }
