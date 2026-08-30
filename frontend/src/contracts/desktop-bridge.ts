@@ -2,6 +2,7 @@ export type ProviderProtocol = 'openai' | 'anthropic';
 export type AppInfo = { name: string; version: string; platform: string; arch: string };
 export type ReasoningLevel = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type ReasoningSelection = 'default' | ReasoningLevel;
+export type ToolPermissionMode = 'cautious' | 'smart' | 'full_session';
 export type ProviderConfig = { id: string; protocol: ProviderProtocol; baseUrl: string; model: string; displayName: string; contextWindow: number; hasApiKey: boolean };
 export type ProviderTestResult = { ok: boolean; status: number | null; latencyMs: number; error?: string };
 export type AgentProfileId = 'assistant' | 'analyst' | 'auditor';
@@ -120,6 +121,10 @@ export type DesktopBridge = {
   reasoning: {
     get: (conversationId: string) => Promise<ReasoningSelection>;
     save: (conversationId: string, level: ReasoningSelection) => Promise<ReasoningSelection>;
+  };
+  permissions: {
+    get: (conversationId: string) => Promise<ToolPermissionMode>;
+    save: (conversationId: string, mode: ToolPermissionMode) => Promise<ToolPermissionMode>;
   };
   attachments: {
     pick: () => Promise<Attachment[]>;

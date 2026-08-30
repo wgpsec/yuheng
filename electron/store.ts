@@ -3,6 +3,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_AGENT_PROFILE_ID, isAgentProfileId, type AgentProfileId } from './agent-profiles';
 import { toConversationBackup, type ConversationBackup } from './conversation-backup';
+import { DEFAULT_TOOL_PERMISSION_MODE, isPersistentToolPermissionMode, type PersistentToolPermissionMode } from './permission-mode';
 
 export type ProviderConfig = {
   id: string;
@@ -811,8 +812,16 @@ export class AppStore {
   }
 
   deleteConversation(id: string): void {
-    const result = this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
-    if (Number(result.changes) === 0) throw new Error('Conversation not found.');
+    this.db.exec('BEGIN');
+    try {
+      const result = this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
+      if (Number(result.changes) === 0) throw new Error('Conversation not found.');
+      this.db.prepare('DELETE FROM app_settings WHERE key = ?').run(`tool_permission:${id}`);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   addMessage(conversationId: string, role: Message['role'], content: string, id = crypto.randomUUID()): Message {
@@ -1392,6 +1401,26 @@ export class AppStore {
       .run(normalized, conversationId);
     if (Number(result.changes) === 0) throw new Error('Conversation not found.');
     return normalized;
+  }
+
+  getToolPermissionMode(conversationId: string): PersistentToolPermissionMode {
+    this.getConversation(conversationId);
+    const row = this.db.prepare('SELECT value FROM app_settings WHERE key = ?').get(`tool_permission:${conversationId}`) as Row | undefined;
+    if (!row) return DEFAULT_TOOL_PERMISSION_MODE;
+    try {
+      const value: unknown = JSON.parse(String(row.value));
+      return isPersistentToolPermissionMode(value) ? value : DEFAULT_TOOL_PERMISSION_MODE;
+    } catch {
+      return DEFAULT_TOOL_PERMISSION_MODE;
+    }
+  }
+
+  saveToolPermissionMode(conversationId: string, mode: PersistentToolPermissionMode): PersistentToolPermissionMode {
+    this.getConversation(conversationId);
+    if (!isPersistentToolPermissionMode(mode)) throw new Error('Only persistent permission modes can be stored.');
+    this.db.prepare('INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at')
+      .run(`tool_permission:${conversationId}`, JSON.stringify(mode), new Date().toISOString());
+    return mode;
   }
 
   getBackupConfig(defaultDirectory: string): BackupConfig {

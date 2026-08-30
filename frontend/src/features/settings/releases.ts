@@ -6,6 +6,16 @@ export type ReleaseNote = {
 
 export const releaseNotes: readonly ReleaseNote[] = [
   {
+    version: '0.3.1',
+    title: '安全审批与会话权限',
+    changes: [
+      '会话输入框新增谨慎、智能审批和完全访问三种工具权限模式。',
+      '权限策略由主进程统一执行，并在每次运行开始时固定权限快照。',
+      '完全访问仅在当前应用会话有效，非法参数、隔离边界和安全审计仍不可绕过。',
+      'Electron Renderer、IPC、路径访问和敏感工具输入增加纵深安全保护。',
+    ],
+  },
+  {
     version: '0.2.1',
     title: '页面与看板 AI 助手',
     changes: [

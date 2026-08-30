@@ -4,6 +4,7 @@ import type { ProviderConfig } from './store';
 import { BROWSER_TOOL_NAMES, type BrowserToolName, type BrowserUseSupervisor } from './browser-use';
 import { executeTaskTool, TASK_TOOL_NAMES, type TaskToolName, type TaskToolService } from './task-agent-tools';
 import { COMPUTER_USE_TOOL_NAMES, computerUseExtensionPath, createComputerUseApprovalExtension, type ComputerUseApproval } from './computer-use';
+import { createSecurityToolExtension, type ToolAuthorizer } from './security-tools';
 
 export type PiImage = { type: 'image'; data: string; mimeType: string };
 export type ReasoningLevel = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -51,10 +52,10 @@ type PiSdk = typeof import('@earendil-works/pi-coding-agent');
 type TypeBoxSdk = typeof import('typebox');
 type BrowserUseRuntimeOptions = {
   supervisor: Pick<BrowserUseSupervisor, 'callTool'>;
-  requestApproval: (toolCallId: string, toolName: BrowserToolName, args: Record<string, unknown>, signal?: AbortSignal) => Promise<boolean>;
+  requestApproval?: (toolCallId: string, toolName: BrowserToolName, args: Record<string, unknown>, signal?: AbortSignal) => Promise<boolean>;
 };
-type ComputerUseRuntimeOptions = { requestApproval: ComputerUseApproval };
-type PiSessionFactoryOptions = { agentDir: string; yuhengSystemPrompt?: string; profilePrompt?: string; runtimeContext?: string; thinkingLevel?: ReasoningLevel; browserUse?: BrowserUseRuntimeOptions; computerUse?: ComputerUseRuntimeOptions; taskService?: TaskToolService };
+type ComputerUseRuntimeOptions = { requestApproval?: ComputerUseApproval };
+type PiSessionFactoryOptions = { agentDir: string; yuhengSystemPrompt?: string; profilePrompt?: string; runtimeContext?: string; thinkingLevel?: ReasoningLevel; browserUse?: BrowserUseRuntimeOptions; computerUse?: ComputerUseRuntimeOptions; taskService?: TaskToolService; security?: { authorize: ToolAuthorizer } };
 
 const loadPiSdk = (): Promise<PiSdk> => {
   // Keep the CommonJS Electron bundle compatible with Pi's ESM package.
@@ -126,7 +127,10 @@ export function createPiSessionFactory(config: ProviderConfig, apiKey: string, o
       noContextFiles: true,
       appendSystemPromptOverride: (base) => [...base, ...(options.yuhengSystemPrompt ? [options.yuhengSystemPrompt] : []), ...(options.profilePrompt ? [options.profilePrompt] : []), ...(options.runtimeContext ? [options.runtimeContext] : [])],
       additionalExtensionPaths: options.computerUse ? [computerUseExtensionPath()] : [],
-      extensionFactories: options.computerUse ? [createComputerUseApprovalExtension(options.computerUse.requestApproval)] : [],
+      extensionFactories: [
+        ...(options.security ? [createSecurityToolExtension(options.security.authorize)] : []),
+        ...(!options.security && options.computerUse?.requestApproval ? [createComputerUseApprovalExtension(options.computerUse.requestApproval)] : []),
+      ],
     });
     await resourceLoader.reload();
     const browserTools = options.browserUse && typebox ? (() => {
@@ -147,7 +151,7 @@ export function createPiSessionFactory(config: ProviderConfig, apiKey: string, o
         executionMode: 'sequential',
         async execute(toolCallId, params: Static<T>, signal) {
           const args = params as Record<string, unknown>;
-          if (spec.approval && !await options.browserUse!.requestApproval(toolCallId, spec.name, args, signal)) {
+          if (!options.security && spec.approval && options.browserUse!.requestApproval && !await options.browserUse!.requestApproval(toolCallId, spec.name, args, signal)) {
             return { content: [{ type: 'text' as const, text: '用户拒绝了这次浏览器操作。' }], details: { rejected: true, toolName: spec.name } };
           }
           const result = await options.browserUse!.supervisor.callTool(spec.name, args, signal);

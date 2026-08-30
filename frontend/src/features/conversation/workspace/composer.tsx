@@ -1,6 +1,6 @@
-import { BrainCircuit, Check, ChevronDown } from 'lucide-react';
+import { BrainCircuit, Check, ChevronDown, ShieldAlert, ShieldCheck, ShieldOff, type LucideIcon } from 'lucide-react';
 import { FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { Attachment, ReasoningLevel, ReasoningSelection } from '../../../contracts/desktop-bridge';
+import type { Attachment, ReasoningLevel, ReasoningSelection, ToolPermissionMode } from '../../../contracts/desktop-bridge';
 
 const reasoningOptions: Array<{ value: ReasoningSelection; label: string }> = [
   { value: 'default', label: '默认' },
@@ -12,40 +12,105 @@ const reasoningOptions: Array<{ value: ReasoningSelection; label: string }> = [
   { value: 'max', label: 'Max' },
 ];
 
+const permissionOptions: Array<{
+  value: ToolPermissionMode;
+  label: string;
+  shortLabel: string;
+  description: string;
+  icon: LucideIcon;
+}> = [
+  { value: 'cautious', label: '谨慎模式', shortLabel: '谨慎', description: '写入、Shell 和外部操作均需确认', icon: ShieldAlert },
+  { value: 'smart', label: '智能审批', shortLabel: '智能', description: '工作区写入自动允许，高风险操作需确认', icon: ShieldCheck },
+  { value: 'full_session', label: '完全访问', shortLabel: '完全', description: '本次应用会话内不再询问工具操作', icon: ShieldOff },
+];
+
 export interface ComposerPrefill {
   id: number;
   value: string;
 }
 
-export function Composer({ busy, attachments, variant = 'default', prefill, editing = false, onCancelEdit, reasoningSelection = 'default', onReasoningSelectionChange, onAttach, onRemoveAttachment, onSubmit, onCancel }: { busy: boolean; attachments: Attachment[]; variant?: 'default' | 'start'; prefill?: ComposerPrefill | null; editing?: boolean; onCancelEdit?: () => void; reasoningSelection?: ReasoningSelection; onReasoningSelectionChange?: (selection: ReasoningSelection) => void; onAttach: () => Promise<void>; onRemoveAttachment: (id: string) => void; onSubmit: (value: string, attachments: Attachment[], reasoningLevel?: ReasoningLevel) => void; onCancel: () => void }) {
+type ComposerProps = {
+  busy: boolean;
+  attachments: Attachment[];
+  variant?: 'default' | 'start';
+  prefill?: ComposerPrefill | null;
+  editing?: boolean;
+  onCancelEdit?: () => void;
+  reasoningSelection?: ReasoningSelection;
+  onReasoningSelectionChange?: (selection: ReasoningSelection) => void;
+  permissionMode?: ToolPermissionMode;
+  onPermissionModeChange?: (mode: ToolPermissionMode) => void;
+  onAttach: () => Promise<void>;
+  onRemoveAttachment: (id: string) => void;
+  onSubmit: (value: string, attachments: Attachment[], reasoningLevel?: ReasoningLevel) => void;
+  onCancel: () => void;
+};
+
+type ComposerMenu = 'permission' | 'reasoning';
+
+export function Composer({
+  busy,
+  attachments,
+  variant = 'default',
+  prefill,
+  editing = false,
+  onCancelEdit,
+  reasoningSelection = 'default',
+  onReasoningSelectionChange,
+  permissionMode = 'smart',
+  onPermissionModeChange,
+  onAttach,
+  onRemoveAttachment,
+  onSubmit,
+  onCancel,
+}: ComposerProps) {
   const [value, setValue] = useState('');
   const [reasoningLevel, setReasoningLevel] = useState<ReasoningSelection>(reasoningSelection);
-  const [reasoningOpen, setReasoningOpen] = useState(false);
-  const [reasoningClosing, setReasoningClosing] = useState(false);
+  const [openMenu, setOpenMenu] = useState<ComposerMenu | null>(null);
+  const [closingMenu, setClosingMenu] = useState<ComposerMenu | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const reasoningPickerRef = useRef<HTMLDivElement>(null);
-  const reasoningCloseTimer = useRef<number | null>(null);
-  const closeReasoning = () => {
-    if (!reasoningOpen) return;
-    setReasoningOpen(false);
-    setReasoningClosing(true);
-    if (reasoningCloseTimer.current !== null) window.clearTimeout(reasoningCloseTimer.current);
-    reasoningCloseTimer.current = window.setTimeout(() => { setReasoningClosing(false); reasoningCloseTimer.current = null; }, 125);
+  const pickerAreaRef = useRef<HTMLDivElement>(null);
+  const menuCloseTimer = useRef<number | null>(null);
+
+  const closeMenu = (menu = openMenu) => {
+    if (!menu) return;
+    setOpenMenu(null);
+    setClosingMenu(menu);
+    if (menuCloseTimer.current !== null) window.clearTimeout(menuCloseTimer.current);
+    menuCloseTimer.current = window.setTimeout(() => {
+      setClosingMenu(null);
+      menuCloseTimer.current = null;
+    }, 125);
   };
-  useEffect(() => () => { if (reasoningCloseTimer.current !== null) window.clearTimeout(reasoningCloseTimer.current); }, []);
+
+  const toggleMenu = (menu: ComposerMenu) => {
+    if (openMenu === menu) {
+      closeMenu(menu);
+      return;
+    }
+    if (menuCloseTimer.current !== null) window.clearTimeout(menuCloseTimer.current);
+    setClosingMenu(null);
+    setOpenMenu(menu);
+  };
+
+  useEffect(() => () => {
+    if (menuCloseTimer.current !== null) window.clearTimeout(menuCloseTimer.current);
+  }, []);
+
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     textarea.style.height = 'auto';
     textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
   }, [value]);
+
   useEffect(() => {
-    if (!reasoningOpen) return;
+    if (!openMenu) return;
     const closeOutside = (event: PointerEvent) => {
-      if (!reasoningPickerRef.current?.contains(event.target as Node)) closeReasoning();
+      if (!pickerAreaRef.current?.contains(event.target as Node)) closeMenu();
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') closeReasoning();
+      if (event.key === 'Escape') closeMenu();
     };
     document.addEventListener('pointerdown', closeOutside);
     document.addEventListener('keydown', closeOnEscape);
@@ -53,7 +118,8 @@ export function Composer({ busy, attachments, variant = 'default', prefill, edit
       document.removeEventListener('pointerdown', closeOutside);
       document.removeEventListener('keydown', closeOnEscape);
     };
-  }, [reasoningOpen]);
+  }, [openMenu]);
+
   useEffect(() => { setReasoningLevel(reasoningSelection); }, [reasoningSelection]);
   useEffect(() => {
     if (!prefill) return;
@@ -72,6 +138,9 @@ export function Composer({ busy, attachments, variant = 'default', prefill, edit
     onSubmit(text, attachments, reasoningLevel === 'default' ? undefined : reasoningLevel);
     setValue('');
   };
+
+  const selectedPermission = permissionOptions.find((option) => option.value === permissionMode) ?? permissionOptions[1];
+  const PermissionIcon = selectedPermission.icon;
 
   return (
     <form className={`composer ${variant === 'start' ? 'composer-start' : ''} ${editing ? 'is-editing' : ''}`} onSubmit={submit}>
@@ -93,13 +162,54 @@ export function Composer({ busy, attachments, variant = 'default', prefill, edit
       />
       {attachments.length > 0 && <div className="attachment-list" aria-label="待发送附件">{attachments.map((attachment) => <span className="attachment-chip" key={attachment.id}><span className="attachment-chip-name">{attachment.name}</span><small>{Math.max(1, Math.round(attachment.size / 1024))} KB</small><button type="button" onClick={() => onRemoveAttachment(attachment.id)} aria-label={`移除附件 ${attachment.name}`}>×</button></span>)}</div>}
       <div className="composer-actions">
-        <div className="composer-tools"><button type="button" className="tool-button" onClick={() => void onAttach()} disabled={busy} aria-label="添加附件">＋ 附件</button><div className="reasoning-picker" ref={reasoningPickerRef}><button type="button" className="reasoning-trigger" onClick={() => { if (reasoningOpen) closeReasoning(); else { setReasoningClosing(false); setReasoningOpen(true); } }} disabled={busy} aria-label={`推理级别：${reasoningOptions.find((option) => option.value === reasoningLevel)?.label}`} aria-haspopup="menu" aria-expanded={reasoningOpen}><BrainCircuit size={14} aria-hidden="true" /><span>{reasoningOptions.find((option) => option.value === reasoningLevel)?.label}</span><ChevronDown size={13} aria-hidden="true" /></button>{(reasoningOpen || reasoningClosing) && <div className={`reasoning-menu ${reasoningClosing ? 'is-closing' : ''}`} role="menu" aria-label="选择推理级别">{reasoningOptions.map((option) => <button type="button" key={option.value} className={reasoningLevel === option.value ? 'is-selected' : ''} role="menuitemradio" aria-checked={reasoningLevel === option.value} onClick={() => { setReasoningLevel(option.value); closeReasoning(); }}><span>{option.label}</span>{reasoningLevel === option.value && <Check size={13} aria-hidden="true" />}</button>)}</div>}</div></div>
+        <div className="composer-tools" ref={pickerAreaRef}>
+          <button type="button" className="tool-button" onClick={() => void onAttach()} disabled={busy} aria-label="添加附件">＋ 附件</button>
+          <div className="permission-picker">
+            <button
+              type="button"
+              className={`permission-trigger ${permissionMode === 'full_session' ? 'is-full-access' : ''}`}
+              onClick={() => toggleMenu('permission')}
+              disabled={busy}
+              aria-label={`工具权限：${selectedPermission.label}`}
+              aria-haspopup="menu"
+              aria-expanded={openMenu === 'permission'}
+            >
+              <PermissionIcon size={14} aria-hidden="true" />
+              <span>{selectedPermission.shortLabel}</span>
+              <ChevronDown size={13} aria-hidden="true" />
+            </button>
+            {(openMenu === 'permission' || closingMenu === 'permission') && (
+              <div className={`permission-menu ${closingMenu === 'permission' ? 'is-closing' : ''}`} role="menu" aria-label="选择工具权限">
+                {permissionOptions.map((option) => {
+                  const OptionIcon = option.icon;
+                  return (
+                    <button
+                      type="button"
+                      key={option.value}
+                      className={`${permissionMode === option.value ? 'is-selected' : ''} ${option.value === 'full_session' ? 'is-dangerous' : ''}`}
+                      role="menuitemradio"
+                      aria-checked={permissionMode === option.value}
+                      onClick={() => {
+                        closeMenu('permission');
+                        if (permissionMode !== option.value) onPermissionModeChange?.(option.value);
+                      }}
+                    >
+                      <OptionIcon size={15} aria-hidden="true" />
+                      <span><strong>{option.label}</strong><small>{option.description}</small></span>
+                      {permissionMode === option.value && <Check size={14} aria-hidden="true" />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <div className="reasoning-picker">
+            <button type="button" className="reasoning-trigger" onClick={() => toggleMenu('reasoning')} disabled={busy} aria-label={`推理级别：${reasoningOptions.find((option) => option.value === reasoningLevel)?.label}`} aria-haspopup="menu" aria-expanded={openMenu === 'reasoning'}><BrainCircuit size={14} aria-hidden="true" /><span>{reasoningOptions.find((option) => option.value === reasoningLevel)?.label}</span><ChevronDown size={13} aria-hidden="true" /></button>
+            {(openMenu === 'reasoning' || closingMenu === 'reasoning') && <div className={`reasoning-menu ${closingMenu === 'reasoning' ? 'is-closing' : ''}`} role="menu" aria-label="选择推理级别">{reasoningOptions.map((option) => <button type="button" key={option.value} className={reasoningLevel === option.value ? 'is-selected' : ''} role="menuitemradio" aria-checked={reasoningLevel === option.value} onClick={() => { setReasoningLevel(option.value); onReasoningSelectionChange?.(option.value); closeMenu('reasoning'); }}><span>{option.label}</span>{reasoningLevel === option.value && <Check size={13} aria-hidden="true" />}</button>)}</div>}
+          </div>
+        </div>
         <div className="composer-submit-actions">
-        {busy ? (
-          <button type="button" className="send-button stop" onClick={onCancel} aria-label="停止处理">停止</button>
-        ) : (
-          <button type="submit" className="send-button" aria-label="发送消息">发送</button>
-        )}
+          {busy ? <button type="button" className="send-button stop" onClick={onCancel} aria-label="停止处理">停止</button> : <button type="submit" className="send-button" aria-label="发送消息">发送</button>}
         </div>
       </div>
     </form>

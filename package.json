@@ -1,6 +1,6 @@
 {
   "name": "yuheng",
-  "version": "0.2.1",
+  "version": "0.3.1",
   "private": true,
   "description": "Yuheng desktop personal secretary",
   "main": "dist-electron/main.js",

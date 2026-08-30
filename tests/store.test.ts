@@ -495,6 +495,32 @@ describe('AppStore Browser Use settings', () => {
       fs.rmSync(dataDir, { recursive: true, force: true });
     }
   });
+
+  it('defaults tool permissions to smart and persists cautious choices per conversation', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
+    let store = new AppStore(dataDir);
+    let firstId = '';
+    let secondId = '';
+    try {
+      const first = store.createConversation('第一个会话');
+      const second = store.createConversation('第二个会话');
+      firstId = first.id;
+      secondId = second.id;
+      assert.equal(store.getToolPermissionMode(first.id), 'smart');
+      assert.equal(store.getToolPermissionMode(second.id), 'smart');
+      assert.equal(store.saveToolPermissionMode(first.id, 'cautious'), 'cautious');
+      assert.equal(store.getToolPermissionMode(first.id), 'cautious');
+      assert.equal(store.getToolPermissionMode(second.id), 'smart');
+      assert.throws(() => store.saveToolPermissionMode(first.id, 'full_session' as never), /persistent permission modes/);
+      store.close();
+      store = new AppStore(dataDir);
+      assert.equal(store.getToolPermissionMode(firstId), 'cautious');
+      assert.equal(store.getToolPermissionMode(secondId), 'smart');
+    } finally {
+      store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('AppStore tasks', () => {

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, screen, shell, Tray, type OpenDialogOptions, type Rectangle, type WebContents } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, protocol, screen, session, shell, Tray, type IpcMainInvokeEvent, type OpenDialogOptions, type Rectangle, type WebContents } from 'electron';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -10,10 +10,10 @@ import { createPiRuntime, createPiSessionFactory, type ReasoningLevel } from './
 import { loadYuhengSystemPrompt } from './system-prompt';
 import { MAX_TASK_ASSET_BYTES, TASK_ASSET_SCHEME, TaskAssetStore, type TaskAsset } from './task-assets';
 import { MAX_NOTE_COVER_BYTES, NOTE_COVER_SCHEME, NoteCoverStore } from './note-covers';
-import { BrowserUseSupervisor, redactBrowserToolInput, type BrowserToolName } from './browser-use';
+import { BrowserUseSupervisor } from './browser-use';
 import { TaskReminderScheduler } from './task-reminders';
 import { BROWSER_ARTIFACT_SCHEME, BrowserArtifactStore, browserImagesFromToolResult, type BrowserArtifact } from './browser-artifacts';
-import { ComputerUseLease, redactComputerUseToolInput, type ComputerUseToolName } from './computer-use';
+import { ComputerUseLease } from './computer-use';
 import { applicationVersion } from './app-info';
 import { getAgentProfile, isAgentProfileId, loadAgentProfilePrompt, formatRuntimeContext } from './agent-profiles';
 import { MAX_CONVERSATION_BACKUP_BYTES, conversationBackupMarkdown, parseConversationBackup } from './conversation-backup';
@@ -23,6 +23,10 @@ import { createFullBackup, restoreFullBackup } from './full-backup';
 import { BackupRunAdmission } from './backup-run-admission';
 import { trayReminderTitle } from './tray-state';
 import { readCodexPetAsset, scanCodexPets, type CodexPetManifest } from './pets';
+import { IpcSenderAuthorizer, type RendererRole } from './ipc-security';
+import { FileSecurityAuditLog } from './security-audit';
+import { ToolSecurityBroker, ToolSecurityPolicy, redactToolApprovalInput } from './security-policy';
+import { isToolPermissionMode, type ToolPermissionMode } from './permission-mode';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: TASK_ASSET_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
@@ -38,15 +42,18 @@ let taskAssets: TaskAssetStore;
 let noteCovers: NoteCoverStore;
 let browserUse: BrowserUseSupervisor;
 let browserArtifacts: BrowserArtifactStore;
+let securityAudit: FileSecurityAuditLog;
 let petWindow: BrowserWindow | null = null;
 let currentPetState: 'idle' | 'working' | 'celebrate' = 'idle';
 let petDragState: { senderId: number; pointerX: number; pointerY: number; windowX: number; windowY: number } | null = null;
 const computerUseLease = new ComputerUseLease();
 let taskReminders: TaskReminderScheduler;
 let pendingTaskOpen: { boardId: string; taskId: string } | null = null;
-const activeRuns = new Map<string, { controller: AbortController; conversationId: string; inputMessageId: string; replayUser?: { ordinal: number; content: string } }>();
+const activeRuns = new Map<string, { controller: AbortController; conversationId: string; inputMessageId: string; permissionMode: ToolPermissionMode; replayUser?: { ordinal: number; content: string } }>();
 const backupRunAdmission = new BackupRunAdmission();
 const pendingApprovals = new Map<string, { runId: string; senderId: number; finish: (approved: boolean) => void }>();
+const sessionPermissionModes = new Map<string, ToolPermissionMode>();
+const ipcSenders = new IpcSenderAuthorizer();
 let shutdownRequested = false;
 let shutdownReady = false;
 let resourcesClosed = false;
@@ -200,6 +207,48 @@ function assertNoteCover(value: unknown): string {
   const cover = assertText(value, 'cover');
   if (/^[a-z][a-z0-9-]{0,40}$/.test(cover) || /^yuheng-note-cover:\/\/local\/[0-9a-f-]{36}\.(?:png|jpg|webp)$/i.test(cover)) return cover;
   throw new Error('Invalid note cover.');
+}
+
+type IpcHandler<Args extends unknown[], Result> = (event: IpcMainInvokeEvent, ...args: Args) => Result | Promise<Result>;
+
+function registerRenderer(window: BrowserWindow, role: RendererRole): void {
+  const senderId = window.webContents.id;
+  ipcSenders.register(senderId, role);
+  window.webContents.once('destroyed', () => ipcSenders.unregister(senderId));
+}
+
+function handleForRoles<Args extends unknown[], Result>(channel: string, roles: readonly RendererRole[], handler: IpcHandler<Args, Result>): void {
+  ipcMain.handle(channel, (event, ...args: Args) => {
+    ipcSenders.assertAllowed(event.sender.id, roles);
+    return handler(event, ...args);
+  });
+}
+
+function handleMain<Args extends unknown[], Result>(channel: string, handler: IpcHandler<Args, Result>): void {
+  handleForRoles(channel, ['main'], handler);
+}
+
+function handleMainAndPet<Args extends unknown[], Result>(channel: string, handler: IpcHandler<Args, Result>): void {
+  handleForRoles(channel, ['main', 'pet'], handler);
+}
+
+function handlePet<Args extends unknown[], Result>(channel: string, handler: IpcHandler<Args, Result>): void {
+  handleForRoles(channel, ['pet'], handler);
+}
+
+function configureRendererSecurity(): void {
+  const rendererSession = session.defaultSession;
+  const permitted = new Set(['clipboard-sanitized-write']);
+  rendererSession.setPermissionCheckHandler((webContents, permission) => Boolean(webContents && ipcSenders.roleOf(webContents.id) === 'main' && permitted.has(permission)));
+  rendererSession.setPermissionRequestHandler((webContents, permission, callback) => callback(ipcSenders.roleOf(webContents.id) === 'main' && permitted.has(permission)));
+  if (!isDevelopment) {
+    rendererSession.webRequest.onHeadersReceived((details, callback) => callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': ["default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: yuheng-task-asset: yuheng-browser-artifact: yuheng-note-cover:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'"],
+      },
+    }));
+  }
 }
 
 function emit(sender: WebContents, event: RunEvent): void {
@@ -362,7 +411,7 @@ function requestToolApproval(sender: WebContents, runId: string, conversationId:
       approvalId,
       toolCallId,
       toolName,
-      input: summarizeToolValue(toolName.startsWith('browser_') ? redactBrowserToolInput(toolName, args) : redactComputerUseToolInput(toolName, args)),
+      input: summarizeToolValue(redactToolApprovalInput(toolName, args)),
     });
   });
 }
@@ -382,6 +431,13 @@ async function executeRun(sender: WebContents, runId: string, conversationId: st
   let releaseComputerUse: (() => void) | undefined;
   let runtime: ReturnType<typeof createPiRuntime> | undefined;
   try {
+    const workspaceDir = path.join(app.getPath('userData'), 'workspace');
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const toolSecurity = new ToolSecurityBroker({
+      policy: new ToolSecurityPolicy(workspaceDir, run.permissionMode),
+      audit: securityAudit,
+      requestApproval: ({ toolCallId, toolName, input, signal }) => requestToolApproval(sender, runId, conversationId, toolCallId, toolName, input, signal),
+    });
     if (computerUseConfig.enabled) releaseComputerUse = await computerUseLease.acquire(run.controller.signal);
     runtime = createPiRuntime({ sessionFactory: createPiSessionFactory(config, apiKey, {
     agentDir: path.join(app.getPath('userData'), 'pi-agent'),
@@ -399,14 +455,19 @@ async function executeRun(sender: WebContents, runId: string, conversationId: st
     },
     browserUse: browserUseConfig.enabled ? {
       supervisor: browserUse,
-      requestApproval: (toolCallId, toolName, args, signal) => requestToolApproval(sender, runId, conversationId, toolCallId, toolName, args, signal),
     } : undefined,
-    computerUse: computerUseConfig.enabled ? {
-      requestApproval: (toolCallId, toolName, args, signal) => requestToolApproval(sender, runId, conversationId, toolCallId, toolName, args, signal),
-    } : undefined,
+    computerUse: computerUseConfig.enabled ? {} : undefined,
+    security: {
+      authorize: ({ toolCallId, toolName, input, signal }) => toolSecurity.authorize({
+        runId,
+        conversationId,
+        toolCallId,
+        toolName,
+        input,
+        signal,
+      }),
+    },
   }) });
-    const workspaceDir = path.join(app.getPath('userData'), 'workspace');
-    await fs.mkdir(workspaceDir, { recursive: true });
     const messages = store.listMessages(conversationId);
     const inputIndex = messages.findIndex((message) => message.id === run.inputMessageId);
     if (inputIndex < 0 || messages[inputIndex].role !== 'user') throw new Error('运行输入消息已不存在。');
@@ -423,7 +484,10 @@ async function executeRun(sender: WebContents, runId: string, conversationId: st
       signal: run.controller.signal,
       emit: (event) => {
         if (event.type === 'tool_start') {
-          const input = summarizeToolValue(event.toolName.startsWith('browser_') ? redactBrowserToolInput(event.toolName, event.args) : redactComputerUseToolInput(event.toolName, event.args));
+          const redactedArgs = event.args && typeof event.args === 'object' && !Array.isArray(event.args)
+            ? redactToolApprovalInput(event.toolName, event.args as Record<string, unknown>)
+            : event.args;
+          const input = summarizeToolValue(redactedArgs);
           store.startToolActivity(runId, event.toolCallId, event.toolName, input);
           emit(sender, { type: 'tool_start', runId, conversationId, toolCallId: event.toolCallId, toolName: event.toolName, input });
           return;
@@ -584,9 +648,10 @@ function createWindow(): BrowserWindow {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
   });
+  registerRenderer(window, 'main');
   window.webContents.on('will-navigate', (event) => event.preventDefault());
   window.webContents.setWindowOpenHandler(({ url }) => {
     const externalUrl = externalHttpUrl(url);
@@ -654,12 +719,15 @@ function createPetWindow(): BrowserWindow {
     show: false,
     backgroundColor: '#00000000',
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'pet-preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
   });
+  registerRenderer(window, 'pet');
+  window.webContents.on('will-navigate', (event) => event.preventDefault());
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   petWindow = window;
   window.setAlwaysOnTop(true, 'floating');
   let saveTimer: NodeJS.Timeout | undefined;
@@ -699,6 +767,7 @@ function openTaskFromReminder(boardId: string, taskId: string): void {
 }
 
 app.whenReady().then(() => {
+  configureRendererSecurity();
   store = new AppStore(app.getPath('userData'));
   desktopPresenceConfig = store.getDesktopPresenceConfig();
   secrets = new SecretStore(app.getPath('userData'));
@@ -706,6 +775,7 @@ app.whenReady().then(() => {
   noteCovers = new NoteCoverStore(path.join(app.getPath('userData'), 'note-covers'));
   browserUse = new BrowserUseSupervisor({ dataDir: path.join(app.getPath('userData'), 'browser-use') });
   browserArtifacts = new BrowserArtifactStore(path.join(app.getPath('userData'), 'browser-use', 'screenshots'));
+  securityAudit = new FileSecurityAuditLog(app.getPath('userData'));
   const artifactCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   for (const artifact of store.deleteRunArtifactsBefore(artifactCutoff.toISOString())) browserArtifacts.remove(artifact.url);
   browserArtifacts.deleteFilesBefore(artifactCutoff);
@@ -745,38 +815,38 @@ app.whenReady().then(() => {
   taskReminders.refresh();
   automaticBackupTimer = setInterval(() => { void runAutomaticBackup(); }, 60 * 60 * 1000);
 
-  ipcMain.handle('app:get-info', () => ({
+  handleMain('app:get-info', () => ({
     name: 'yuheng',
     version: applicationVersionValue,
     platform: process.platform,
     arch: process.arch,
   }));
-  ipcMain.handle('app:open-external', async (_event, rawUrl: unknown) => {
+  handleMain('app:open-external', async (_event, rawUrl: unknown) => {
     const url = externalHttpUrl(rawUrl);
     if (!url) throw new Error('只允许打开 http 或 https 链接。');
     await shell.openExternal(url);
   });
 
-  ipcMain.handle('search:query', (_event, rawQuery: unknown, rawLimit: unknown) => {
+  handleMain('search:query', (_event, rawQuery: unknown, rawLimit: unknown) => {
     const query = typeof rawQuery === 'string' ? rawQuery : '';
     const limit = typeof rawLimit === 'number' && Number.isFinite(rawLimit) ? rawLimit : undefined;
     return store.search(query, limit);
   });
 
-  ipcMain.handle('conversations:list', (_event, includeArchived: unknown) => store.listConversations(includeArchived === true));
-  ipcMain.handle('conversation-projects:list', () => store.listConversationProjects());
-  ipcMain.handle('conversation-projects:create', (_event, name: unknown): ConversationProject => store.createConversationProject(assertText(name, 'name')));
-  ipcMain.handle('conversation-projects:rename', (_event, projectId: unknown, name: unknown): ConversationProject => store.renameConversationProject(assertText(projectId, 'projectId'), assertText(name, 'name')));
-  ipcMain.handle('conversation-projects:delete', (_event, projectId: unknown) => store.deleteConversationProject(assertText(projectId, 'projectId')));
-  ipcMain.handle('conversations:messages', (_event, conversationId: unknown) => store.listMessages(assertText(conversationId, 'conversationId')));
-  ipcMain.handle('conversations:branch', (_event, conversationId: unknown, messageId: unknown) => store.branchConversation(assertText(conversationId, 'conversationId'), assertText(messageId, 'messageId')));
-  ipcMain.handle('notes:list', (_event, includeArchived: unknown) => store.listNotes(includeArchived === true));
-  ipcMain.handle('notes:get', (_event, id: unknown) => store.getNote(assertText(id, 'noteId')));
-  ipcMain.handle('notes:create', (_event, title: unknown, parentId: unknown) => {
+  handleMain('conversations:list', (_event, includeArchived: unknown) => store.listConversations(includeArchived === true));
+  handleMain('conversation-projects:list', () => store.listConversationProjects());
+  handleMain('conversation-projects:create', (_event, name: unknown): ConversationProject => store.createConversationProject(assertText(name, 'name')));
+  handleMain('conversation-projects:rename', (_event, projectId: unknown, name: unknown): ConversationProject => store.renameConversationProject(assertText(projectId, 'projectId'), assertText(name, 'name')));
+  handleMain('conversation-projects:delete', (_event, projectId: unknown) => store.deleteConversationProject(assertText(projectId, 'projectId')));
+  handleMain('conversations:messages', (_event, conversationId: unknown) => store.listMessages(assertText(conversationId, 'conversationId')));
+  handleMain('conversations:branch', (_event, conversationId: unknown, messageId: unknown) => store.branchConversation(assertText(conversationId, 'conversationId'), assertText(messageId, 'messageId')));
+  handleMain('notes:list', (_event, includeArchived: unknown) => store.listNotes(includeArchived === true));
+  handleMain('notes:get', (_event, id: unknown) => store.getNote(assertText(id, 'noteId')));
+  handleMain('notes:create', (_event, title: unknown, parentId: unknown) => {
     const normalizedParentId = parentId == null || parentId === '' ? null : assertText(parentId, 'parentId');
     return store.createNote(typeof title === 'string' ? title : undefined, normalizedParentId);
   });
-  ipcMain.handle('notes:update', (_event, id: unknown, rawPatch: unknown) => {
+  handleMain('notes:update', (_event, id: unknown, rawPatch: unknown) => {
     const noteId = assertText(id, 'noteId');
     if (!rawPatch || typeof rawPatch !== 'object') throw new Error('Note patch is required.');
     const input = rawPatch as Record<string, unknown>;
@@ -792,8 +862,8 @@ app.whenReady().then(() => {
     if (previous?.cover && previous.cover !== updated.cover && previous.cover.startsWith(`${NOTE_COVER_SCHEME}://`)) noteCovers.remove(previous.cover);
     return updated;
   });
-  ipcMain.handle('notes:move', (_event, id: unknown, parentId: unknown, targetId: unknown) => store.moveNote(assertText(id, 'noteId'), parentId == null || parentId === '' ? null : assertText(parentId, 'parentId'), targetId == null || targetId === '' ? undefined : assertText(targetId, 'targetId')));
-  ipcMain.handle('notes:delete', (_event, id: unknown) => {
+  handleMain('notes:move', (_event, id: unknown, parentId: unknown, targetId: unknown) => store.moveNote(assertText(id, 'noteId'), parentId == null || parentId === '' ? null : assertText(parentId, 'parentId'), targetId == null || targetId === '' ? undefined : assertText(targetId, 'targetId')));
+  handleMain('notes:delete', (_event, id: unknown) => {
     const noteId = assertText(id, 'noteId');
     const notes = store.listNotes(true);
     const ids = new Set<string>([noteId]);
@@ -802,7 +872,7 @@ app.whenReady().then(() => {
     for (const note of notes) if (ids.has(note.id) && note.cover?.startsWith(`${NOTE_COVER_SCHEME}://`)) noteCovers.remove(note.cover);
     store.deleteNote(noteId);
   });
-  ipcMain.handle('notes:covers:pick', async (event) => {
+  handleMain('notes:covers:pick', async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender);
     const result = owner ? await dialog.showOpenDialog(owner, { properties: ['openFile'], filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] }) : await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] });
     if (result.canceled || !result.filePaths[0]) return null;
@@ -811,32 +881,33 @@ app.whenReady().then(() => {
     if (stats.size > MAX_NOTE_COVER_BYTES) throw new Error('封面图片不能超过 15 MB。');
     return noteCovers.import(path.basename(filePath), attachmentMimeType(filePath), await fs.readFile(filePath));
   });
-  ipcMain.handle('conversations:create', (_event, title: unknown, projectId: unknown, providerId: unknown, profileId: unknown) => {
+  handleMain('conversations:create', (_event, title: unknown, projectId: unknown, providerId: unknown, profileId: unknown) => {
     const selectedProfile = profileId == null ? undefined : (isAgentProfileId(profileId) ? profileId : (() => { throw new Error('Profile not found.'); })());
     return store.createConversation(typeof title === 'string' && title.trim() ? title.trim() : undefined, typeof projectId === 'string' && projectId.trim() ? projectId.trim() : undefined, typeof providerId === 'string' && providerId.trim() ? providerId.trim() : undefined, selectedProfile);
   });
-  ipcMain.handle('conversations:set-provider', (_event, conversationId: unknown, providerId: unknown) => {
+  handleMain('conversations:set-provider', (_event, conversationId: unknown, providerId: unknown) => {
     const id = assertText(conversationId, 'conversationId');
     store.setConversationProvider(id, assertText(providerId, 'providerId'));
     return store.getConversation(id);
   });
-  ipcMain.handle('conversations:set-profile', (_event, conversationId: unknown, profileId: unknown) => {
+  handleMain('conversations:set-profile', (_event, conversationId: unknown, profileId: unknown) => {
     const id = assertText(conversationId, 'conversationId');
     if (!isAgentProfileId(profileId)) throw new Error('Profile not found.');
     store.setConversationProfile(id, profileId);
     return store.getConversation(id);
   });
-  ipcMain.handle('conversations:rename', (_event, conversationId: unknown, title: unknown) => store.renameConversation(assertText(conversationId, 'conversationId'), assertText(title, 'title')));
-  ipcMain.handle('conversations:move', (_event, conversationId: unknown, projectId: unknown) => store.moveConversation(assertText(conversationId, 'conversationId'), assertText(projectId, 'projectId')));
-  ipcMain.handle('conversations:archive', (_event, conversationId: unknown, archived: unknown) => store.setConversationArchived(assertText(conversationId, 'conversationId'), archived === true));
-  ipcMain.handle('conversations:pin', (_event, conversationId: unknown, pinned: unknown) => store.setConversationPinned(assertText(conversationId, 'conversationId'), pinned === true));
-  ipcMain.handle('conversations:delete', (_event, conversationId: unknown) => {
+  handleMain('conversations:rename', (_event, conversationId: unknown, title: unknown) => store.renameConversation(assertText(conversationId, 'conversationId'), assertText(title, 'title')));
+  handleMain('conversations:move', (_event, conversationId: unknown, projectId: unknown) => store.moveConversation(assertText(conversationId, 'conversationId'), assertText(projectId, 'projectId')));
+  handleMain('conversations:archive', (_event, conversationId: unknown, archived: unknown) => store.setConversationArchived(assertText(conversationId, 'conversationId'), archived === true));
+  handleMain('conversations:pin', (_event, conversationId: unknown, pinned: unknown) => store.setConversationPinned(assertText(conversationId, 'conversationId'), pinned === true));
+  handleMain('conversations:delete', (_event, conversationId: unknown) => {
     const id = assertText(conversationId, 'conversationId');
     for (const run of activeRuns.values()) if (run.conversationId === id) throw new Error('该会话仍在处理中，请先停止运行。');
     store.deleteConversation(id);
+    sessionPermissionModes.delete(id);
     void fs.rm(path.join(app.getPath('userData'), 'pi-agent', 'sessions', id), { recursive: true, force: true });
   });
-  ipcMain.handle('conversations:export', async (event, conversationId: unknown) => {
+  handleMain('conversations:export', async (event, conversationId: unknown) => {
     const id = assertText(conversationId, 'conversationId');
     const backup = store.exportConversation(id);
     const owner = BrowserWindow.fromWebContents(event.sender);
@@ -848,7 +919,7 @@ app.whenReady().then(() => {
     await fs.writeFile(result.filePath, content, 'utf8');
     return result.filePath;
   });
-  ipcMain.handle('conversations:import', async (event) => {
+  handleMain('conversations:import', async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender);
     const result = owner
       ? await dialog.showOpenDialog(owner, { properties: ['openFile'], filters: [{ name: '玉衡会话备份', extensions: ['json'] }] })
@@ -860,7 +931,7 @@ app.whenReady().then(() => {
     const parsed = parseConversationBackup(JSON.parse(await fs.readFile(filePath, 'utf8')));
     return store.importConversation(parsed);
   });
-  ipcMain.handle('backup:export', async () => {
+  handleMain('backup:export', async () => {
     return backupRunAdmission.run(async () => {
       await waitForActiveRuns(10 * 60 * 1000);
       if (activeRuns.size > 0) throw new Error('当前仍有运行中的任务，请稍后再试。');
@@ -872,7 +943,7 @@ app.whenReady().then(() => {
       catch (error) { await fs.rm(temp, { force: true }); throw error; }
     });
   });
-  ipcMain.handle('backup:import', async () => {
+  handleMain('backup:import', async () => {
     const selected = await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: '玉衡备份', extensions: ['yuheng'] }] });
     if (selected.canceled || !selected.filePaths[0]) return null;
     const archive = await fs.readFile(selected.filePaths[0]);
@@ -881,8 +952,8 @@ app.whenReady().then(() => {
     const { conversationMap: _conversationMap, providerKeys: _providerKeys, ...publicReport } = report;
     return publicReport;
   });
-  ipcMain.handle('backup:get-config', (): BackupConfig => store.getBackupConfig(defaultBackupDirectory()));
-  ipcMain.handle('backup:save-config', (_event, raw: unknown): BackupConfig => {
+  handleMain('backup:get-config', (): BackupConfig => store.getBackupConfig(defaultBackupDirectory()));
+  handleMain('backup:save-config', (_event, raw: unknown): BackupConfig => {
     if (!raw || typeof raw !== 'object') throw new Error('无效的备份设置。');
     const input = raw as Record<string, unknown>;
     const directory = typeof input.directory === 'string' && input.directory.trim() ? input.directory.trim() : defaultBackupDirectory();
@@ -891,8 +962,8 @@ app.whenReady().then(() => {
     if (saved.enabled) void runAutomaticBackup();
     return saved;
   });
-  ipcMain.handle('desktop-presence:get-config', (): DesktopPresenceConfig => desktopPresenceConfig);
-  ipcMain.handle('desktop-presence:save-config', (_event, raw: unknown): DesktopPresenceConfig => {
+  handleMain('desktop-presence:get-config', (): DesktopPresenceConfig => desktopPresenceConfig);
+  handleMain('desktop-presence:save-config', (_event, raw: unknown): DesktopPresenceConfig => {
     if (!raw || typeof raw !== 'object') throw new Error('无效的通知设置。');
     const input = raw as Record<string, unknown>;
     desktopPresenceConfig = store.saveDesktopPresenceConfig({ notificationsEnabled: input.notificationsEnabled !== false, menuBarEnabled: input.menuBarEnabled !== false });
@@ -901,12 +972,12 @@ app.whenReady().then(() => {
     else if (!desktopPresenceConfig.menuBarEnabled) destroyTray();
     return desktopPresenceConfig;
   });
-  ipcMain.handle('pet:get', (): DesktopPetConfig => store.getDesktopPetConfig());
-  ipcMain.handle('pet:list', async (): Promise<CodexPetManifest[]> => scanCodexPets([
+  handleMainAndPet('pet:get', (): DesktopPetConfig => store.getDesktopPetConfig());
+  handleMainAndPet('pet:list', async (): Promise<CodexPetManifest[]> => scanCodexPets([
     { path: path.join(process.env.CODEX_HOME || path.join(homedir(), '.codex'), 'pets'), source: 'codex' },
     { path: path.join(app.getPath('userData'), 'pets'), source: 'yuheng' },
   ]));
-  ipcMain.handle('pet:asset', async (_event, rawPetId: unknown) => {
+  handleMainAndPet('pet:asset', async (_event, rawPetId: unknown) => {
     if (typeof rawPetId !== 'string' || !rawPetId.trim()) return null;
     const manifests = await scanCodexPets([
       { path: path.join(process.env.CODEX_HOME || path.join(homedir(), '.codex'), 'pets'), source: 'codex' },
@@ -921,13 +992,13 @@ app.whenReady().then(() => {
     }
     return { manifest, dataUrl: `data:image/webp;base64,${buffer.toString('base64')}` };
   });
-  ipcMain.handle('pet:open-folder', async () => {
+  handleMain('pet:open-folder', async () => {
     const folder = path.join(process.env.CODEX_HOME || path.join(homedir(), '.codex'), 'pets');
     await fs.mkdir(folder, { recursive: true });
     const error = await shell.openPath(folder);
     if (error) throw new Error(error);
   });
-  ipcMain.handle('pet:save', (_event, raw: unknown): DesktopPetConfig => {
+  handleMain('pet:save', (_event, raw: unknown): DesktopPetConfig => {
     if (!raw || typeof raw !== 'object' || typeof (raw as Record<string, unknown>).enabled !== 'boolean') {
       throw new Error('无效的桌面宠物设置。');
     }
@@ -939,7 +1010,7 @@ app.whenReady().then(() => {
     else if (petWindow && !petWindow.isDestroyed()) petWindow.close();
     return config;
   });
-  ipcMain.handle('pet:focus-main', () => focusMainWindow());
+  handlePet('pet:focus-main', () => focusMainWindow());
   ipcMain.on('pet:drag-start', (event, rawScreenX: unknown, rawScreenY: unknown) => {
     if (!petWindow || petWindow.isDestroyed() || event.sender !== petWindow.webContents) return;
     const pointerX = finiteNumber(rawScreenX);
@@ -963,79 +1034,79 @@ app.whenReady().then(() => {
   ipcMain.on('pet:drag-end', (event) => {
     if (petDragState?.senderId === event.sender.id) petDragState = null;
   });
-  ipcMain.handle('tasks:boards:list', (): TaskBoard[] => store.listTaskBoards());
-  ipcMain.handle('tasks:boards:create', (_event, rawName: unknown): TaskBoard => {
+  handleMain('tasks:boards:list', (): TaskBoard[] => store.listTaskBoards());
+  handleMain('tasks:boards:create', (_event, rawName: unknown): TaskBoard => {
     const board = store.createTaskBoard(taskBoardName(rawName));
     emitTaskBoardsChanged();
     return board;
   });
-  ipcMain.handle('tasks:boards:rename', (_event, boardId: unknown, rawName: unknown): TaskBoard => {
+  handleMain('tasks:boards:rename', (_event, boardId: unknown, rawName: unknown): TaskBoard => {
     const board = store.renameTaskBoard(assertText(boardId, 'boardId'), taskBoardName(rawName));
     emitTaskBoardsChanged();
     return board;
   });
-  ipcMain.handle('tasks:boards:reorder', (_event, boardId: unknown, targetBoardId: unknown): TaskBoard[] => {
+  handleMain('tasks:boards:reorder', (_event, boardId: unknown, targetBoardId: unknown): TaskBoard[] => {
     const boards = store.reorderTaskBoards(assertText(boardId, 'boardId'), assertText(targetBoardId, 'targetBoardId'));
     emitTaskBoardsChanged();
     return boards;
   });
-  ipcMain.handle('tasks:boards:delete', (_event, boardId: unknown) => {
+  handleMain('tasks:boards:delete', (_event, boardId: unknown) => {
     store.deleteTaskBoard(assertText(boardId, 'boardId'));
     emitTaskBoardsChanged();
   });
-  ipcMain.handle('tasks:list', (_event, boardId: unknown) => store.listTasks(assertText(boardId, 'boardId')));
-  ipcMain.handle('tasks:open-request:take', () => {
+  handleMain('tasks:list', (_event, boardId: unknown) => store.listTasks(assertText(boardId, 'boardId')));
+  handleMain('tasks:open-request:take', () => {
     const request = pendingTaskOpen;
     pendingTaskOpen = null;
     return request;
   });
-  ipcMain.handle('tasks:types:list', (_event, boardId: unknown): TaskType[] => store.listTaskTypes(assertText(boardId, 'boardId')));
-  ipcMain.handle('tasks:types:create', (_event, boardId: unknown, rawName: unknown): TaskType => {
+  handleMain('tasks:types:list', (_event, boardId: unknown): TaskType[] => store.listTaskTypes(assertText(boardId, 'boardId')));
+  handleMain('tasks:types:create', (_event, boardId: unknown, rawName: unknown): TaskType => {
     const taskType = store.createTaskType(taskTypeName(rawName), assertText(boardId, 'boardId'));
     emitTaskTypesChanged(taskType.boardId);
     return taskType;
   });
-  ipcMain.handle('tasks:types:rename', (_event, taskTypeId: unknown, rawName: unknown): TaskType => {
+  handleMain('tasks:types:rename', (_event, taskTypeId: unknown, rawName: unknown): TaskType => {
     const taskType = store.renameTaskType(assertText(taskTypeId, 'taskTypeId'), taskTypeName(rawName));
     emitTaskTypesChanged(taskType.boardId);
     return taskType;
   });
-  ipcMain.handle('tasks:types:delete', (_event, taskTypeId: unknown) => {
+  handleMain('tasks:types:delete', (_event, taskTypeId: unknown) => {
     const id = assertText(taskTypeId, 'taskTypeId');
     const taskType = store.deleteTaskType(id);
     emitTaskTypesChanged(taskType.boardId);
   });
-  ipcMain.handle('tasks:create', (_event, boardId: unknown, raw: unknown) => {
+  handleMain('tasks:create', (_event, boardId: unknown, raw: unknown) => {
     const task = store.createTask(taskInput(raw), assertText(boardId, 'boardId'));
     handleTaskChanged(task);
     return task;
   });
-  ipcMain.handle('tasks:update', (_event, taskId: unknown, raw: unknown) => {
+  handleMain('tasks:update', (_event, taskId: unknown, raw: unknown) => {
     const task = store.updateTask(assertText(taskId, 'taskId'), taskPatch(raw));
     handleTaskChanged(task);
     return task;
   });
-  ipcMain.handle('tasks:reorder', (_event, taskId: unknown, targetTaskId: unknown) => {
+  handleMain('tasks:reorder', (_event, taskId: unknown, targetTaskId: unknown) => {
     const tasks = store.reorderTask(assertText(taskId, 'taskId'), assertText(targetTaskId, 'targetTaskId'));
     emitTaskBoardsChanged();
     return tasks;
   });
-  ipcMain.handle('tasks:move-board', (_event, taskId: unknown, boardId: unknown) => {
+  handleMain('tasks:move-board', (_event, taskId: unknown, boardId: unknown) => {
     const task = store.moveTaskToBoard(assertText(taskId, 'taskId'), assertText(boardId, 'boardId'));
     handleTaskChanged(task);
     return task;
   });
-  ipcMain.handle('tasks:copy-board', (_event, taskId: unknown, boardId: unknown) => {
+  handleMain('tasks:copy-board', (_event, taskId: unknown, boardId: unknown) => {
     const task = store.copyTaskToBoard(assertText(taskId, 'taskId'), assertText(boardId, 'boardId'));
     handleTaskChanged(task);
     return task;
   });
-  ipcMain.handle('tasks:delete', (_event, taskId: unknown) => {
+  handleMain('tasks:delete', (_event, taskId: unknown) => {
     store.deleteTask(assertText(taskId, 'taskId'));
     emitTaskBoardsChanged();
   });
-  ipcMain.handle('tasks:assets:import', (_event, raw: unknown) => importTaskAsset(raw));
-  ipcMain.handle('tasks:assets:pick', async (event) => {
+  handleMain('tasks:assets:import', (_event, raw: unknown) => importTaskAsset(raw));
+  handleMain('tasks:assets:pick', async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender);
     const options: OpenDialogOptions = { properties: ['openFile', 'multiSelections'] };
     const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
@@ -1054,22 +1125,22 @@ app.whenReady().then(() => {
     }
     return imported;
   });
-  ipcMain.handle('tasks:assets:open', async (_event, rawUrl: unknown) => {
+  handleMain('tasks:assets:open', async (_event, rawUrl: unknown) => {
     const error = await shell.openPath(taskAssets.resolveUrl(assertText(rawUrl, 'assetUrl')));
     if (error) throw new Error(error);
   });
-  ipcMain.handle('runs:list', (_event, conversationId: unknown) => store.listRuns(assertText(conversationId, 'conversationId')));
-  ipcMain.handle('provider:get', () => {
+  handleMain('runs:list', (_event, conversationId: unknown) => store.listRuns(assertText(conversationId, 'conversationId')));
+  handleMain('provider:get', () => {
     const provider = store.getProvider();
     return provider ? { ...provider, hasApiKey: secrets.hasProviderKey(provider.id ?? 'default') } : null;
   });
-  ipcMain.handle('provider:list', () => store.listProviders().map((provider) => ({ ...provider, hasApiKey: secrets.hasProviderKey(provider.id ?? 'default') })));
-  ipcMain.handle('provider:delete', (_event, providerId: unknown) => {
+  handleMain('provider:list', () => store.listProviders().map((provider) => ({ ...provider, hasApiKey: secrets.hasProviderKey(provider.id ?? 'default') })));
+  handleMain('provider:delete', (_event, providerId: unknown) => {
     const id = assertText(providerId, 'providerId');
     store.deleteProvider(id);
     secrets.deleteProviderKey(id);
   });
-  ipcMain.handle('provider:save', (_event, raw: unknown) => {
+  handleMain('provider:save', (_event, raw: unknown) => {
     if (!raw || typeof raw !== 'object') throw new Error('Provider configuration is required.');
     const input = raw as Record<string, unknown>;
     const protocol = input.protocol === 'anthropic' ? 'anthropic' : input.protocol === 'openai' ? 'openai' : null;
@@ -1092,7 +1163,7 @@ app.whenReady().then(() => {
     if (apiKey) secrets.saveProviderKey(savedId, apiKey);
     return { ...saved, id: savedId, hasApiKey: secrets.hasProviderKey(savedId) };
   });
-  ipcMain.handle('provider:test', async (_event, raw: unknown): Promise<ProviderTestResult> => {
+  handleMain('provider:test', async (_event, raw: unknown): Promise<ProviderTestResult> => {
     if (!raw || typeof raw !== 'object') throw new Error('Provider configuration is required.');
     const input = raw as Record<string, unknown>;
     const protocol = input.protocol === 'anthropic' ? 'anthropic' : input.protocol === 'openai' ? 'openai' : null;
@@ -1103,30 +1174,46 @@ app.whenReady().then(() => {
     const config: ProviderConfig = { id: providerId ?? 'test', protocol, baseUrl: assertText(input.baseUrl, 'baseUrl').replace(/\/$/, ''), model: assertText(input.model, 'model'), displayName: typeof input.displayName === 'string' ? input.displayName : '测试 Provider', contextWindow: Number(input.contextWindow) || DEFAULT_PROVIDER_CONTEXT_WINDOW, hasApiKey: true };
     return testProviderConnection(config, apiKey);
   });
-  ipcMain.handle('browser-use:get', (): BrowserUseConfig => store.getBrowserUseConfig());
-  ipcMain.handle('browser-use:save', async (_event, raw: unknown): Promise<BrowserUseConfig> => {
+  handleMain('browser-use:get', (): BrowserUseConfig => store.getBrowserUseConfig());
+  handleMain('browser-use:save', async (_event, raw: unknown): Promise<BrowserUseConfig> => {
     if (!raw || typeof raw !== 'object' || typeof (raw as Record<string, unknown>).enabled !== 'boolean') throw new Error('Browser Use enabled state is required.');
     const config = store.saveBrowserUseConfig({ enabled: (raw as Record<string, unknown>).enabled === true });
     if (!config.enabled) await browserUse.disable();
     return config;
   });
-  ipcMain.handle('computer-use:get', (): ComputerUseConfig => store.getComputerUseConfig());
-  ipcMain.handle('computer-use:save', async (_event, raw: unknown): Promise<ComputerUseConfig> => {
+  handleMain('computer-use:get', (): ComputerUseConfig => store.getComputerUseConfig());
+  handleMain('computer-use:save', async (_event, raw: unknown): Promise<ComputerUseConfig> => {
     if (!raw || typeof raw !== 'object' || typeof (raw as Record<string, unknown>).enabled !== 'boolean') throw new Error('Computer Use enabled state is required.');
     const config = store.saveComputerUseConfig({ enabled: (raw as Record<string, unknown>).enabled === true });
     if (config.enabled) await browserUse.disable();
     return config;
   });
-  ipcMain.handle('reasoning:get', (_event, conversationId: unknown): ReasoningSelection => {
+  handleMain('reasoning:get', (_event, conversationId: unknown): ReasoningSelection => {
     if (typeof conversationId !== 'string' || !conversationId.trim()) throw new Error('Conversation ID is required.');
     return store.getReasoningSelection(conversationId);
   });
-  ipcMain.handle('reasoning:save', (_event, conversationId: unknown, raw: unknown): ReasoningSelection => {
+  handleMain('reasoning:save', (_event, conversationId: unknown, raw: unknown): ReasoningSelection => {
     if (typeof conversationId !== 'string' || !conversationId.trim()) throw new Error('Conversation ID is required.');
     if (raw !== 'default' && raw !== 'off' && raw !== 'low' && raw !== 'medium' && raw !== 'high' && raw !== 'xhigh' && raw !== 'max') throw new Error('Unsupported reasoning level.');
     return store.saveReasoningSelection(conversationId, raw);
   });
-  ipcMain.handle('attachments:pick', async (event) => {
+  handleMain('permissions:get', (_event, conversationId: unknown): ToolPermissionMode => {
+    const id = assertText(conversationId, 'conversationId');
+    store.getConversation(id);
+    return sessionPermissionModes.get(id) ?? store.getToolPermissionMode(id);
+  });
+  handleMain('permissions:save', (_event, conversationId: unknown, raw: unknown): ToolPermissionMode => {
+    const id = assertText(conversationId, 'conversationId');
+    store.getConversation(id);
+    if (!isToolPermissionMode(raw)) throw new Error('Unsupported tool permission mode.');
+    if (raw === 'full_session') {
+      sessionPermissionModes.set(id, raw);
+      return raw;
+    }
+    sessionPermissionModes.delete(id);
+    return store.saveToolPermissionMode(id, raw);
+  });
+  handleMain('attachments:pick', async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender);
     const options: OpenDialogOptions = { properties: ['openFile', 'multiSelections'], filters: [{ name: '支持的文件', extensions: Object.keys(allowedAttachmentTypes).map((extension) => extension.slice(1)) }] };
     const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
@@ -1146,11 +1233,11 @@ app.whenReady().then(() => {
     selected.forEach((attachment) => attachments.set(attachment.id, attachment));
     return selected.map(({ data: _data, ...attachment }) => attachment);
   });
-  ipcMain.handle('attachments:release', (_event, attachmentIds: unknown) => {
+  handleMain('attachments:release', (_event, attachmentIds: unknown) => {
     if (!Array.isArray(attachmentIds)) return;
     attachmentIds.forEach((id) => { if (typeof id === 'string') attachments.delete(id); });
   });
-  ipcMain.handle('runs:start', (event, conversationId: unknown, content: unknown, attachmentIds: unknown, rawReasoningLevel: unknown) => {
+  handleMain('runs:start', (event, conversationId: unknown, content: unknown, attachmentIds: unknown, rawReasoningLevel: unknown) => {
     const id = assertText(conversationId, 'conversationId');
     backupRunAdmission.assertRunAllowed();
     const text = typeof content === 'string' ? content.trim() : '';
@@ -1173,12 +1260,13 @@ app.whenReady().then(() => {
     const userMessage = store.addMessage(id, 'user', text);
     store.startRun(runId, id, userMessage.id);
     const controller = new AbortController();
-    activeRuns.set(runId, { controller, conversationId: id, inputMessageId: userMessage.id });
+    const permissionMode = sessionPermissionModes.get(id) ?? store.getToolPermissionMode(id);
+    activeRuns.set(runId, { controller, conversationId: id, inputMessageId: userMessage.id, permissionMode });
     emit(event.sender, { type: 'accepted', runId, conversationId: id });
     setImmediate(() => { void executeRun(event.sender, runId, id, config, apiKey, runAttachments, reasoningLevel); });
     return { runId, userMessage, conversation: store.getConversation(id) };
   });
-  ipcMain.handle('runs:retry', (event, conversationId: unknown, inputMessageId: unknown, content: unknown, rawReasoningLevel: unknown) => {
+  handleMain('runs:retry', (event, conversationId: unknown, inputMessageId: unknown, content: unknown, rawReasoningLevel: unknown) => {
     const id = assertText(conversationId, 'conversationId');
     backupRunAdmission.assertRunAllowed();
     const messageId = assertText(inputMessageId, 'inputMessageId');
@@ -1203,16 +1291,17 @@ app.whenReady().then(() => {
     const runId = crypto.randomUUID();
     store.startRun(runId, id, userMessage.id);
     const controller = new AbortController();
-    activeRuns.set(runId, { controller, conversationId: id, inputMessageId: userMessage.id, replayUser });
+    const permissionMode = sessionPermissionModes.get(id) ?? store.getToolPermissionMode(id);
+    activeRuns.set(runId, { controller, conversationId: id, inputMessageId: userMessage.id, permissionMode, replayUser });
     emit(event.sender, { type: 'accepted', runId, conversationId: id });
     setImmediate(() => { void executeRun(event.sender, runId, id, config, apiKey, [], reasoningLevel); });
     return { runId, userMessage, conversation: store.getConversation(id) };
   });
-  ipcMain.handle('runs:cancel', (_event, runId: unknown) => {
+  handleMain('runs:cancel', (_event, runId: unknown) => {
     const run = activeRuns.get(assertText(runId, 'runId'));
     if (run) run.controller.abort();
   });
-  ipcMain.handle('runs:approve', (event, approvalId: unknown, approved: unknown) => {
+  handleMain('runs:approve', (event, approvalId: unknown, approved: unknown) => {
     const id = assertText(approvalId, 'approvalId');
     const pending = pendingApprovals.get(id);
     if (!pending || pending.senderId !== event.sender.id) return;

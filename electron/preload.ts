@@ -88,6 +88,10 @@ contextBridge.exposeInMainWorld('desktopBridge', {
     get: (conversationId: string) => ipcRenderer.invoke('reasoning:get', conversationId),
     save: (conversationId: string, level: unknown) => ipcRenderer.invoke('reasoning:save', conversationId, level),
   },
+  permissions: {
+    get: (conversationId: string) => ipcRenderer.invoke('permissions:get', conversationId),
+    save: (conversationId: string, mode: unknown) => ipcRenderer.invoke('permissions:save', conversationId, mode),
+  },
   attachments: {
     pick: () => ipcRenderer.invoke('attachments:pick'),
     release: (attachmentIds: string[]) => ipcRenderer.invoke('attachments:release', attachmentIds),
