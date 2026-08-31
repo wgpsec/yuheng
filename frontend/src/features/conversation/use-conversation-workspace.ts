@@ -23,6 +23,9 @@ const displayMessage = (message: Message): TranscriptMessage => ({
 
 const sortConversations = (items: SidebarConversation[]): SidebarConversation[] => [...items].sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
 
+export const isCurrentConversationRequest = (requestedId: string, requestVersion: number, activeId: string, currentVersion: number): boolean => requestedId === activeId && requestVersion === currentVersion;
+export const acceptsRunEventScope = (activeRunId: string | undefined, eventRunId: string): boolean => !activeRunId || activeRunId === eventRunId;
+
 type Options = {
   initialConversation?: string;
   providers: ProviderConfig[];
@@ -42,18 +45,18 @@ export function useConversationWorkspace(bridge: DesktopBridge | undefined, opti
   const [messages, setMessages] = useState<Record<string, TranscriptMessage[]>>(fallbackMessages);
   const [runs, setRuns] = useState<Record<string, RunSummary[]>>({});
   const [activities, setActivities] = useState<Record<string, ToolActivity[]>>({});
-  const [activeRun, setActiveRun] = useState<{ id: string; conversationId: string } | null>(null);
+  const [activeRunIds, setActiveRunIds] = useState<Record<string, string>>({});
   const [interruptedRun, setInterruptedRun] = useState<RunSummary | null>(null);
   const [reasoningSelection, setReasoningSelection] = useState<ReasoningSelection>('default');
   const [permissionMode, setPermissionMode] = useState<ToolPermissionMode>('smart');
   const [error, setError] = useState<string | null>(null);
   const [workspaceLoaded, setWorkspaceLoaded] = useState(!bridge);
   const activeRef = useRef(activeId);
-  const activeRunRef = useRef<{ id: string; conversationId: string } | null>(null);
+  const activeRunIdsRef = useRef<Record<string, string>>({});
   const loadVersionRef = useRef(0);
   const optionsRef = useRef(options);
   activeRef.current = activeId;
-  activeRunRef.current = activeRun;
+  activeRunIdsRef.current = activeRunIds;
   optionsRef.current = options;
 
   const reportError = useCallback((reason: unknown, fallback: string) => {
@@ -86,13 +89,13 @@ export function useConversationWorkspace(bridge: DesktopBridge | undefined, opti
     const version = ++loadVersionRef.current;
     let mounted = true;
     void Promise.all([bridge.conversations.messages(conversationId), bridge.runs.list(conversationId)]).then(([nextMessages, nextRuns]) => {
-      if (!mounted || version !== loadVersionRef.current || activeRef.current !== conversationId) return;
+      if (!mounted || !isCurrentConversationRequest(conversationId, version, activeRef.current, loadVersionRef.current)) return;
       setMessages((current) => ({ ...current, [conversationId]: nextMessages.map(displayMessage) }));
       setRuns((current) => ({ ...current, [conversationId]: nextRuns }));
       const interrupted = nextRuns.find((run) => run.status === 'interrupted');
       setInterruptedRun(interrupted ?? null);
       setActivities((current) => ({ ...current, [conversationId]: nextRuns.flatMap((run) => run.activities).map((activity) => ({ id: activity.id, toolName: activity.toolName, status: activity.status, input: activity.input ?? undefined, output: activity.output ?? undefined, startedAt: activity.startedAt, finishedAt: activity.finishedAt, artifacts: activity.artifacts })) }));
-    }).catch((reason) => { if (mounted && version === loadVersionRef.current && activeRef.current === conversationId) reportError(reason, '加载会话失败。'); });
+    }).catch((reason) => { if (mounted && isCurrentConversationRequest(conversationId, version, activeRef.current, loadVersionRef.current)) reportError(reason, '加载会话失败。'); });
     return () => { mounted = false; loadVersionRef.current += 1; };
   }, [activeId, bridge, reportError]);
 
@@ -101,9 +104,13 @@ export function useConversationWorkspace(bridge: DesktopBridge | undefined, opti
     return bridge.runs.onEvent((event: RunEvent) => {
       if (event.type === 'approval_required') { optionsRef.current.onApprovalRequired?.(event); return; }
       if (event.type === 'approval_resolved') { optionsRef.current.onApprovalResolved?.(event.approvalId); return; }
-      if (event.type === 'accepted') { setActiveRun({ id: event.runId, conversationId: event.conversationId }); return; }
-      const currentRun = activeRunRef.current;
-      if (currentRun && event.conversationId === currentRun.conversationId && event.runId !== currentRun.id) return;
+      if (event.type === 'accepted') {
+        const next = { ...activeRunIdsRef.current, [event.conversationId]: event.runId };
+        activeRunIdsRef.current = next;
+        setActiveRunIds(next);
+        return;
+      }
+      if (!acceptsRunEventScope(activeRunIdsRef.current[event.conversationId], event.runId)) return;
       if (event.type === 'tool_start') {
         setActivities((current) => ({ ...current, [event.conversationId]: [...(current[event.conversationId] ?? []), { id: event.toolCallId, toolName: event.toolName, status: 'running', input: event.input, startedAt: new Date().toISOString() }] })); return;
       }
@@ -122,7 +129,12 @@ export function useConversationWorkspace(bridge: DesktopBridge | undefined, opti
         if (event.conversationId === activeRef.current && event.type === 'failed') reportError(event.error, '运行失败。');
       }
       if (event.type === 'completed' || event.type === 'failed' || event.type === 'cancelled') {
-        setActiveRun((run) => run?.id === event.runId ? null : run);
+        if (activeRunIdsRef.current[event.conversationId] === event.runId) {
+          const next = { ...activeRunIdsRef.current };
+          delete next[event.conversationId];
+          activeRunIdsRef.current = next;
+          setActiveRunIds(next);
+        }
         void bridge.runs.list(event.conversationId).then((next) => setRuns((current) => ({ ...current, [event.conversationId]: next }))).catch(() => undefined);
       }
     });
@@ -145,8 +157,9 @@ export function useConversationWorkspace(bridge: DesktopBridge | undefined, opti
   const refresh = useCallback(async () => { if (!bridge) return []; const next = sortConversations(await bridge.conversations.list(true)); setItems(next); return next; }, [bridge]);
   const activeMessages = messages[activeId] ?? [];
   const activeActivities = activities[activeId] ?? [];
-  const activeRuns = runs[activeId] ?? [];
-  const isThinking = activeRun?.conversationId === activeId;
+  const conversationRuns = runs[activeId] ?? [];
+  const activeRun = activeRunIds[activeId] ? { id: activeRunIds[activeId], conversationId: activeId } : null;
+  const isThinking = Boolean(activeRun);
   const activeTitle = useMemo(() => items.find((item) => item.id === activeId)?.title ?? '新会话', [activeId, items]);
-  return { items, setItems, projects, setProjects, workspaceLoaded, activeId, setActiveId: select, activeProjectId, setActiveProjectId, activeProfileId, setActiveProfileId, messages, setMessages, runs, setRuns, activities, setActivities, activeRun, setActiveRun, interruptedRun, setInterruptedRun, reasoningSelection, setReasoningSelection, permissionMode, setPermissionMode, error, clearError, activeMessages, activeActivities, activeRuns, isThinking, activeTitle, refresh };
+  return { items, setItems, projects, setProjects, workspaceLoaded, activeId, setActiveId: select, activeProjectId, setActiveProjectId, activeProfileId, setActiveProfileId, messages, setMessages, runs, setRuns, activities, setActivities, activeRun, interruptedRun, setInterruptedRun, reasoningSelection, setReasoningSelection, permissionMode, setPermissionMode, error, clearError, activeMessages, activeActivities, conversationRuns, isThinking, activeTitle, refresh };
 }
