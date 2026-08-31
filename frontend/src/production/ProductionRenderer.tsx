@@ -339,6 +339,7 @@ function SettingsWorkspace({ appInfo, current, providers, browserUseConfig, comp
   const page = sectionCopy[activeSection];
 
   return <section className="settings-layout" aria-label="玉衡设置">
+    <div className="settings-window-drag-region" aria-hidden="true" />
     <aside className="settings-navigation">
       <div className="settings-navigation-brand"><strong>玉衡</strong><span>设置</span></div>
       <nav aria-label="设置页面">
