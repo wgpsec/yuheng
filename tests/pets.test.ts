@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
-import { deleteCodexPetPackage, importCodexPetPackage, inspectCodexPets, isCodexPetRuntimeUsable, scanCodexPets, validateCodexPetManifest } from '../electron/pets';
+import { deleteCodexPetPackage, importCodexPetPackage, inspectCodexPets, isCodexPetRuntimeUsable, normalizePetImageSize, scanCodexPets, validateCodexPetManifest } from '../electron/pets';
 
 function vp8xWebp(width: number, height: number): Buffer {
   const buffer = Buffer.alloc(30);
@@ -18,6 +18,13 @@ function vp8xWebp(width: number, height: number): Buffer {
 }
 
 describe('Codex Pet compatibility', () => {
+  it('does not turn an empty native image size into a dimensions error', () => {
+    assert.equal(normalizePetImageSize({ width: 0, height: 0 }), undefined);
+    assert.deepEqual(normalizePetImageSize({ width: 1_536, height: 1_872 }), { width: 1_536, height: 1_872 });
+    const report = validateCodexPetManifest({ id: 'guga', displayName: 'Guga', spritesheetPath: 'spritesheet.webp', rootPath: '.', source: 'codex', columns: 8, rows: 9, cellWidth: 192, cellHeight: 208 }, { width: 0, height: 0 });
+    assert.equal(report.issues.some((item) => item.code === 'dimensions'), false);
+  });
+
   it('reports state fallbacks and actionable sprite compatibility issues', () => {
     const report = validateCodexPetManifest({
       id: 'report-me',

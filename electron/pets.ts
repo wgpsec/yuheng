@@ -93,12 +93,14 @@ function issue(code: CodexPetValidationIssue['code'], severity: CodexPetValidati
 
 export function validateCodexPetManifest(manifest: CodexPetManifest, options: CodexPetValidationOptions = {}): CodexPetCompatibilityReport {
   const expected = { width: manifest.columns * manifest.cellWidth, height: manifest.rows * manifest.cellHeight };
-  const actual = { width: options.width ?? expected.width, height: options.height ?? expected.height };
+  // Some Electron/nativeImage builds return 0x0 for a valid WebP they cannot
+  // decode. Treat an incomplete measurement as unknown and keep the header
+  // dimensions authoritative instead of reporting a false structural error.
+  const measured = normalizePetImageSize({ width: options.width ?? 0, height: options.height ?? 0 });
+  const actual = measured ?? expected;
   const issues: CodexPetValidationIssue[] = [];
-  if (options.width !== undefined || options.height !== undefined) {
-    if (actual.width !== expected.width || actual.height !== expected.height) {
-      issues.push(issue('dimensions', 'error', `精灵表尺寸为 ${actual.width}×${actual.height}，应为 ${expected.width}×${expected.height}。请调整画布或 manifest。`));
-    }
+  if (measured && (actual.width !== expected.width || actual.height !== expected.height)) {
+    issues.push(issue('dimensions', 'error', `精灵表尺寸为 ${actual.width}×${actual.height}，应为 ${expected.width}×${expected.height}。请调整画布或 manifest。`));
   }
   const blankFrames = [...new Set((options.blankFrameIndices ?? []).filter((index) => Number.isInteger(index) && index >= 0))].sort((a, b) => a - b);
   if (blankFrames.length > 0) issues.push(issue('blank_frames', 'error', `发现 ${blankFrames.length} 个空白帧（${blankFrames.slice(0, 5).join('、')}${blankFrames.length > 5 ? '…' : ''}）。请补齐精灵内容。`));
@@ -143,6 +145,13 @@ export function webpDimensions(buffer: Uint8Array): { width: number; height: num
     offset = payload + size + (size % 2);
   }
   return null;
+}
+
+/** Treat an empty native image result as an unknown size, not a 0x0 image. */
+export function normalizePetImageSize(size: { width: number; height: number }): { width: number; height: number } | undefined {
+  return Number.isFinite(size.width) && Number.isFinite(size.height) && size.width > 0 && size.height > 0
+    ? { width: size.width, height: size.height }
+    : undefined;
 }
 
 function invalidCatalogReport(message: string): CodexPetCompatibilityReport {

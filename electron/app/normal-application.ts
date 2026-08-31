@@ -14,7 +14,7 @@ import { isAgentProfileId } from '../agent-profiles';
 import { testProviderConnection, type ProviderTestResult } from '../provider-test';
 import { createFullBackup } from '../full-backup';
 import { BackupRunAdmission } from '../backup-run-admission';
-import { deleteCodexPetPackage, importCodexPetPackage, inspectCodexPets, isCodexPetRuntimeUsable, readCodexPetAsset, validateCodexPetManifest, type CodexPetCatalogEntry, type CodexPetManifest } from '../pets';
+import { deleteCodexPetPackage, importCodexPetPackage, inspectCodexPets, isCodexPetRuntimeUsable, normalizePetImageSize, readCodexPetAsset, validateCodexPetManifest, type CodexPetCatalogEntry, type CodexPetManifest } from '../pets';
 import { parsePetOpenTarget, PetStateCoordinator, petFeedbackForRunEvent, petFeedbackForState, type PetFeedback, type PetOpenTarget, type PetRunTarget, type PetState } from '../pet-state';
 import { TaskPetReminderQueue, taskReminderFeedback } from '../task-pet-reminders';
 import { IpcSenderAuthorizer } from '../ipc-security';
@@ -179,7 +179,8 @@ async function loadCodexPetCatalog(): Promise<CodexPetCatalogEntry[]> {
       const buffer = await readCodexPetAsset(manifest);
       const image = nativeImage.createFromBuffer(buffer);
       const size = image.getSize();
-      const report = validateCodexPetManifest(manifest, { width: size.width, height: size.height, blankFrameIndices: blankPetFrames(manifest, buffer) });
+      const decodedSize = normalizePetImageSize(size);
+      const report = validateCodexPetManifest(manifest, { ...(decodedSize ?? {}), blankFrameIndices: blankPetFrames(manifest, buffer) });
       const issues = [...entry.report.issues, ...report.issues].filter((item, index, all) => all.findIndex((candidate) => candidate.code === item.code && candidate.message === item.message) === index);
       entry.report = {
         ...report,
