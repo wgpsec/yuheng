@@ -8,3 +8,17 @@
 - 不要做过度兜底设计
 - 不要过度防御性编程
 - 永远不要使用Worktree
+
+## Agent skills
+
+### Issue tracker
+
+使用当前仓库的 GitHub Issues。详见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+使用默认五阶段标签。详见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+采用 single-context 布局。详见 `docs/agents/domain.md`。
