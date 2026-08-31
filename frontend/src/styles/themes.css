@@ -1,0 +1,29 @@
+@media (max-width: 560px) {
+  .theme-options { grid-template-columns: 1fr; }
+  .pet-preview-panel { grid-template-columns: 1fr; }
+  .pet-preview-stage { width: 100%; }
+  .about-product { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .release-list summary { grid-template-columns: 88px minmax(0, 1fr) 18px; gap: 8px; }
+  .release-version { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .release-list ul { margin-left: 96px; }
+}
+
+@media (max-width: 1120px) {
+  .settings-page { padding-right: 24px; padding-left: 24px; }
+  .conversation-start { width: min(680px, calc(100% - 44px)); }
+  .context-window-status { width: 108px; }
+  .context-window-copy > span { display: none; }
+  .task-page-header { align-items: flex-start; flex-direction: column; gap: 14px; }
+  .task-board-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+}
+
+@media (max-width: 720px) {
+  .settings-page label { grid-template-columns: 1fr; gap: 6px; }
+  .task-list-header, .task-list-row { grid-template-columns: minmax(160px, 1fr) 110px 70px; gap: 8px; padding: 0 10px; }
+  .task-list-header span:last-child, .task-list-row .task-list-due { display: none; }
+  .task-view-switcher button { padding: 0 6px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

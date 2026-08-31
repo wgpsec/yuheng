@@ -1,0 +1,78 @@
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  color: #e6ebed;
+  background: #101214;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --surface-root: #101214;
+  --surface-sidebar: #151719;
+  --surface-raised: #1a1e21;
+  --surface-hover: #24292d;
+  --stroke-subtle: #252a2e;
+  --stroke-default: #353c41;
+  --text-primary: #e6ebed;
+  --text-secondary: #a0aab0;
+  --text-tertiary: #737e84;
+  --text-muted: #59636a;
+  --accent: #dce6e8;
+  --accent-ink: #15191b;
+  --warning: #d7a85b;
+  /* Typography baseline: visible product text starts at 13px. */
+  --font-size-body: 13px;
+  --font-size-label: 13px;
+  --font-size-caption: 13px;
+  --font-size-heading-sm: 16px;
+  --font-size-heading-md: 22px;
+  --font-size-heading-lg: 25px;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --surface-root: #f3f5f6;
+  --surface-sidebar: #e9edef;
+  --surface-raised: #ffffff;
+  --surface-hover: #dfe5e7;
+  --stroke-subtle: #d6dde0;
+  --stroke-default: #bdc8cc;
+  --text-primary: #182125;
+  --text-secondary: #4d5b61;
+  --text-tertiary: #6d7a80;
+  --text-muted: #89959a;
+  --accent: #20363d;
+  --accent-ink: #f4f7f8;
+  --warning: #a96e17;
+}
+
+:root[data-theme="notion"] {
+  color-scheme: light;
+  --surface-root: #ffffff;
+  --surface-sidebar: #f7f7f5;
+  --surface-raised: #ffffff;
+  --surface-hover: #efefed;
+  --stroke-subtle: #e9e9e7;
+  --stroke-default: #d7d7d4;
+  --text-primary: #37352f;
+  --text-secondary: #5f5e5b;
+  --text-tertiary: #787774;
+  --text-muted: #9b9a97;
+  --accent: #37352f;
+  --accent-ink: #ffffff;
+  --warning: #a96e17;
+}
+
+:root[data-theme="graphite"] {
+  --surface-root: #171a1d;
+  --surface-sidebar: #1d2124;
+  --surface-raised: #23282c;
+  --surface-hover: #2d3439;
+  --stroke-subtle: #30373c;
+  --stroke-default: #414b51;
+  --text-primary: #e3e7e8;
+  --text-secondary: #aeb8bc;
+  --text-tertiary: #849096;
+  --text-muted: #68747a;
+  --accent: #d2dde0;
+  --accent-ink: #1b2225;
+  --warning: #d4a252;
+}

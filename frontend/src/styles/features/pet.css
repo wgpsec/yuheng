@@ -1,0 +1,106 @@
+/* The pet is rendered in an isolated transparent Electron window. */
+html:has(.desktop-pet), body:has(.desktop-pet), body:has(.desktop-pet) #root { min-width: 0; min-height: 0; background: transparent; }
+.desktop-pet { position: relative; display: grid; width: 100vw; height: 100vh; place-items: center; overflow: visible; pointer-events: auto; touch-action: none; user-select: none; background: transparent; -webkit-app-region: no-drag; }
+.desktop-pet-button { position: relative; display: grid; width: 150px; height: 150px; place-items: center; background: transparent; cursor: grab; -webkit-app-region: no-drag; }
+.desktop-pet-button:active { cursor: grabbing; }
+.desktop-pet-click-target { position: relative; display: grid; width: 126px; height: 126px; place-items: center; outline: 0; cursor: grab; -webkit-app-region: no-drag; }
+.desktop-pet-click-target:active { cursor: grabbing; }
+.desktop-pet-click-target:focus-visible { outline: 2px solid #d9eee5aa; outline-offset: 4px; border-radius: 50%; }
+.desktop-pet-aura { position: absolute; inset: 14px; border-radius: 50%; background: radial-gradient(circle, #80b5a82b 0 35%, transparent 72%); opacity: .9; animation: pet-aura 3.8s ease-in-out infinite; }
+.desktop-pet-character { position: relative; z-index: 1; display: grid; width: 116px; height: 116px; place-items: center; filter: drop-shadow(0 9px 12px #15221d4d); animation: pet-float 3.8s ease-in-out infinite; }
+.desktop-pet-character svg { width: 100%; height: 100%; overflow: visible; }
+.desktop-pet-character.desktop-pet-codex { width: 154px; height: 168px; filter: drop-shadow(0 9px 12px #15221d4d); overflow: hidden; }
+.desktop-pet-sprite { display: block; width: 192px; height: 208px; flex: none; background-repeat: no-repeat; image-rendering: auto; transform: scale(.8); transform-origin: center bottom; animation: none; }
+.desktop-pet-paused * { animation-play-state: paused !important; }
+.desktop-pet-thinking .desktop-pet-character { animation: pet-thinking 1.35s ease-in-out infinite; }
+.desktop-pet-attention .desktop-pet-character { animation: pet-attention 900ms ease-in-out infinite; }
+.desktop-pet-error .desktop-pet-character { animation: pet-error 1.1s ease-in-out infinite; }
+.desktop-pet-sleeping .desktop-pet-character { animation: pet-float 5.2s ease-in-out infinite; opacity: .72; }
+.desktop-pet-feedback { position: absolute; z-index: 5; top: 4px; left: 50%; display: grid; min-width: 92px; max-width: 164px; gap: 2px; padding: 7px 10px; border: 1px solid #d9eee54d; border-radius: 9px; color: #f1f7f4; background: #19332de8; box-shadow: 0 6px 16px #15221d52; transform: translateX(-50%); pointer-events: none; text-align: center; animation: pet-feedback-in 180ms ease-out both; }
+.desktop-pet-feedback strong { overflow: hidden; font-size: 13px; font-weight: 650; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.desktop-pet-feedback small, .desktop-pet-feedback span { overflow: hidden; color: #c5d9d0; font-size: 13px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.desktop-pet-feedback-attention { border-color: #f2d28d99; }
+.desktop-pet-feedback-error { border-color: #f08e8e99; background: #482626ec; }
+.desktop-pet-feedback-celebrate { border-color: #f2d28dcc; }
+.pet-body { fill: #8bb8a7; stroke: #d9eee5; stroke-width: 2; }
+.pet-ear { fill: #6f9f91; stroke: #d9eee5; stroke-width: 2; stroke-linecap: round; }
+.pet-face { fill: #b9d7c9; opacity: .95; }
+.pet-eye { fill: #19332d; animation: pet-blink 4.5s ease-in-out infinite; transform-origin: center; }
+.pet-mouth { fill: none; stroke: #31564b; stroke-width: 2.2; stroke-linecap: round; }
+.pet-scarf { fill: #456d60; opacity: .95; }
+.pet-badge { fill: #f2d28d; stroke: #fff1c8; stroke-width: 1.5; }
+.desktop-pet-status { position: absolute; z-index: 2; right: 11px; bottom: 19px; display: inline-flex; gap: 3px; align-items: center; padding: 6px 7px; border: 1px solid #d9eee54d; border-radius: 10px; background: #19332dcc; box-shadow: 0 4px 10px #15221d38; }
+.pet-skin-select { display: grid; gap: 7px; margin-top: 16px; color: var(--text-secondary); font-size: 13px; }
+.pet-skin-select select { width: min(360px, 100%); min-height: 34px; padding: 7px 9px; border: 1px solid var(--stroke-default); border-radius: 6px; color: var(--text-primary); background: var(--surface-root); font-size: 13px; }
+.pet-skin-empty { display: block; margin-top: 8px; color: var(--text-muted); font-size: 13px; }
+.desktop-pet-status i { width: 4px; height: 4px; border-radius: 50%; background: #f2d28d; animation: pet-dots 900ms ease-in-out infinite; }
+.desktop-pet-status i:nth-child(2) { animation-delay: 140ms; }
+.desktop-pet-status i:nth-child(3) { animation-delay: 280ms; }
+.desktop-pet-sparkles { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+.desktop-pet-sparkles i { position: absolute; width: 7px; height: 7px; border-radius: 2px; background: #f2d28d; animation: pet-sparkle 850ms ease-out both; }
+.desktop-pet-sparkles i:nth-child(1) { top: 18px; left: 23px; }
+.desktop-pet-sparkles i:nth-child(2) { top: 7px; right: 28px; animation-delay: 90ms; }
+.desktop-pet-sparkles i:nth-child(3) { right: 10px; bottom: 43px; animation-delay: 170ms; }
+.desktop-pet-sparkles i:nth-child(4) { bottom: 20px; left: 19px; animation-delay: 240ms; }
+.desktop-pet-celebrate .desktop-pet-character { animation: pet-celebrate 850ms cubic-bezier(.2, .85, .3, 1) both; }
+.desktop-pet-working .desktop-pet-character { animation: pet-work 1.15s ease-in-out infinite; }
+@keyframes pet-float { 0%, 100% { transform: translateY(2px) rotate(-1deg); } 50% { transform: translateY(-5px) rotate(1deg); } }
+@keyframes pet-aura { 0%, 100% { transform: scale(.92); opacity: .55; } 50% { transform: scale(1.08); opacity: .95; } }
+@keyframes pet-blink { 0%, 45%, 49%, 100% { transform: scaleY(1); } 47% { transform: scaleY(.12); } }
+@keyframes pet-work { 0%, 100% { transform: translateY(2px) rotate(-2deg); } 50% { transform: translateY(-3px) rotate(2deg) scale(1.03); } }
+@keyframes pet-celebrate { 0% { transform: translateY(8px) scale(.86) rotate(-5deg); } 55% { transform: translateY(-10px) scale(1.08) rotate(4deg); } 100% { transform: translateY(0) scale(1) rotate(0); } }
+@keyframes pet-thinking { 0%, 100% { transform: translateY(2px) rotate(-1deg); } 50% { transform: translateY(-4px) rotate(1deg) scale(1.02); } }
+@keyframes pet-attention { 0%, 100% { transform: translateX(0) rotate(0); } 25% { transform: translateX(-3px) rotate(-2deg); } 75% { transform: translateX(3px) rotate(2deg); } }
+@keyframes pet-error { 0%, 100% { transform: translateY(2px) rotate(0); } 35% { transform: translateY(0) rotate(-3deg); } 70% { transform: translateY(2px) rotate(3deg); } }
+@keyframes pet-dots { 0%, 100% { transform: translateY(2px); opacity: .4; } 50% { transform: translateY(-2px); opacity: 1; } }
+@keyframes pet-sparkle { 0% { opacity: 0; transform: translateY(10px) scale(.4) rotate(0); } 35% { opacity: 1; } 100% { opacity: 0; transform: translateY(-16px) scale(1.2) rotate(45deg); } }
+@keyframes pet-feedback-in { from { opacity: 0; transform: translateX(-50%) translateY(4px) scale(.96); } to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); } }
+@media (prefers-reduced-motion: reduce) { .desktop-pet-aura, .desktop-pet-character, .desktop-pet-status i, .desktop-pet-sparkles i, .desktop-pet-feedback { animation: none; } }
+
+.approval-backdrop { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 24px; background: #080a0bcc; animation: lightbox-in 150ms ease-out both; }
+.approval-backdrop.is-closing { animation: lightbox-out 160ms ease-in both; pointer-events: none; }
+.approval-dialog { width: min(460px, 100%); padding: 21px; border: 1px solid var(--stroke-default); border-radius: 8px; background: var(--surface-sidebar); box-shadow: 0 22px 70px #00000066; animation: approval-dialog-in 180ms cubic-bezier(.2, .8, .2, 1) both; }
+.approval-backdrop.is-closing .approval-dialog { animation: approval-dialog-out 160ms ease-in both; }
+@keyframes approval-dialog-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes approval-dialog-out { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(5px) scale(.985); } }
+.approval-dialog-header > span { color: var(--warning); font-size: 13px; font-weight: 650; text-transform: uppercase; }
+.approval-dialog h2 { margin: 8px 0 6px; color: var(--text-primary); font-size: 16px; font-weight: 600; }
+.approval-dialog p { margin: 0; color: var(--text-tertiary); font-size: 13px; }
+.approval-dialog code { color: var(--text-secondary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.approval-dialog pre { max-height: 180px; margin: 17px 0 0; padding: 10px; overflow: auto; border: 1px solid var(--stroke-subtle); border-radius: 6px; color: var(--text-secondary); background: var(--surface-root); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.approval-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 19px; }
+.approval-actions .secondary-action, .approval-actions .send-button, .approval-actions .danger-action { min-height: 30px; padding: 6px 11px; }
+.danger-action { border: 1px solid #a66551; border-radius: 7px; color: #fff5f1; background: #8a4838; font-size: 13px; }
+.danger-action:hover:not(:disabled) { border-color: #c47b65; background: #a25442; }
+.danger-action:disabled { cursor: default; opacity: .55; }
+.permission-confirm-dialog .approval-dialog-header > span { color: #d99178; }
+
+.theme-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; max-width: 620px; }
+.theme-option { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 11px; border: 1px solid var(--stroke-default); border-radius: 7px; color: var(--text-secondary); background: var(--surface-raised); text-align: left; }
+.theme-option:hover, .theme-option.is-selected { border-color: #71868e; color: var(--text-primary); background: var(--surface-hover); }
+.theme-option.is-selected { box-shadow: 0 0 0 2px #8caebc24; }
+.theme-option > span:last-child { display: grid; gap: 3px; min-width: 0; }
+.theme-option strong { color: inherit; font-size: 13px; font-weight: 600; }
+.theme-option small { overflow: hidden; color: var(--text-tertiary); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.theme-swatch { width: 25px; height: 25px; flex: 0 0 auto; border: 1px solid var(--stroke-default); border-radius: 6px; }
+.theme-swatch-dark { background: #293439; }
+.theme-swatch-light { background: #dfe5e7; }
+.theme-swatch-graphite { background: #414b51; }
+.theme-swatch-notion { background: linear-gradient(135deg, #f7f7f5 0 50%, #37352f 50%); }
+.about-product { display: flex; align-items: center; justify-content: space-between; gap: 20px; max-width: 620px; padding: 2px 0 18px; }
+.about-product > div { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.about-product strong { color: var(--text-primary); font-size: 18px; font-weight: 650; }
+.about-product span { color: var(--text-secondary); font-size: 13px; }
+.about-product > small { color: var(--text-tertiary); font-size: 13px; white-space: nowrap; }
+.release-list { max-width: 620px; border-top: 1px solid var(--stroke-subtle); }
+.release-list details { border-bottom: 1px solid var(--stroke-subtle); }
+.release-list summary { display: grid; grid-template-columns: 106px minmax(0, 1fr) 18px; align-items: center; gap: 12px; min-height: 50px; padding: 10px 0; color: var(--text-secondary); cursor: pointer; list-style: none; }
+.release-list summary::-webkit-details-marker { display: none; }
+.release-list summary:focus-visible { outline: 2px solid #8caebc66; outline-offset: 3px; }
+.release-list summary > strong { overflow-wrap: anywhere; color: var(--text-primary); font-size: 13px; font-weight: 600; }
+.release-list summary > svg { color: var(--text-muted); transition: transform 120ms ease; }
+.release-list details[open] summary > svg { transform: rotate(180deg); }
+.release-version { display: inline-flex; align-items: center; gap: 6px; color: var(--text-tertiary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.release-version small { padding: 3px 5px; border: 1px solid #405b51; border-radius: 4px; color: #a9ceb9; background: #1b2a24; font-family: inherit; font-size: 13px; white-space: nowrap; }
+.release-list ul { display: grid; gap: 7px; margin: -1px 0 16px 118px; padding: 0 22px 0 14px; color: var(--text-tertiary); font-size: 13px; line-height: 1.6; }
+.release-list li { padding-left: 2px; }

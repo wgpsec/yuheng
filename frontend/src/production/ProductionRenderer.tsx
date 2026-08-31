@@ -16,6 +16,10 @@ import { taskDraftFromNote } from '../features/notes/task-from-note';
 import { normalizeSettingsSection, type SettingsSection } from './settings-section';
 import { clampSidebarWidth, DEFAULT_SIDEBAR_WIDTH, loadSidebarWidth, MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH, SIDEBAR_WIDTH_STORAGE_KEY } from './sidebar-preferences';
 import { animationForState, nextCodexPetFrame } from './pet-animation';
+import { useTaskWorkspace } from '../features/tasks/use-task-workspace';
+import { useNoteWorkspace } from '../features/notes/use-note-workspace';
+import { useSettingsController, type ThemeName } from '../features/settings/use-settings-controller';
+import { useConversationWorkspace } from '../features/conversation/use-conversation-workspace';
 const NotesWorkspace = lazy(() => import('../features/notes/notes-workspace').then((module) => ({ default: module.NotesWorkspace })));
 
 type WorkspaceTab = { id: string; type: 'conversation' | 'tasks' | 'notes'; resourceId: string };
@@ -32,7 +36,6 @@ const readStoredWorkspaceTabs = (): WorkspaceTab[] => {
 
 const TaskBoard = lazy(() => import('../features/tasks/task-board').then((module) => ({ default: module.TaskBoard })));
 
-type ThemeName = 'dark' | 'light' | 'graphite' | 'notion';
 const fallbackConversations: SidebarConversation[] = [
   { id: 'inbox', projectId: 'personal', title: '收件箱', time: '现在', pinned: false },
   { id: 'weekly-plan', projectId: 'personal', title: '本周计划', time: '昨天', pinned: false },
@@ -437,12 +440,9 @@ function BackupSettings() {
 
 export function ProductionRenderer() {
   const activeBridge = getBridge();
+  const settings = useSettingsController(activeBridge);
+  const { appInfo, provider, setProvider, providers, setProviders, browserUse: browserUseConfig, setBrowserUse: setBrowserUseConfig, computerUse: computerUseConfig, setComputerUse: setComputerUseConfig, theme, setTheme } = settings;
   const [windowFullscreen, setWindowFullscreen] = useState(false);
-  const [conversationItems, setConversationItems] = useState<SidebarConversation[]>(fallbackConversations);
-  const [workspaceLoaded, setWorkspaceLoaded] = useState(!activeBridge);
-  const [conversationProjects, setConversationProjects] = useState<ConversationProject[]>(fallbackProjects);
-  const [activeConversation, setActiveConversation] = useState('inbox');
-  const [activeConversationProject, setActiveConversationProject] = useState('personal');
   const [activeView, setActiveViewState] = useState<'conversation' | 'tasks' | 'notes'>('conversation');
   const [sidebarMode, setSidebarModeState] = useState<'conversation' | 'tasks' | 'notes'>('conversation');
   const setActiveView = (next: 'conversation' | 'tasks' | 'notes') => {
@@ -455,14 +455,7 @@ export function ProductionRenderer() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth);
   const [sidebarResizing, setSidebarResizing] = useState(false);
-  const [messages, setMessages] = useState<Record<string, TranscriptMessage[]>>(fallbackMessages);
-  const [activeRun, setActiveRun] = useState<{ id: string; conversationId: string } | null>(null);
-  const [toolActivities, setToolActivities] = useState<Record<string, ToolActivity[]>>({});
-  const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
-  const [provider, setProvider] = useState<ProviderConfig | null>(null);
-  const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [newProviderId, setNewProviderId] = useState('');
-  const [activeProfileId, setActiveProfileId] = useState<AgentProfileId>(DEFAULT_AGENT_PROFILE_ID);
   const [profileMenuOpen, setProfileMenuOpenState] = useState(false);
   const [providerMenuOpen, setProviderMenuOpenState] = useState(false);
   const [profileMenuClosing, setProfileMenuClosing] = useState(false);
@@ -485,45 +478,44 @@ export function ProductionRenderer() {
     setProviderMenuClosing(true);
     providerMenuCloseTimerRef.current = window.setTimeout(() => { setProviderMenuOpenState(false); setProviderMenuClosing(false); providerMenuCloseTimerRef.current = null; }, 125);
   };
-  const [browserUseConfig, setBrowserUseConfig] = useState<BrowserUseConfig>({ enabled: false });
-  const [computerUseConfig, setComputerUseConfig] = useState<ComputerUseConfig>({ enabled: false });
-  const [reasoningSelection, setReasoningSelection] = useState<ReasoningSelection>('default');
-  const [permissionMode, setPermissionMode] = useState<ToolPermissionMode>('smart');
   const [permissionConfirmationOpen, setPermissionConfirmationOpen] = useState(false);
   const [permissionSaving, setPermissionSaving] = useState(false);
-  const activeConversationRef = useRef(activeConversation);
-  const [providerOpen, setProviderOpen] = useState(false);
-  const [settingsMounted, setSettingsMounted] = useState(false);
-  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>('provider');
-  const [settingsClosing, setSettingsClosing] = useState(false);
-  const settingsCloseTimerRef = useRef<number | null>(null);
-  const settingsMountedRef = useRef(false);
-  const settingsClosingRef = useRef(false);
+  const providerOpen = settings.mounted;
+  const settingsMounted = settings.mounted;
+  const settingsInitialSection = settings.initialSection;
+  const settingsClosing = settings.closing;
   const [pendingApproval, setPendingApproval] = useState<Extract<RunEvent, { type: 'approval_required' }> | null>(null);
   const [approvalClosing, setApprovalClosing] = useState(false);
   const approvalCloseTimerRef = useRef<number | null>(null);
   const [copiedConversationId, setCopiedConversationId] = useState(false);
-  const [theme, setTheme] = useState<ThemeName>(() => {
-    const saved = typeof localStorage !== 'undefined' ? localStorage.getItem('yuheng-theme') : null;
-    return saved === 'light' || saved === 'graphite' || saved === 'notion' ? saved : 'dark';
-  });
   const [error, setError] = useState<string | null>(null);
-  const [interruptedRun, setInterruptedRun] = useState<RunSummary | null>(null);
-  const [conversationRuns, setConversationRuns] = useState<Record<string, RunSummary[]>>({});
   const [retryDraft, setRetryDraft] = useState<{ messageId: string; content: string } | null>(null);
   const [retryingRun, setRetryingRun] = useState(false);
   const retryingRunRef = useRef(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [taskBoards, setTaskBoards] = useState<TaskBoard[]>([]);
-  const [activeTaskBoardId, setActiveTaskBoardId] = useState('');
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [taskTypes, setTaskTypes] = useState<TaskType[]>([]);
-  const [tasksLoading, setTasksLoading] = useState(Boolean(activeBridge));
   const [requestedOpenTaskId, setRequestedOpenTaskId] = useState<string | null>(null);
   const [taskActionRequest, setTaskActionRequest] = useState<{ kind: 'today' | 'quick_record'; id: number } | null>(null);
-  const [activeNoteId, setActiveNoteId] = useState<string | null>(() => typeof localStorage !== 'undefined' ? localStorage.getItem('yuheng-active-note') : null);
-  const [noteTitles, setNoteTitles] = useState<Record<string, string>>({});
-  const [notesRevision, setNotesRevision] = useState(0);
+  const taskWorkspace = useTaskWorkspace(activeBridge, ({ boardId, taskId, action }) => {
+    settings.close();
+    setRequestedOpenTaskId(taskId ?? null);
+    if (action) setTaskActionRequest({ kind: action, id: Date.now() });
+    openWorkspaceTab('tasks', boardId);
+  });
+  const { boards: taskBoards, activeBoardId: activeTaskBoardId, setActiveBoardId: setActiveTaskBoardId, tasks, types: taskTypes, loading: tasksLoading } = taskWorkspace;
+  const noteWorkspace = useNoteWorkspace(activeBridge);
+  const { activeNoteId, setActiveNoteId, titles: noteTitles, revision: notesRevision, notifyChanged: notifyNotesChanged } = noteWorkspace;
+  const conversation = useConversationWorkspace(activeBridge, {
+    providers,
+    provider,
+    onOpenSettings: settings.open,
+    onError: (message) => { if (message) setError(message); },
+    onApprovalRequired: (event) => { if (approvalCloseTimerRef.current !== null) window.clearTimeout(approvalCloseTimerRef.current); setApprovalClosing(false); setPendingApproval(event); },
+    onApprovalResolved: (approvalId) => { if (pendingApproval?.approvalId === approvalId) setPendingApproval(null); },
+  });
+  const { items: conversationItems, setItems: setConversationItems, projects: conversationProjects, setProjects: setConversationProjects, workspaceLoaded, activeId: activeConversation, setActiveId: setActiveConversation, activeProjectId: activeConversationProject, setActiveProjectId: setActiveConversationProject, activeProfileId, setActiveProfileId, messages, setMessages, runs: conversationRuns, setRuns: setConversationRuns, activities: toolActivities, setActivities: setToolActivities, activeRun, setActiveRun, interruptedRun, setInterruptedRun, reasoningSelection, setReasoningSelection, permissionMode, setPermissionMode, activeMessages, activeActivities, isThinking, activeTitle, refresh: refreshConversationList } = conversation;
+  useEffect(() => {
+    setNewProviderId((current) => providers.some((item) => item.id === current) ? current : (provider?.id ?? providers[0]?.id ?? ''));
+  }, [provider, providers]);
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTab[]>(readStoredWorkspaceTabs);
   const [activeTabId, setActiveTabId] = useState(() => {
     const tabs = readStoredWorkspaceTabs();
@@ -542,18 +534,6 @@ export function ProductionRenderer() {
     return activeBridge.app.onFullscreen(setWindowFullscreen);
   }, [activeBridge]);
   useEffect(() => { localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth)); }, [sidebarWidth]);
-  useEffect(() => {
-    if (!activeBridge) return;
-    void activeBridge.notes.list(true).then((items) => setNoteTitles(Object.fromEntries(items.map((note) => [note.id, note.title])))).catch(() => undefined);
-  }, [activeBridge]);
-  useEffect(() => {
-    const handleTitleChange = (event: Event) => {
-      const detail = (event as CustomEvent<{ id?: string; title?: string }>).detail;
-      if (detail?.id && typeof detail.title === 'string') setNoteTitles((current) => ({ ...current, [detail.id as string]: detail.title as string }));
-    };
-    window.addEventListener('yuheng-note-title-change', handleTitleChange);
-    return () => window.removeEventListener('yuheng-note-title-change', handleTitleChange);
-  }, []);
   useEffect(() => {
     if (typeof localStorage === 'undefined') return;
     localStorage.setItem('yuheng-workspace-tabs', JSON.stringify(workspaceTabs));
@@ -574,7 +554,6 @@ export function ProductionRenderer() {
     if (type === 'conversation') setActiveConversation(resourceId);
     if (type === 'tasks') setActiveTaskBoardId(resourceId);
     if (type === 'notes') setActiveNoteId(resourceId);
-    if (type === 'notes') void activeBridge?.notes.get(resourceId).then((note) => { if (note) setNoteTitles((current) => ({ ...current, [note.id]: note.title })); }).catch(() => undefined);
   };
   const closeWorkspaceTab = (id: string) => {
     const index = workspaceTabs.findIndex((tab) => tab.id === id);
@@ -624,46 +603,13 @@ export function ProductionRenderer() {
     }, 170);
   };
 
-  const openSettings = (section?: unknown) => {
-    setSettingsInitialSection(normalizeSettingsSection(section));
-    if (settingsCloseTimerRef.current !== null) window.clearTimeout(settingsCloseTimerRef.current);
-    settingsMountedRef.current = true;
-    settingsClosingRef.current = false;
-    setSettingsMounted(true);
-    setSettingsClosing(false);
-    setProviderOpen(true);
-  };
-  const closeSettings = () => {
-    if (!settingsMountedRef.current || settingsClosingRef.current) return;
-    setProviderOpen(false);
-    settingsClosingRef.current = true;
-    setSettingsClosing(true);
-    if (settingsCloseTimerRef.current !== null) window.clearTimeout(settingsCloseTimerRef.current);
-    settingsCloseTimerRef.current = window.setTimeout(() => {
-      setSettingsMounted(false);
-      setSettingsClosing(false);
-      settingsMountedRef.current = false;
-      settingsClosingRef.current = false;
-      settingsCloseTimerRef.current = null;
-    }, 190);
-  };
-  useEffect(() => {
-    if (!activeBridge) return;
-    return activeBridge.pet.onOpenSettings((section) => openSettings(normalizeSettingsSection(section)));
-  }, [activeBridge]);
-  settingsMountedRef.current = settingsMounted;
-  settingsClosingRef.current = settingsClosing;
+  const openSettings = settings.open;
+  const closeSettings = settings.close;
   useEffect(() => () => {
-    if (settingsCloseTimerRef.current !== null) window.clearTimeout(settingsCloseTimerRef.current);
     if (approvalCloseTimerRef.current !== null) window.clearTimeout(approvalCloseTimerRef.current);
     if (profileMenuCloseTimerRef.current !== null) window.clearTimeout(profileMenuCloseTimerRef.current);
     if (providerMenuCloseTimerRef.current !== null) window.clearTimeout(providerMenuCloseTimerRef.current);
   }, []);
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem('yuheng-theme', theme);
-  }, [theme]);
 
   useEffect(() => {
     const handleShortcut = (event: globalThis.KeyboardEvent) => {
@@ -675,66 +621,6 @@ export function ProductionRenderer() {
     window.addEventListener('keydown', handleShortcut);
     return () => window.removeEventListener('keydown', handleShortcut);
   }, []);
-
-  useEffect(() => {
-    if (!activeBridge) return;
-    let mounted = true;
-    void Promise.all([activeBridge.conversations.list(true), activeBridge.conversations.projects.list(), activeBridge.provider.get(), activeBridge.provider.list(), activeBridge.browserUse.get(), activeBridge.computerUse.get(), activeBridge.tasks.boards.list()]).then(([items, projects, configuredProvider, configuredProviders, configuredBrowserUse, configuredComputerUse, storedTaskBoards]) => {
-      if (!mounted) return;
-      setConversationItems(sortConversations(items));
-      setConversationProjects(projects);
-      setProvider(configuredProvider);
-      setProviders(configuredProviders);
-      setNewProviderId(configuredProvider?.id ?? configuredProviders[0]?.id ?? '');
-      setBrowserUseConfig(configuredBrowserUse);
-      setComputerUseConfig(configuredComputerUse);
-      setTaskBoards(storedTaskBoards);
-      setWorkspaceLoaded(true);
-      setActiveTaskBoardId((current) => storedTaskBoards.some((board) => board.id === current) ? current : (storedTaskBoards[0]?.id ?? ''));
-      const initialConversation = items.find((item) => !item.archived) ?? items[0];
-      if (initialConversation) {
-        setActiveConversation(initialConversation.id);
-        setActiveConversationProject(initialConversation.projectId);
-        setActiveProfileId(initialConversation.profileId ?? DEFAULT_AGENT_PROFILE_ID);
-        if (initialConversation.providerId) setProvider(configuredProviders.find((item) => item.id === initialConversation.providerId) ?? configuredProvider);
-      }
-    }).catch((reason) => { if (mounted) { setWorkspaceLoaded(true); setTasksLoading(false); setError(reason instanceof Error ? reason.message : '加载本地数据失败。'); } });
-    return () => { mounted = false; };
-  }, [activeBridge]);
-
-  useEffect(() => {
-    if (!activeBridge) return;
-    let mounted = true;
-    void activeBridge.app.getInfo().then((info) => { if (mounted) setAppInfo(info); }).catch(() => { /* Settings keeps a neutral fallback when app metadata is unavailable. */ });
-    return () => { mounted = false; };
-  }, [activeBridge]);
-
-  useEffect(() => {
-    if (!activeBridge) return;
-    let mounted = true;
-    void activeBridge.reasoning.get(activeConversation).then((selection) => {
-      if (mounted) setReasoningSelection(selection);
-    }).catch((reason) => {
-      if (mounted) setError(reason instanceof Error ? reason.message : '加载会话推理设置失败。');
-    });
-    return () => { mounted = false; };
-  }, [activeBridge, activeConversation]);
-
-  useEffect(() => {
-    activeConversationRef.current = activeConversation;
-    setPermissionConfirmationOpen(false);
-    setPermissionMode('smart');
-    if (!activeBridge) {
-      return;
-    }
-    let mounted = true;
-    void activeBridge.permissions.get(activeConversation).then((mode) => {
-      if (mounted) setPermissionMode(mode);
-    }).catch((reason) => {
-      if (mounted) setError(reason instanceof Error ? reason.message : '加载会话权限设置失败。');
-    });
-    return () => { mounted = false; };
-  }, [activeBridge, activeConversation]);
 
   useEffect(() => {
     if (!permissionConfirmationOpen) return;
@@ -756,126 +642,13 @@ export function ProductionRenderer() {
     return () => document.removeEventListener('mousedown', closeHeaderMenus);
   }, [profileMenuOpen, providerMenuOpen]);
 
-  useEffect(() => {
-    if (!activeBridge || !activeTaskBoardId) return;
-    let mounted = true;
-    setTasksLoading(true);
-    setTasks([]);
-    setTaskTypes([]);
-    void Promise.all([activeBridge.tasks.list(activeTaskBoardId), activeBridge.tasks.types.list(activeTaskBoardId)]).then(([storedTasks, storedTaskTypes]) => {
-      if (!mounted) return;
-      setTasks(storedTasks);
-      setTaskTypes(storedTaskTypes);
-      setTasksLoading(false);
-    }).catch((reason) => { if (mounted) { setTasksLoading(false); setError(reason instanceof Error ? reason.message : '加载任务看板失败。'); } });
-    return () => { mounted = false; };
-  }, [activeBridge, activeTaskBoardId]);
-
-  useEffect(() => {
-    if (!activeBridge) return;
-    const handleTaskEvent = (event: TaskEvent) => {
-      if (event.type === 'changed') {
-        if (event.task.boardId === activeTaskBoardId) setTasks((current) => [event.task, ...current.filter((task) => task.id !== event.task.id)]);
-      } else if (event.type === 'types_changed') {
-        if (event.boardId === activeTaskBoardId) void activeBridge.tasks.types.list(activeTaskBoardId).then(setTaskTypes).catch((reason) => setError(reason instanceof Error ? reason.message : '加载任务类型失败。'));
-      } else if (event.type === 'boards_changed') {
-        void activeBridge.tasks.boards.list().then((boards) => {
-          setTaskBoards(boards);
-          setActiveTaskBoardId((current) => boards.some((board) => board.id === current) ? current : (boards[0]?.id ?? ''));
-        }).catch((reason) => setError(reason instanceof Error ? reason.message : '加载任务看板失败。'));
-      } else if (event.type === 'open_today' || event.type === 'quick_record') {
-        closeSettings();
-        setActiveView('tasks');
-        setActiveTaskBoardId(event.boardId);
-        setRequestedOpenTaskId(null);
-        setTaskActionRequest({ kind: event.type === 'open_today' ? 'today' : 'quick_record', id: Date.now() });
-        openWorkspaceTab('tasks', event.boardId);
-      } else {
-        closeSettings();
-        setActiveView('tasks');
-        setActiveTaskBoardId(event.boardId);
-        setRequestedOpenTaskId(event.taskId);
-      }
-    };
-    const unsubscribe = activeBridge.tasks.onEvent(handleTaskEvent);
-    void activeBridge.tasks.takeOpenRequest().then((request) => {
-      if (request) handleTaskEvent({ type: 'open', ...request });
-    }).catch((reason) => setError(reason instanceof Error ? reason.message : '打开提醒任务失败。'));
-    return unsubscribe;
-  }, [activeBridge, activeTaskBoardId, taskBoards]);
-
-  useEffect(() => {
-    if (!activeBridge) return;
-    let mounted = true;
-    void Promise.all([activeBridge.conversations.messages(activeConversation), activeBridge.runs.list(activeConversation)]).then(([items, runs]) => {
-      if (!mounted) return;
-      setMessages((current) => ({ ...current, [activeConversation]: items.map(displayMessage) }));
-      const interrupted = runs.find((run) => run.status === 'interrupted');
-      setInterruptedRun(interrupted ?? null);
-      setConversationRuns((current) => ({ ...current, [activeConversation]: runs }));
-      setToolActivities((current) => ({ ...current, [activeConversation]: runs.flatMap((run) => run.activities).map((activity) => ({ id: activity.id, toolName: activity.toolName, status: activity.status, input: activity.input ?? undefined, output: activity.output ?? undefined, startedAt: activity.startedAt, finishedAt: activity.finishedAt, artifacts: activity.artifacts })) }));
-    }).catch((reason) => { if (mounted) setError(reason instanceof Error ? reason.message : '加载会话失败。'); });
-    return () => { mounted = false; };
-  }, [activeBridge, activeConversation]);
-
-  useEffect(() => {
-    if (!activeBridge) return;
-    return activeBridge.runs.onEvent((event: RunEvent) => {
-      if (event.type === 'accepted') {
-        setActiveRun({ id: event.runId, conversationId: event.conversationId });
-        return;
-      }
-      if (event.type === 'tool_start') {
-        setToolActivities((current) => ({ ...current, [event.conversationId]: [...(current[event.conversationId] ?? []), { id: event.toolCallId, toolName: event.toolName, status: 'running', input: event.input, startedAt: new Date().toISOString() }] }));
-        return;
-      }
-      if (event.type === 'tool_end') {
-        setToolActivities((current) => ({ ...current, [event.conversationId]: (current[event.conversationId] ?? []).map((activity) => activity.id === event.toolCallId ? { ...activity, toolName: event.toolName, status: event.isError ? 'failed' : 'completed', output: event.output, finishedAt: new Date().toISOString(), artifacts: event.artifacts } : activity) }));
-        return;
-      }
-      if (event.type === 'approval_required') {
-        if (approvalCloseTimerRef.current !== null) window.clearTimeout(approvalCloseTimerRef.current);
-        setApprovalClosing(false);
-        setPendingApproval(event);
-        return;
-      }
-      if (event.type === 'approval_resolved') {
-        if (pendingApproval?.approvalId === event.approvalId) dismissApproval();
-        return;
-      }
-      setActiveRun((run) => (!run || run.id !== event.runId || run.conversationId !== event.conversationId || event.type === 'delta' ? run : null));
-      if (event.type === 'delta') {
-        setMessages((current) => {
-          const existing = current[event.conversationId] ?? [];
-          const index = existing.findIndex((message) => message.id === event.messageId);
-          if (index < 0) return { ...current, [event.conversationId]: [...existing, { id: event.messageId, role: 'assistant', content: event.delta, time: '刚刚', createdAt: event.createdAt }] };
-          const next = [...existing]; next[index] = { ...next[index], content: `${next[index].content}${event.delta}` };
-          return { ...current, [event.conversationId]: next };
-        });
-      } else if (event.type === 'failed') {
-        if (pendingApproval?.runId === event.runId) dismissApproval();
-        setToolActivities((current) => ({ ...current, [event.conversationId]: (current[event.conversationId] ?? []).map((activity) => activity.status === 'running' ? { ...activity, status: 'failed' } : activity) }));
-        setError(event.error);
-      } else if (event.type === 'cancelled') {
-        if (pendingApproval?.runId === event.runId) dismissApproval();
-        setToolActivities((current) => ({ ...current, [event.conversationId]: (current[event.conversationId] ?? []).map((activity) => activity.status === 'running' ? { ...activity, status: 'cancelled' } : activity) }));
-      }
-      if (event.type === 'completed' || event.type === 'failed' || event.type === 'cancelled') {
-        void activeBridge.runs.list(event.conversationId).then((runs) => setConversationRuns((current) => ({ ...current, [event.conversationId]: runs })));
-      }
-    });
-  }, [activeBridge, pendingApproval]);
-
-  const activeTitle = useMemo(() => conversationItems.find((conversation) => conversation.id === activeConversation)?.title ?? '新会话', [activeConversation, conversationItems]);
   const activeProfile = AGENT_PROFILES.find((profile) => profile.id === activeProfileId) ?? AGENT_PROFILES[0];
   const activeProviderId = conversationItems.find((conversation) => conversation.id === activeConversation)?.providerId ?? newProviderId;
   const activeProvider = providers.find((item) => item.id === activeProviderId) ?? null;
-  const isThinking = activeRun?.conversationId === activeConversation;
-  const activeMessages = messages[activeConversation] ?? [];
-  const activeActivities = toolActivities[activeConversation] ?? [];
   const latestCompletedRun = conversationRuns[activeConversation]?.find((run) => run.status === 'completed' && run.usage) ?? null;
   const latestUsage = latestCompletedRun?.usage ? { ...latestCompletedRun.usage, durationMs: Math.max(0, Date.parse(latestCompletedRun.finishedAt ?? latestCompletedRun.startedAt) - Date.parse(latestCompletedRun.startedAt)) } : null;
   const conversationIsEmpty = activeMessages.length === 0 && activeActivities.length === 0 && !isThinking && !interruptedRun;
+  const visibleError = error ?? taskWorkspace.error ?? settings.error;
   const releaseAttachments = (items: Attachment[]) => {
     if (items.length > 0 && activeBridge) void activeBridge.attachments.release(items.map((item) => item.id));
   };
@@ -962,13 +735,7 @@ export function ProductionRenderer() {
       setError('复制会话 ID 失败。');
     }
   };
-  const refreshConversations = async () => {
-    if (!activeBridge) return [];
-    const items = await activeBridge.conversations.list(true);
-    const sorted = sortConversations(items);
-    setConversationItems(sorted);
-    return sorted;
-  };
+  const refreshConversations = refreshConversationList;
   const createConversation = async (projectId = activeConversationProject, providerId = newProviderId, profileId = DEFAULT_AGENT_PROFILE_ID) => {
     closeSettings();
     setComposerPrefill(null);
@@ -1164,7 +931,7 @@ export function ProductionRenderer() {
     setError(null);
     try {
       const saved = await activeBridge.permissions.save(conversationId, mode);
-      if (activeConversationRef.current === conversationId) {
+      if (activeConversation === conversationId) {
         setPermissionMode(saved);
         setPermissionConfirmationOpen(false);
       }
@@ -1194,19 +961,14 @@ export function ProductionRenderer() {
     setAttachments((current) => current.filter((attachment) => attachment.id !== id));
   };
   const interruptedMessage = interruptedRun?.inputMessageId ? (messages[activeConversation] ?? []).find((message) => message.id === interruptedRun.inputMessageId)?.content : null;
-  const createTask = async (input: CreateTaskInput): Promise<Task> => {
-    if (!activeBridge || !activeTaskBoardId) throw new Error('任务存储仅在桌面应用中可用。');
-    const task = await activeBridge.tasks.create(activeTaskBoardId, input);
-    setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
-    return task;
-  };
+  const createTask = taskWorkspace.create;
   const createTaskFromNote = async (note: import('../contracts/desktop-bridge').Note) => {
-    if (!activeBridge) return;
     const boardId = activeTaskBoardId || taskBoards[0]?.id;
     if (!boardId) { setError('请先创建一个任务看板。'); return; }
     try {
-      const task = await activeBridge.tasks.create(boardId, { ...taskDraftFromNote(note), sourceConversationId: null });
-      setActiveTaskBoardId(boardId);
+      taskWorkspace.setActiveBoardId(boardId);
+      const task = await taskWorkspace.create({ ...taskDraftFromNote(note), sourceConversationId: null });
+      taskWorkspace.setActiveBoardId(boardId);
       setRequestedOpenTaskId(task.id);
       setActiveView('tasks');
     } catch (reason) { setError(reason instanceof Error ? reason.message : '从笔记创建任务失败。'); }
@@ -1220,91 +982,27 @@ export function ProductionRenderer() {
       setActiveView('tasks');
     } catch (reason) { setError(reason instanceof Error ? reason.message : '从消息创建任务失败。'); }
   };
-  const updateTask = async (id: string, patch: UpdateTaskInput): Promise<Task> => {
-    if (!activeBridge) throw new Error('任务存储仅在桌面应用中可用。');
-    const task = await activeBridge.tasks.update(id, patch);
-    setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)]);
-    return task;
-  };
-  const deleteTask = async (id: string): Promise<void> => {
-    if (!activeBridge) throw new Error('任务存储仅在桌面应用中可用。');
-    await activeBridge.tasks.delete(id);
-    setTasks((current) => current.filter((task) => task.id !== id));
-  };
-  const reorderTask = async (id: string, targetId: string): Promise<void> => {
-    if (!activeBridge) throw new Error('任务存储仅在桌面应用中可用。');
-    const reordered = await activeBridge.tasks.reorder(id, targetId);
-    setTasks((current) => {
-      const ids = new Set(reordered.map((task) => task.id));
-      return [...reordered, ...current.filter((task) => !ids.has(task.id))];
-    });
-  };
-  const moveTaskToBoard = async (id: string, boardId: string): Promise<Task> => {
-    if (!activeBridge) throw new Error('任务存储仅在桌面应用中可用。');
-    const existing = tasks.find((item) => item.id === id);
-    if (existing?.boardId === boardId) return existing;
-    const task = await activeBridge.tasks.moveToBoard(id, boardId);
-    setTasks((current) => current.filter((item) => item.id !== id));
-    return task;
-  };
-  const copyTaskToBoard = async (id: string, boardId: string): Promise<Task> => {
-    if (!activeBridge) throw new Error('任务存储仅在桌面应用中可用。');
-    return activeBridge.tasks.copyToBoard(id, boardId);
-  };
-  const createTaskType = async (name: string): Promise<TaskType> => {
-    if (!activeBridge || !activeTaskBoardId) throw new Error('任务存储仅在桌面应用中可用。');
-    const taskType = await activeBridge.tasks.types.create(activeTaskBoardId, name);
-    setTaskTypes((current) => [...current, taskType].sort((left, right) => left.position - right.position));
-    return taskType;
-  };
-  const renameTaskType = async (id: string, name: string): Promise<TaskType> => {
-    if (!activeBridge) throw new Error('任务存储仅在桌面应用中可用。');
-    const taskType = await activeBridge.tasks.types.rename(id, name);
-    setTaskTypes((current) => current.map((item) => item.id === id ? taskType : item));
-    return taskType;
-  };
-  const deleteTaskType = async (id: string): Promise<void> => {
-    if (!activeBridge) throw new Error('任务存储仅在桌面应用中可用。');
-    await activeBridge.tasks.types.delete(id);
-    setTaskTypes((current) => current.filter((item) => item.id !== id));
-  };
+  const updateTask = taskWorkspace.update;
+  const deleteTask = taskWorkspace.remove;
+  const reorderTask = taskWorkspace.reorder;
+  const moveTaskToBoard = taskWorkspace.moveToBoard;
+  const copyTaskToBoard = taskWorkspace.copyToBoard;
+  const createTaskType = taskWorkspace.createType;
+  const renameTaskType = taskWorkspace.renameType;
+  const deleteTaskType = taskWorkspace.deleteType;
   const createTaskBoard = async (name: string): Promise<void> => {
     if (!activeBridge) throw new Error('任务看板仅在桌面应用中可用。');
-    const board = await activeBridge.tasks.boards.create(name);
-    setTaskBoards((current) => [...current.filter((item) => item.id !== board.id), board].sort((left, right) => left.position - right.position));
-    setActiveTaskBoardId(board.id);
+    const board = await taskWorkspace.createBoard(name);
+    if (!board) return;
     closeSettings();
     setActiveView('tasks');
   };
-  const renameTaskBoard = async (id: string, name: string): Promise<void> => {
-    if (!activeBridge) throw new Error('任务看板仅在桌面应用中可用。');
-    const board = await activeBridge.tasks.boards.rename(id, name);
-    setTaskBoards((current) => current.map((item) => item.id === id ? board : item));
-  };
-  const reorderTaskBoard = async (id: string, targetId: string): Promise<void> => {
-    if (!activeBridge) throw new Error('任务看板仅在桌面应用中可用。');
-    const boards = await activeBridge.tasks.boards.reorder(id, targetId);
-    setTaskBoards(boards);
-  };
-  const deleteTaskBoard = async (id: string): Promise<void> => {
-    if (!activeBridge) throw new Error('任务看板仅在桌面应用中可用。');
-    await activeBridge.tasks.boards.delete(id);
-    const boards = await activeBridge.tasks.boards.list();
-    setTaskBoards(boards);
-    setActiveTaskBoardId((current) => current === id ? (boards[0]?.id ?? '') : current);
-  };
-  const importTaskAsset = async (file: File): Promise<TaskAsset> => {
-    if (!activeBridge) throw new Error('附件仅在桌面应用中可用。');
-    return activeBridge.tasks.assets.import({ name: file.name || '粘贴的图片.png', mimeType: file.type || 'application/octet-stream', data: await file.arrayBuffer() });
-  };
-  const pickTaskAssets = async (): Promise<TaskAsset[]> => {
-    if (!activeBridge) throw new Error('附件仅在桌面应用中可用。');
-    return activeBridge.tasks.assets.pick();
-  };
-  const openTaskAsset = async (url: string): Promise<void> => {
-    if (!activeBridge) throw new Error('附件仅在桌面应用中可用。');
-    await activeBridge.tasks.assets.open(url);
-  };
+  const renameTaskBoard = taskWorkspace.renameBoard;
+  const reorderTaskBoard = taskWorkspace.reorderBoard;
+  const deleteTaskBoard = taskWorkspace.deleteBoard;
+  const importTaskAsset = taskWorkspace.importAsset;
+  const pickTaskAssets = taskWorkspace.pickAssets;
+  const openTaskAsset = taskWorkspace.openAsset;
   const openSearchResult = (result: SearchResult) => {
     closeSettings();
     if (result.kind === 'conversation') {
@@ -1372,13 +1070,13 @@ export function ProductionRenderer() {
   const collapsedSidebarControl = !settingsMounted && sidebarCollapsed && typeof document !== 'undefined' ? createPortal(<SidebarExpandControl onExpand={() => setSidebarCollapsed(false)} />, document.body) : null;
   useEffect(() => { document.documentElement.dataset.windowFullscreen = windowFullscreen ? 'true' : 'false'; return () => { delete document.documentElement.dataset.windowFullscreen; }; }, [windowFullscreen]);
   return <main className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''} ${sidebarResizing ? 'sidebar-is-resizing' : ''} ${activeView === 'tasks' || activeView === 'notes' ? 'tasks-is-active' : ''} ${activeView === 'notes' ? 'notes-is-active' : ''} ${settingsMounted ? 'settings-is-active' : ''} ${settingsClosing ? 'settings-is-closing' : ''} ${profileMenuClosing || providerMenuClosing ? 'header-menu-closing' : ''}`} style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
-    <Sidebar conversations={conversationItems} projects={conversationProjects} boards={taskBoards} providers={providers} newProviderId={newProviderId} activeId={activeConversation} activeProjectId={activeConversationProject} activeBoardId={activeTaskBoardId} activeNoteId={activeNoteId} notesBridge={activeBridge} notesRevision={notesRevision} onNotesChanged={() => setNotesRevision((value) => value + 1)} mode={sidebarMode} settingsOpen={providerOpen} collapsed={sidebarCollapsed} appVersion={appInfo?.version} onSearch={() => setSearchOpen(true)} onSelect={(id) => { closeSettings(); selectConversation(id); }} onSelectProject={setActiveConversationProject} onSelectBoard={(id) => { closeSettings(); setRequestedOpenTaskId(null); openWorkspaceTab('tasks', id); }} onSelectNote={(id) => { closeSettings(); if (id) openWorkspaceTab('notes', id); }} onModeChange={(mode) => { setSidebarModeState(mode); closeSettings(); }} onNew={(projectId, providerId) => void createConversation(projectId, providerId)} onNewProviderChange={setNewProviderId} onRenameConversation={renameConversation} onMoveConversation={moveConversation} onArchiveConversation={archiveConversation} onPinConversation={pinConversation} onDeleteConversation={deleteConversation} onCreateProject={createConversationProject} onRenameProject={renameConversationProject} onDeleteProject={deleteConversationProject} onCreateBoard={createTaskBoard} onRenameBoard={renameTaskBoard} onDeleteBoard={deleteTaskBoard} onReorderBoard={reorderTaskBoard} onMoveTaskToBoard={async (id, boardId) => { await moveTaskToBoard(id, boardId); }} onSettings={() => openSettings()} onToggle={() => setSidebarCollapsed((current) => !current)} />
+    <Sidebar conversations={conversationItems} projects={conversationProjects} boards={taskBoards} providers={providers} newProviderId={newProviderId} activeId={activeConversation} activeProjectId={activeConversationProject} activeBoardId={activeTaskBoardId} activeNoteId={activeNoteId} notesBridge={activeBridge} notesRevision={notesRevision} onNotesChanged={notifyNotesChanged} mode={sidebarMode} settingsOpen={providerOpen} collapsed={sidebarCollapsed} appVersion={appInfo?.version} onSearch={() => setSearchOpen(true)} onSelect={(id) => { closeSettings(); selectConversation(id); }} onSelectProject={setActiveConversationProject} onSelectBoard={(id) => { closeSettings(); setRequestedOpenTaskId(null); openWorkspaceTab('tasks', id); }} onSelectNote={(id) => { closeSettings(); if (id) openWorkspaceTab('notes', id); }} onModeChange={(mode) => { setSidebarModeState(mode); closeSettings(); }} onNew={(projectId, providerId) => void createConversation(projectId, providerId)} onNewProviderChange={setNewProviderId} onRenameConversation={renameConversation} onMoveConversation={moveConversation} onArchiveConversation={archiveConversation} onPinConversation={pinConversation} onDeleteConversation={deleteConversation} onCreateProject={createConversationProject} onRenameProject={renameConversationProject} onDeleteProject={deleteConversationProject} onCreateBoard={createTaskBoard} onRenameBoard={renameTaskBoard} onDeleteBoard={deleteTaskBoard} onReorderBoard={reorderTaskBoard} onMoveTaskToBoard={async (id, boardId) => { await moveTaskToBoard(id, boardId); }} onSettings={() => openSettings()} onToggle={() => setSidebarCollapsed((current) => !current)} />
     {!settingsMounted && !sidebarCollapsed && <div className="sidebar-resize-handle" role="separator" aria-label="调整侧栏宽度" aria-orientation="vertical" aria-valuemin={MIN_SIDEBAR_WIDTH} aria-valuemax={MAX_SIDEBAR_WIDTH} aria-valuenow={sidebarWidth} tabIndex={0} title="拖拽调整侧栏宽度，双击恢复默认宽度" onDoubleClick={() => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)} onPointerDown={(event) => { if (event.button !== 0) return; event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); setSidebarResizing(true); }} onPointerMove={resizeSidebar} onPointerUp={stopResizingSidebar} onPointerCancel={stopResizingSidebar} onKeyDown={resizeSidebarWithKeyboard} />}
     <section className="workspace" aria-label="会话工作区">
       {!settingsMounted && <nav className="workspace-tabs" aria-label="已打开页面">{workspaceTabs.map((tab, index) => { const label = tab.type === 'conversation' ? (conversationItems.find((item) => item.id === tab.resourceId)?.title ?? '对话') : tab.type === 'tasks' ? (taskBoards.find((board) => board.id === tab.resourceId)?.name ?? '任务看板') : (noteTitles[tab.resourceId] ?? '笔记'); const menuOpen = tabContextMenu?.tabId === tab.id; return <div className={`workspace-tab ${tab.id === activeTabId ? 'is-active' : ''}`} key={tab.id} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setTabContextMenu({ tabId: tab.id, x: event.clientX, y: event.clientY }); }}><button type="button" className="workspace-tab-select" onClick={() => activateWorkspaceTab(tab)}>{tab.type === 'conversation' ? <MessageSquare size={14} /> : tab.type === 'tasks' ? <ListTodo size={14} /> : <NotebookPen size={14} />}<span>{label}</span></button>{workspaceTabs.length > 1 && <button type="button" className="workspace-tab-close" onClick={(event) => { event.stopPropagation(); closeWorkspaceTab(tab.id); }} aria-label={`关闭${label}`} title={`关闭${label}`}><X size={13} /></button>}{menuOpen && <div className="workspace-tab-menu" role="menu" style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onClick={(event) => event.stopPropagation()}><button type="button" role="menuitem" onClick={() => closeWorkspaceTab(tab.id)} disabled={workspaceTabs.length <= 1}>关闭标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.filter((item) => item.id !== tab.id).map((item) => item.id))} disabled={workspaceTabs.length <= 1}>关闭其他标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.slice(index + 1).map((item) => item.id))} disabled={index === workspaceTabs.length - 1}>关闭右侧标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.slice(0, index).map((item) => item.id))} disabled={index === 0}>关闭左侧标签页</button></div>}</div>; })}</nav>}
-      {settingsMounted ? <SettingsWorkspace initialSection={settingsInitialSection} appInfo={appInfo} current={provider} providers={providers} browserUseConfig={browserUseConfig} computerUseConfig={computerUseConfig} theme={theme} onThemeChange={setTheme} onClose={closeSettings} onSaved={(saved) => { const boundProviderId = conversationItems.find((item) => item.id === activeConversation)?.providerId; if (!boundProviderId || boundProviderId === saved.id) setProvider(saved); }} onProvidersChange={setProviders} onBrowserUseChange={setBrowserUseConfig} onComputerUseChange={setComputerUseConfig} /> : activeView === 'tasks' ? <Suspense fallback={<div className="task-page-loading">正在打开任务看板...</div>}><TaskBoard boardId={activeTaskBoardId} boardName={taskBoards.find((board) => board.id === activeTaskBoardId)?.name ?? '任务'} boards={taskBoards} tasks={tasks} taskTypes={taskTypes} loading={tasksLoading} headerControl={sidebarCollapsed ? <SidebarExpandControl onExpand={() => setSidebarCollapsed(false)} /> : null} requestedOpenTaskId={requestedOpenTaskId} onOpenTaskHandled={() => setRequestedOpenTaskId(null)} taskActionRequest={taskActionRequest} onTaskActionHandled={() => setTaskActionRequest(null)} sourceConversations={conversationItems} onOpenConversation={selectConversation} onCreate={createTask} onUpdate={updateTask} onDelete={deleteTask} onReorder={reorderTask} onMoveToBoard={moveTaskToBoard} onCopyToBoard={copyTaskToBoard} onCreateType={createTaskType} onRenameType={renameTaskType} onDeleteType={deleteTaskType} onImportAsset={importTaskAsset} onPickAssets={pickTaskAssets} onOpenAsset={openTaskAsset} onRunAi={(prompt, signal) => runAiForBoard(taskBoards.find((board) => board.id === activeTaskBoardId)?.name ?? '任务', tasks, prompt, signal)} /></Suspense> : activeView === 'notes' ? <Suspense fallback={<div className="task-page-loading">正在打开笔记...</div>}><NotesWorkspace bridge={activeBridge} initialNoteId={activeNoteId} refreshKey={notesRevision} showNavigation={false} onNotesChanged={() => setNotesRevision((value) => value + 1)} onActiveNoteChange={setActiveNoteId} onRunAi={(note, action, instruction, signal) => runAiForNote(note, action, instruction, signal)} onCreateTask={(note) => void createTaskFromNote(note)} onOpenTask={(boardId, taskId) => { closeSettings(); openWorkspaceTab('tasks', boardId); setRequestedOpenTaskId(taskId); }} onImportAsset={importTaskAsset} onPickAssets={pickTaskAssets} onOpenAsset={openTaskAsset} /></Suspense> : <>
-      <header className="workspace-header">{sidebarCollapsed && <SidebarExpandControl onExpand={() => setSidebarCollapsed(false)} />}<div className="conversation-identity"><div className="identity-mark"><ThinkingOrb state={isThinking ? 'working' : 'breathing'} size={20} theme="dark" /></div><div><h1>{activeTitle}</h1><span className="identity-meta">个人工作区 <span className="meta-separator">·</span> 会话 ID <button type="button" className="conversation-id-button" onClick={() => void copyConversationId()} title={`复制完整会话 ID：${activeConversation}`} aria-label={`复制会话 ID：${activeConversation}`}>{copiedConversationId ? '已复制' : shortId(activeConversation)}</button><span className="meta-separator">·</span><span className="conversation-profile-picker"><span>Profile</span><span className="profile-picker-control"><button type="button" className="profile-picker-trigger" aria-haspopup="listbox" aria-expanded={profileMenuOpen} aria-label={`当前会话 Profile：${activeProfile.name}`} title={activeProfile.description} onClick={() => setProfileMenuOpen((current) => !current)}><span>{activeProfile.name}</span><ChevronDown size={13} aria-hidden="true" /></button>{profileMenuOpen && <span className="profile-picker-menu" role="listbox" aria-label="选择会话 Profile">{AGENT_PROFILES.map((item) => <button type="button" role="option" aria-selected={item.id === activeProfileId} className={item.id === activeProfileId ? 'is-selected' : ''} key={item.id} onClick={() => { setProfileMenuOpen(false); void selectConversationProfile(item.id); }}><span><strong>{item.name}</strong><small>{item.description}</small></span>{item.id === activeProfileId && <span className="profile-picker-check" aria-hidden="true">✓</span>}</button>)}</span>}</span></span>{providers.length > 0 && <><span className="meta-separator">·</span><span className="conversation-provider-picker"><span>Provider</span><span className="provider-picker-control"><button type="button" className="provider-picker-trigger" aria-haspopup="listbox" aria-expanded={providerMenuOpen} aria-label={`当前会话 Provider：${activeProvider?.displayName ?? '未选择'}`} title={activeProvider ? `${activeProvider.displayName} · ${activeProvider.model}` : '选择 Provider'} onClick={() => setProviderMenuOpen((current) => !current)}><span>{(activeProvider?.displayName ?? activeProviderId) || '未选择'}</span><ChevronDown size={13} aria-hidden="true" /></button>{providerMenuOpen && <span className="provider-picker-menu" role="listbox" aria-label="选择会话 Provider">{providers.map((item) => <button type="button" role="option" aria-selected={item.id === activeProviderId} className={`${item.id === activeProviderId ? 'is-selected' : ''} ${item.hasApiKey ? '' : 'is-disabled'}`} key={item.id} disabled={!item.hasApiKey} onClick={() => { setProviderMenuOpen(false); void selectConversationProvider(item.id); }}><span><strong>{item.displayName}</strong><small>{item.protocol} · {item.model}{item.hasApiKey ? '' : ' · 未配置 Key'}</small></span>{item.id === activeProviderId && <span className="profile-picker-check" aria-hidden="true">✓</span>}</button>)}</span>}</span></span></>}</span></div></div><div className="header-actions"><button type="button" className="header-icon-button" onClick={() => void importConversation()} aria-label="导入会话" title="导入会话"><Upload size={15} /></button><button type="button" className="header-icon-button" onClick={() => void exportActiveConversation()} aria-label="导出会话" title="导出会话"><Download size={15} /></button><ContextWindowStatus usage={latestCompletedRun?.usage ?? null} refreshing={Boolean(isThinking)} /><div className="header-status" aria-live="polite"><span className={`status-dot ${isThinking ? 'is-active' : ''}`} />{isThinking ? '处理中' : error ? '需要处理' : '就绪'}</div></div></header>
-      {error && <div className="inline-error" role="alert">{error}<button type="button" onClick={() => setError(null)} aria-label="关闭错误提示">×</button></div>}
+      {settingsMounted ? <SettingsWorkspace initialSection={settingsInitialSection} appInfo={appInfo} current={provider} providers={providers} browserUseConfig={browserUseConfig} computerUseConfig={computerUseConfig} theme={theme} onThemeChange={setTheme} onClose={closeSettings} onSaved={(saved) => { const boundProviderId = conversationItems.find((item) => item.id === activeConversation)?.providerId; if (!boundProviderId || boundProviderId === saved.id) setProvider(saved); }} onProvidersChange={setProviders} onBrowserUseChange={setBrowserUseConfig} onComputerUseChange={setComputerUseConfig} /> : activeView === 'tasks' ? <Suspense fallback={<div className="task-page-loading">正在打开任务看板...</div>}><TaskBoard boardId={activeTaskBoardId} boardName={taskBoards.find((board) => board.id === activeTaskBoardId)?.name ?? '任务'} boards={taskBoards} tasks={tasks} taskTypes={taskTypes} loading={tasksLoading} headerControl={sidebarCollapsed ? <SidebarExpandControl onExpand={() => setSidebarCollapsed(false)} /> : null} requestedOpenTaskId={requestedOpenTaskId} onOpenTaskHandled={() => setRequestedOpenTaskId(null)} taskActionRequest={taskActionRequest} onTaskActionHandled={() => setTaskActionRequest(null)} sourceConversations={conversationItems} onOpenConversation={selectConversation} onCreate={createTask} onUpdate={updateTask} onDelete={deleteTask} onReorder={reorderTask} onMoveToBoard={moveTaskToBoard} onCopyToBoard={copyTaskToBoard} onCreateType={createTaskType} onRenameType={renameTaskType} onDeleteType={deleteTaskType} onImportAsset={importTaskAsset} onPickAssets={pickTaskAssets} onOpenAsset={openTaskAsset} onRunAi={(prompt, signal) => runAiForBoard(taskBoards.find((board) => board.id === activeTaskBoardId)?.name ?? '任务', tasks, prompt, signal)} /></Suspense> : activeView === 'notes' ? <Suspense fallback={<div className="task-page-loading">正在打开笔记...</div>}><NotesWorkspace bridge={activeBridge} initialNoteId={activeNoteId} refreshKey={notesRevision} showNavigation={false} onNotesChanged={notifyNotesChanged} onActiveNoteChange={setActiveNoteId} onRunAi={(note, action, instruction, signal) => runAiForNote(note, action, instruction, signal)} onCreateTask={(note) => void createTaskFromNote(note)} onOpenTask={(boardId, taskId) => { closeSettings(); openWorkspaceTab('tasks', boardId); setRequestedOpenTaskId(taskId); }} onImportAsset={importTaskAsset} onPickAssets={pickTaskAssets} onOpenAsset={openTaskAsset} /></Suspense> : <>
+      <header className="workspace-header">{sidebarCollapsed && <SidebarExpandControl onExpand={() => setSidebarCollapsed(false)} />}<div className="conversation-identity"><div className="identity-mark"><ThinkingOrb state={isThinking ? 'working' : 'breathing'} size={20} theme="dark" /></div><div><h1>{activeTitle}</h1><span className="identity-meta">个人工作区 <span className="meta-separator">·</span> 会话 ID <button type="button" className="conversation-id-button" onClick={() => void copyConversationId()} title={`复制完整会话 ID：${activeConversation}`} aria-label={`复制会话 ID：${activeConversation}`}>{copiedConversationId ? '已复制' : shortId(activeConversation)}</button><span className="meta-separator">·</span><span className="conversation-profile-picker"><span>Profile</span><span className="profile-picker-control"><button type="button" className="profile-picker-trigger" aria-haspopup="listbox" aria-expanded={profileMenuOpen} aria-label={`当前会话 Profile：${activeProfile.name}`} title={activeProfile.description} onClick={() => setProfileMenuOpen((current) => !current)}><span>{activeProfile.name}</span><ChevronDown size={13} aria-hidden="true" /></button>{profileMenuOpen && <span className="profile-picker-menu" role="listbox" aria-label="选择会话 Profile">{AGENT_PROFILES.map((item) => <button type="button" role="option" aria-selected={item.id === activeProfileId} className={item.id === activeProfileId ? 'is-selected' : ''} key={item.id} onClick={() => { setProfileMenuOpen(false); void selectConversationProfile(item.id); }}><span><strong>{item.name}</strong><small>{item.description}</small></span>{item.id === activeProfileId && <span className="profile-picker-check" aria-hidden="true">✓</span>}</button>)}</span>}</span></span>{providers.length > 0 && <><span className="meta-separator">·</span><span className="conversation-provider-picker"><span>Provider</span><span className="provider-picker-control"><button type="button" className="provider-picker-trigger" aria-haspopup="listbox" aria-expanded={providerMenuOpen} aria-label={`当前会话 Provider：${activeProvider?.displayName ?? '未选择'}`} title={activeProvider ? `${activeProvider.displayName} · ${activeProvider.model}` : '选择 Provider'} onClick={() => setProviderMenuOpen((current) => !current)}><span>{(activeProvider?.displayName ?? activeProviderId) || '未选择'}</span><ChevronDown size={13} aria-hidden="true" /></button>{providerMenuOpen && <span className="provider-picker-menu" role="listbox" aria-label="选择会话 Provider">{providers.map((item) => <button type="button" role="option" aria-selected={item.id === activeProviderId} className={`${item.id === activeProviderId ? 'is-selected' : ''} ${item.hasApiKey ? '' : 'is-disabled'}`} key={item.id} disabled={!item.hasApiKey} onClick={() => { setProviderMenuOpen(false); void selectConversationProvider(item.id); }}><span><strong>{item.displayName}</strong><small>{item.protocol} · {item.model}{item.hasApiKey ? '' : ' · 未配置 Key'}</small></span>{item.id === activeProviderId && <span className="profile-picker-check" aria-hidden="true">✓</span>}</button>)}</span>}</span></span></>}</span></div></div><div className="header-actions"><button type="button" className="header-icon-button" onClick={() => void importConversation()} aria-label="导入会话" title="导入会话"><Upload size={15} /></button><button type="button" className="header-icon-button" onClick={() => void exportActiveConversation()} aria-label="导出会话" title="导出会话"><Download size={15} /></button><ContextWindowStatus usage={latestCompletedRun?.usage ?? null} refreshing={Boolean(isThinking)} /><div className="header-status" aria-live="polite"><span className={`status-dot ${isThinking ? 'is-active' : ''}`} />{isThinking ? '处理中' : visibleError ? '需要处理' : '就绪'}</div></div></header>
+      {visibleError && <div className="inline-error" role="alert">{visibleError}<button type="button" onClick={() => { setError(null); taskWorkspace.clearError(); settings.clearError(); }} aria-label="关闭错误提示">×</button></div>}
       <div className={`conversation-body ${conversationIsEmpty ? 'is-empty' : ''}`}>
         {conversationIsEmpty ? <ConversationStart composer={<Composer variant="start" prefill={composerPrefill} busy={Boolean(isThinking)} attachments={attachments} reasoningSelection={reasoningSelection} onReasoningSelectionChange={(selection) => { setReasoningSelection(selection); void activeBridge?.reasoning.save(activeConversation, selection); }} permissionMode={permissionMode} onPermissionModeChange={selectPermissionMode} onAttach={pickAttachments} onRemoveAttachment={removeAttachment} onSubmit={submitMessage} onCancel={cancelRun} />} onSelectPrompt={(value) => setComposerPrefill((current) => ({ id: (current?.id ?? 0) + 1, value }))} /> : <>
           <Transcript messages={activeMessages} isThinking={isThinking} activities={activeActivities} runs={conversationRuns[activeConversation] ?? []} latestUsage={latestUsage} recoveryNotice={interruptedRun ? { message: interruptedRun.error ?? '应用重启时运行被中断。', onRetry: interruptedMessage ? () => void retryLastTurn(false, interruptedRun.inputMessageId ?? undefined) : undefined, busy: retryingRun } : null} requestedMessageId={requestedMessageId} onRequestedMessageHandled={() => setRequestedMessageId(null)} requestedRunId={requestedRunId} onRequestedRunHandled={() => setRequestedRunId(null)} onCreateTask={(message) => void createTaskFromMessage(message)} onBranch={(message) => void branchConversation(message)} onEditLastUser={(message) => { setRetryDraft({ messageId: message.id, content: message.content }); setComposerPrefill((current) => ({ id: (current?.id ?? 0) + 1, value: message.content })); }} onRegenerate={() => void retryLastTurn()} onOpenTask={(boardId, taskId) => { closeSettings(); setActiveTaskBoardId(boardId); setActiveView('tasks'); setRequestedOpenTaskId(taskId); }} />
