@@ -55,6 +55,11 @@
 .pet-catalog-footer strong { color: var(--text-primary); font-size: 13px; }
 .pet-catalog-footer span { color: var(--text-tertiary); font-size: 13px; }
 .pet-catalog-footer .text-button { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+.pet-catalog-resources { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; padding: 10px 18px; border-top: 1px solid var(--stroke-subtle); }
+.pet-catalog-resources > span { color: var(--text-tertiary); font-size: 13px; }
+.pet-catalog-resources > div { display: flex; align-items: center; gap: 14px; }
+.pet-catalog-resources .text-button { display: inline-flex; align-items: center; gap: 4px; }
+@media (max-width: 720px) { .pet-catalog-resources { align-items: flex-start; flex-direction: column; } .pet-catalog-resources > div { flex-wrap: wrap; } }
 .pet-preview-panel { display: grid; grid-template-columns: 132px minmax(0, 1fr); align-items: center; gap: 18px; margin-top: 18px; padding: 16px 18px; border: 1px solid var(--stroke-subtle); border-radius: 10px; background: var(--surface-raised); }
 .pet-preview-stage { display: grid; width: 132px; height: 132px; place-items: center; overflow: hidden; border-radius: 10px; background: var(--surface-hover); }
 .pet-preview-sprite { display: block; flex: 0 0 auto; background-repeat: no-repeat; image-rendering: auto; }
