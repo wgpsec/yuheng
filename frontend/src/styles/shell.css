@@ -67,6 +67,7 @@
 .notes-section-chevron.is-collapsed { transform: rotate(-90deg); }
 .notes-quick-heading:hover .notes-section-chevron, .notes-quick-heading:focus-visible .notes-section-chevron { opacity: 1; }
 .notes-library-heading { width: 100%; margin-top: 1px; }
+.notes-quick-list, .notes-nav-tree { scrollbar-width: thin; scrollbar-color: var(--stroke-default) transparent; }
 .notes-quick-list { display: grid; max-height: 128px; overflow-y: auto; transform-origin: top; animation: notes-section-expand 150ms cubic-bezier(.2, .8, .2, 1) both; }
 .notes-quick-list button { display: flex; align-items: center; gap: 7px; min-width: 0; min-height: 29px; padding: 5px 8px 5px 25px; border: 0; border-radius: 5px; color: var(--text-secondary); background: transparent; font-size: 13px; text-align: left; }
 .notes-quick-list button:hover, .notes-quick-list button.is-selected { color: var(--text-primary); background: var(--surface-hover); }
