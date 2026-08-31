@@ -5,6 +5,7 @@ import { DEFAULT_AGENT_PROFILE_ID, isAgentProfileId, type AgentProfileId } from 
 import { toConversationBackup, type ConversationBackup } from './conversation-backup';
 import { DEFAULT_TOOL_PERMISSION_MODE, isPersistentToolPermissionMode, type PersistentToolPermissionMode } from './permission-mode';
 import { createStorageRepositories, type StorageRepositories } from './storage/repositories';
+import type { DatabaseOwner } from './storage/database';
 
 export type ProviderConfig = {
   id: string;
@@ -163,11 +164,26 @@ function readEnabledConfig(value: unknown): { enabled: boolean } {
 export class AppStore {
   private readonly db: DatabaseSync;
   private readonly repositories: StorageRepositories;
+  private readonly ownsDatabase: boolean;
   private searchIndexAvailable = false;
 
-  constructor(dataDir: string) {
+  static fromPreparedDatabase(owner: DatabaseOwner): AppStore {
+    return new AppStore('', owner);
+  }
+
+  constructor(dataDir: string, preparedOwner?: DatabaseOwner) {
+    if (preparedOwner) {
+      this.db = preparedOwner.database;
+      this.ownsDatabase = false;
+      this.repositories = createStorageRepositories(this.db);
+      this.seed();
+      this.setupSearchIndex();
+      return;
+    }
+
     fs.mkdirSync(dataDir, { recursive: true });
     this.db = new DatabaseSync(path.join(dataDir, 'yuheng.sqlite'));
+    this.ownsDatabase = true;
     this.repositories = createStorageRepositories(this.db);
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
     this.db.exec(`
@@ -1681,6 +1697,6 @@ export class AppStore {
   }
 
   close(): void {
-    this.db.close();
+    if (this.ownsDatabase) this.db.close();
   }
 }

@@ -30,6 +30,15 @@ import { IpcSenderAuthorizer, type RendererRole } from './ipc-security';
 import { FileSecurityAuditLog } from './security-audit';
 import { ToolSecurityBroker, ToolSecurityPolicy, redactToolApprovalInput } from './security-policy';
 import { isToolPermissionMode, type ToolPermissionMode } from './permission-mode';
+import { StartupCoordinator } from './app/startup-coordinator';
+import type { AppContext } from './app/app-context';
+import type { ShutdownCoordinator } from './app/shutdown-coordinator';
+import type { StartupFailure } from './app/startup-result';
+import { createStorageStartup, recordUnexpectedStartupFailure } from './app/storage-startup';
+import type { DatabaseOwner } from './storage/database';
+import { RecoveryStore } from './storage/recovery-store';
+import { registerRecoveryIpc } from './ipc/register-recovery-ipc';
+import { createRecoveryWindow } from './windows/recovery-window';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: TASK_ASSET_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
@@ -74,6 +83,14 @@ let tray: Tray | undefined;
 let unreadReminderCount = 0;
 let allowWindowClose = false;
 let desktopPresenceConfig: DesktopPresenceConfig = { notificationsEnabled: true, menuBarEnabled: true };
+let applicationContext: AppContext<{ primaryWindow: BrowserWindow }> | null = null;
+let recoveryWindow: BrowserWindow | null = null;
+let disposeRecoveryIpc: (() => void) | null = null;
+let currentStartupFailure: StartupFailure | null = null;
+let startupAttempt: Promise<'ready' | 'recovery_required'> | null = null;
+const normalIpcChannels = new Set<string>();
+const normalProtocolSchemes = new Set<string>();
+const normalLifecycleCleanups: Array<() => void> = [];
 type StoredAttachment = Attachment & { data: Uint8Array };
 type Attachment = { id: string; name: string; mimeType: string; size: number };
 const attachments = new Map<string, StoredAttachment>();
@@ -463,6 +480,7 @@ function handleForRoles<Args extends unknown[], Result>(channel: string, roles: 
     ipcSenders.assertAllowed(event.sender.id, roles);
     return handler(event, ...args);
   });
+  normalIpcChannels.add(channel);
 }
 
 function handleMain<Args extends unknown[], Result>(channel: string, handler: IpcHandler<Args, Result>): void {
@@ -805,6 +823,15 @@ function closeResources(): void {
   taskReminders?.dispose();
   void browserUse?.dispose();
   store?.close();
+  for (const cleanup of normalLifecycleCleanups.splice(0).reverse()) cleanup();
+  for (const channel of normalIpcChannels) ipcMain.removeHandler(channel);
+  normalIpcChannels.clear();
+  for (const scheme of normalProtocolSchemes) protocol.unhandle(scheme);
+  normalProtocolSchemes.clear();
+  destroyTray();
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window !== recoveryWindow && !window.isDestroyed()) window.destroy();
+  }
 }
 
 function waitForActiveRuns(timeoutMs: number): Promise<void> {
@@ -1114,9 +1141,10 @@ function openTaskFromReminder(boardId: string, taskId: string): void {
   window.focus();
 }
 
-app.whenReady().then(() => {
-  configureRendererSecurity();
-  store = new AppStore(app.getPath('userData'));
+async function initializeNormalApplication(owner: DatabaseOwner, shutdown: ShutdownCoordinator): Promise<{ primaryWindow: BrowserWindow }> {
+  resourcesClosed = false;
+  shutdown.register('normal-application', closeResources);
+  store = AppStore.fromPreparedDatabase(owner);
   desktopPresenceConfig = store.getDesktopPresenceConfig();
   secrets = new SecretStore(app.getPath('userData'));
   taskAssets = new TaskAssetStore(path.join(app.getPath('userData'), 'task-assets'));
@@ -1149,6 +1177,7 @@ app.whenReady().then(() => {
       return new Response('Not found', { status: 404 });
     }
   });
+  normalProtocolSchemes.add(TASK_ASSET_SCHEME);
   void protocol.handle(BROWSER_ARTIFACT_SCHEME, (request) => {
     try {
       return net.fetch(pathToFileURL(browserArtifacts.resolveUrl(request.url)).toString());
@@ -1156,10 +1185,12 @@ app.whenReady().then(() => {
       return new Response('Not found', { status: 404 });
     }
   });
+  normalProtocolSchemes.add(BROWSER_ARTIFACT_SCHEME);
   void protocol.handle(NOTE_COVER_SCHEME, (request) => {
     try { return net.fetch(pathToFileURL(noteCovers.resolveUrl(request.url)).toString()); }
     catch { return new Response('Not found', { status: 404 }); }
   });
+  normalProtocolSchemes.add(NOTE_COVER_SCHEME);
   store.recoverRunningRuns();
   taskReminders.refresh();
   automaticBackupTimer = setInterval(() => { void runAutomaticBackup(); }, 60 * 60 * 1000);
@@ -1754,9 +1785,110 @@ app.whenReady().then(() => {
   screen.on('display-added', restorePetAfterDisplayChange);
   screen.on('display-removed', restorePetAfterDisplayChange);
   screen.on('display-metrics-changed', restorePetAfterDisplayChange);
-  app.on('activate', () => {
-    focusMainWindow();
+  const activate = () => { focusMainWindow(); };
+  app.on('activate', activate);
+  normalLifecycleCleanups.push(
+    () => screen.removeListener('display-added', restorePetAfterDisplayChange),
+    () => screen.removeListener('display-removed', restorePetAfterDisplayChange),
+    () => screen.removeListener('display-metrics-changed', restorePetAfterDisplayChange),
+    () => app.removeListener('activate', activate),
+  );
+  return { primaryWindow };
+}
+
+async function runStartupAttempt(): Promise<'ready' | 'recovery_required'> {
+  if (startupAttempt) return startupAttempt;
+  const operation = (async () => {
+    const coordinator = new StartupCoordinator({
+      database: createStorageStartup(app.getPath('userData'), applicationVersionValue),
+      initialize: initializeNormalApplication,
+      classifyUnexpectedFailure: (error, stage) => recordUnexpectedStartupFailure(
+        app.getPath('userData'), applicationVersionValue, error, stage,
+      ),
+    });
+    const result = await coordinator.start();
+    if (result.status === 'ready') {
+      applicationContext = result.context;
+      currentStartupFailure = null;
+      return 'ready' as const;
+    }
+    currentStartupFailure = result.failure;
+    return 'recovery_required' as const;
+  })();
+  startupAttempt = operation;
+  try { return await operation; }
+  finally { if (startupAttempt === operation) startupAttempt = null; }
+}
+
+function showRecoveryWindow(): void {
+  if (!currentStartupFailure) throw new Error('Recovery mode requires a startup failure.');
+  if (recoveryWindow && !recoveryWindow.isDestroyed()) {
+    recoveryWindow.show();
+    recoveryWindow.focus();
+    return;
+  }
+
+  const dataDirectory = app.getPath('userData');
+  const recovery = new RecoveryStore(dataDirectory);
+  const window = createRecoveryWindow({
+    preloadPath: path.join(__dirname, 'recovery-preload.js'),
+    rendererHtmlPath: path.join(__dirname, '../dist-renderer/index.html'),
+    developmentRendererUrl: process.env.ELECTRON_RENDERER_URL,
   });
+  recoveryWindow = window;
+  disposeRecoveryIpc = registerRecoveryIpc({
+    ipc: ipcMain,
+    senderId: window.webContents.id,
+    recovery,
+    getFailure: () => {
+      if (!currentStartupFailure) throw new Error('Recovery status is unavailable.');
+      return currentStartupFailure;
+    },
+    retry: async () => {
+      const status = await runStartupAttempt();
+      if (status === 'ready') {
+        setImmediate(dismissRecoveryWindow);
+        return { status: 'ready' };
+      }
+      return { status: 'recovery_required', failure: currentStartupFailure! };
+    },
+    chooseDiagnosticTarget: async () => {
+      const failure = currentStartupFailure;
+      if (!failure) return null;
+      const result = await dialog.showSaveDialog(window, {
+        title: '导出玉衡启动诊断',
+        defaultPath: path.join(app.getPath('documents'), `yuheng-diagnostic-${failure.diagnosticId}.json`),
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      });
+      return result.canceled ? null : result.filePath ?? null;
+    },
+    openDirectory: async (directory) => {
+      const target = directory === 'data' ? dataDirectory : app.getPath('logs');
+      const error = await shell.openPath(target);
+      if (error) throw new Error('Directory could not be opened.');
+    },
+    quit: () => app.quit(),
+  });
+  window.once('closed', () => {
+    if (recoveryWindow !== window) return;
+    disposeRecoveryIpc?.();
+    disposeRecoveryIpc = null;
+    recoveryWindow = null;
+    if (!applicationContext) app.quit();
+  });
+}
+
+function dismissRecoveryWindow(): void {
+  disposeRecoveryIpc?.();
+  disposeRecoveryIpc = null;
+  const window = recoveryWindow;
+  recoveryWindow = null;
+  if (window && !window.isDestroyed()) window.destroy();
+}
+
+app.whenReady().then(async () => {
+  configureRendererSecurity();
+  if (await runStartupAttempt() === 'recovery_required') showRecoveryWindow();
 });
 
 app.on('window-all-closed', () => {
@@ -1766,24 +1898,20 @@ app.on('window-all-closed', () => {
 app.on('before-quit', (event) => {
   allowWindowClose = true;
   cancelPetMotion();
-  if (shutdownReady) {
-    closeResources();
-    return;
-  }
+  if (shutdownReady || !applicationContext) return;
   if (shutdownRequested) {
     event.preventDefault();
-    return;
-  }
-  if (activeRuns.size === 0) {
-    for (const approval of pendingApprovals.values()) approval.finish(false);
-    closeResources();
     return;
   }
   event.preventDefault();
   shutdownRequested = true;
   for (const run of activeRuns.values()) run.controller.abort();
   for (const approval of pendingApprovals.values()) approval.finish(false);
-  void waitForActiveRuns(5_000).then(() => {
+  void waitForActiveRuns(5_000).then(async () => {
+    if (activeRuns.size === 0) {
+      await applicationContext?.close();
+      applicationContext = null;
+    }
     shutdownReady = true;
     app.quit();
   });
