@@ -1,5 +1,13 @@
 export type BuiltInNoteCover = { id: string; label: string; background: string; image?: string };
 
+export type NoteCoverBackgroundStyle = {
+  background?: string;
+  backgroundImage?: string;
+  backgroundPosition: 'center';
+  backgroundSize: 'cover';
+  backgroundRepeat: 'no-repeat';
+};
+
 export const BUILT_IN_NOTE_COVERS: readonly BuiltInNoteCover[] = [
   { id: 'aurora', label: '极光', background: 'linear-gradient(120deg, #173b4f 0%, #397f78 48%, #b7c98d 100%)', image: new URL('../../assets/note-covers/forest.webp', import.meta.url).href },
   { id: 'dawn', label: '晨曦', background: 'linear-gradient(120deg, #56354a 0%, #c57b63 45%, #f0cf9f 100%)', image: new URL('../../assets/note-covers/mountain-dawn.webp', import.meta.url).href },
@@ -14,6 +22,16 @@ export const BUILT_IN_NOTE_COVERS: readonly BuiltInNoteCover[] = [
 
 export function builtInNoteCover(id: string | null | undefined): BuiltInNoteCover | null {
   return BUILT_IN_NOTE_COVERS.find((cover) => cover.id === id) ?? null;
+}
+
+export function noteCoverBackgroundStyle(background?: string, image?: string): NoteCoverBackgroundStyle {
+  return {
+    ...(background ? { background } : {}),
+    ...(image ? { backgroundImage: `url(${image})` } : {}),
+    backgroundPosition: 'center',
+    backgroundSize: 'cover',
+    backgroundRepeat: 'no-repeat',
+  };
 }
 
 export function randomNoteCover(exclude?: string | null, random: () => number = Math.random): BuiltInNoteCover {
