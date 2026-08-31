@@ -1,5 +1,16 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { RECOVERY_CHANNELS } from './recovery-channels';
+
+// Sandboxed preloads cannot require local modules at runtime.
+const RECOVERY_CHANNELS = {
+  getStatus: 'recovery:get-status',
+  retry: 'recovery:retry',
+  listSnapshots: 'recovery:list-snapshots',
+  restoreSnapshot: 'recovery:restore-snapshot',
+  exportDiagnostics: 'recovery:export-diagnostics',
+  openDataDirectory: 'recovery:open-data-directory',
+  openLogDirectory: 'recovery:open-log-directory',
+  quit: 'recovery:quit',
+} as const;
 
 contextBridge.exposeInMainWorld('recoveryBridge', {
   getStatus: () => ipcRenderer.invoke(RECOVERY_CHANNELS.getStatus),

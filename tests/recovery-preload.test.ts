@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
+import ts from 'typescript';
 import { RECOVERY_CHANNELS } from '../electron/recovery-channels';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -15,6 +16,16 @@ test('recovery preload exposes only the fixed recovery invocation surface', () =
   const invokedKeys = [...source.matchAll(/ipcRenderer\.invoke\(RECOVERY_CHANNELS\.([A-Za-z]+)/g)].map((match) => match[1]).sort();
   assert.deepEqual(invokedKeys, Object.keys(RECOVERY_CHANNELS).sort());
   assert.ok(Object.values(RECOVERY_CHANNELS).every((channel) => channel.startsWith('recovery:')));
+  assert.ok(Object.values(RECOVERY_CHANNELS).every((channel) => source.includes(`'${channel}'`)));
+});
+
+test('recovery preload is self-contained for the Electron sandbox', () => {
+  const source = fs.readFileSync(path.join(root, 'electron/recovery-preload.ts'), 'utf8');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+
+  assert.doesNotMatch(compiled, /require\(["']\.\.?\//u);
 });
 
 test('recovery window uses an isolated sandbox and blocks renderer navigation', () => {
