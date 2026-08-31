@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_AGENT_PROFILE_ID, isAgentProfileId, type AgentProfileId } from './agent-profiles';
 import { toConversationBackup, type ConversationBackup } from './conversation-backup';
 import { DEFAULT_TOOL_PERMISSION_MODE, isPersistentToolPermissionMode, type PersistentToolPermissionMode } from './permission-mode';
+import { createStorageRepositories, type StorageRepositories } from './storage/repositories';
 
 export type ProviderConfig = {
   id: string;
@@ -155,13 +156,19 @@ function searchSnippet(value: string, query: string): string {
   return `${start > 0 ? '…' : ''}${normalized.slice(start, end).trim()}${end < normalized.length ? '…' : ''}`;
 }
 
+function readEnabledConfig(value: unknown): { enabled: boolean } {
+  return { enabled: Boolean(value && typeof value === 'object' && (value as Record<string, unknown>).enabled === true) };
+}
+
 export class AppStore {
   private readonly db: DatabaseSync;
+  private readonly repositories: StorageRepositories;
   private searchIndexAvailable = false;
 
   constructor(dataDir: string) {
     fs.mkdirSync(dataDir, { recursive: true });
     this.db = new DatabaseSync(path.join(dataDir, 'yuheng.sqlite'));
+    this.repositories = createStorageRepositories(this.db);
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS conversation_projects (
@@ -1401,81 +1408,42 @@ export class AppStore {
   }
 
   listProviders(): ProviderConfig[] {
-    const rows = this.db.prepare("SELECT id, protocol, base_url AS baseUrl, model, display_name AS displayName, context_window AS contextWindow FROM provider_profiles ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, updated_at ASC, id ASC").all(DEFAULT_PROVIDER_ID) as Row[];
-    return rows.map((row) => ({ id: String(row.id), protocol: row.protocol as ProviderConfig['protocol'], baseUrl: String(row.baseUrl), model: String(row.model), displayName: String(row.displayName), contextWindow: Number(row.contextWindow), hasApiKey: false }));
+    return this.repositories.providers.list();
   }
 
   deleteProvider(id: string): void {
-    if (!this.getProvider(id)) throw new Error('Provider not found.');
-    const references = this.db.prepare('SELECT COUNT(*) AS count FROM conversations WHERE provider_id = ?').get(id) as Row;
-    if (Number(references.count) > 0) throw new Error('Provider is still used by conversations.');
-    this.db.prepare('DELETE FROM provider_profiles WHERE id = ?').run(id);
+    this.repositories.providers.delete(id);
   }
 
   defaultProviderId(): string | null {
-    const row = this.db.prepare("SELECT id FROM provider_profiles ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, updated_at ASC, id ASC LIMIT 1").get(DEFAULT_PROVIDER_ID) as Row | undefined;
-    return row ? String(row.id) : null;
+    return this.repositories.providers.defaultId();
   }
 
   getProvider(id?: string): ProviderConfig | null {
-    const providerId = id ?? this.defaultProviderId();
-    if (!providerId) return null;
-    const row = this.db.prepare('SELECT id, protocol, base_url AS baseUrl, model, display_name AS displayName, context_window AS contextWindow FROM provider_profiles WHERE id = ?').get(providerId) as Row | undefined;
-    if (!row) return null;
-    return { id: String(row.id), protocol: row.protocol as ProviderConfig['protocol'], baseUrl: String(row.baseUrl), model: String(row.model), displayName: String(row.displayName), contextWindow: Number(row.contextWindow), hasApiKey: false };
+    return this.repositories.providers.get(id);
   }
 
   saveProvider(config: Omit<ProviderConfig, 'hasApiKey' | 'id'> & { id?: string }): ProviderConfig {
-    const existingCount = Number((this.db.prepare('SELECT COUNT(*) AS count FROM provider_profiles').get() as Row).count);
-    const id = config.id?.trim() || (existingCount === 0 ? DEFAULT_PROVIDER_ID : crypto.randomUUID());
-    const now = new Date().toISOString();
-    this.db.prepare(`INSERT INTO provider_profiles (id, protocol, base_url, model, display_name, context_window, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET protocol=excluded.protocol, base_url=excluded.base_url, model=excluded.model, display_name=excluded.display_name, context_window=excluded.context_window, updated_at=excluded.updated_at`).run(id, config.protocol, config.baseUrl, config.model, config.displayName, config.contextWindow, now);
-    if (existingCount === 0) this.db.prepare('UPDATE conversations SET provider_id = ? WHERE provider_id IS NULL').run(id);
-    return { ...config, id, hasApiKey: true };
+    return this.repositories.providers.save(config);
   }
 
   getBrowserUseConfig(): BrowserUseConfig {
-    const row = this.db.prepare("SELECT value FROM app_settings WHERE key = 'browser_use'").get() as Row | undefined;
-    if (!row) return { enabled: false };
-    try {
-      const value: unknown = JSON.parse(String(row.value));
-      return { enabled: Boolean(value && typeof value === 'object' && (value as Record<string, unknown>).enabled === true) };
-    } catch {
-      return { enabled: false };
-    }
+    return this.repositories.settings.get('browser_use', { enabled: false }, readEnabledConfig);
   }
 
   saveBrowserUseConfig(config: BrowserUseConfig): BrowserUseConfig {
     const normalized = { enabled: config.enabled === true };
-    const now = new Date().toISOString();
-    this.db.exec('BEGIN');
-    try {
-      this.db.prepare(`INSERT INTO app_settings (key, value, updated_at) VALUES ('browser_use', ?, ?)
-        ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`)
-        .run(JSON.stringify(normalized), now);
+    this.repositories.settings.transaction(() => {
+      this.repositories.settings.set('browser_use', normalized);
       if (normalized.enabled) {
-        this.db.prepare(`INSERT INTO app_settings (key, value, updated_at) VALUES ('computer_use', ?, ?)
-          ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`)
-          .run(JSON.stringify({ enabled: false }), now);
+        this.repositories.settings.set('computer_use', { enabled: false });
       }
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
+    });
     return normalized;
   }
 
   getComputerUseConfig(): ComputerUseConfig {
-    const row = this.db.prepare("SELECT value FROM app_settings WHERE key = 'computer_use'").get() as Row | undefined;
-    if (!row) return { enabled: false };
-    try {
-      const value: unknown = JSON.parse(String(row.value));
-      return { enabled: Boolean(value && typeof value === 'object' && (value as Record<string, unknown>).enabled === true) };
-    } catch {
-      return { enabled: false };
-    }
+    return this.repositories.settings.get('computer_use', { enabled: false }, readEnabledConfig);
   }
 
   getDesktopPetConfig(): DesktopPetConfig {
@@ -1525,22 +1493,12 @@ export class AppStore {
 
   saveComputerUseConfig(config: ComputerUseConfig): ComputerUseConfig {
     const normalized = { enabled: config.enabled === true };
-    const now = new Date().toISOString();
-    this.db.exec('BEGIN');
-    try {
-      this.db.prepare(`INSERT INTO app_settings (key, value, updated_at) VALUES ('computer_use', ?, ?)
-        ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`)
-        .run(JSON.stringify(normalized), now);
+    this.repositories.settings.transaction(() => {
+      this.repositories.settings.set('computer_use', normalized);
       if (normalized.enabled) {
-        this.db.prepare(`INSERT INTO app_settings (key, value, updated_at) VALUES ('browser_use', ?, ?)
-          ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`)
-          .run(JSON.stringify({ enabled: false }), now);
+        this.repositories.settings.set('browser_use', { enabled: false });
       }
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
+    });
     return normalized;
   }
 
