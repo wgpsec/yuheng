@@ -187,7 +187,18 @@ async function loadCodexPetCatalog(): Promise<CodexPetCatalogEntry[]> {
         status: issues.some((item) => item.severity === 'error') ? 'invalid' : issues.length > 0 ? 'warning' : 'compatible',
       };
     } catch {
-      entry.report = { ...entry.report, status: 'invalid', issues: [...entry.report.issues, { code: 'manifest', severity: 'error', message: '精灵表无法解码，请确认它是有效的 WebP 文件。' }] };
+      // The renderer can decode WebP independently. A nativeImage failure is
+      // therefore a preview/diagnostics limitation, not proof that the Codex
+      // package is unusable. Keep structural errors from inspectCodexPets()
+      // authoritative, but do not reject an otherwise valid package here.
+      entry.report = {
+        ...entry.report,
+        status: entry.report.status === 'invalid' ? 'invalid' : 'warning',
+        issues: [
+          ...entry.report.issues,
+          { code: 'manifest', severity: 'warning', message: '主进程无法预览精灵表，将由渲染器直接加载。' },
+        ],
+      };
     }
   }));
   return catalog;

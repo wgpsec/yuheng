@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
-import { deleteCodexPetPackage, importCodexPetPackage, inspectCodexPets, scanCodexPets, validateCodexPetManifest } from '../electron/pets';
+import { deleteCodexPetPackage, importCodexPetPackage, inspectCodexPets, isCodexPetRuntimeUsable, scanCodexPets, validateCodexPetManifest } from '../electron/pets';
 
 function vp8xWebp(width: number, height: number): Buffer {
   const buffer = Buffer.alloc(30);
@@ -39,6 +39,21 @@ describe('Codex Pet compatibility', () => {
     assert.ok(report.issues.some((issue) => issue.code === 'missing_states'));
     assert.equal(report.states.find((state) => state.state === 'idle')?.source, 'manifest');
     assert.equal(report.states.find((state) => state.state === 'thinking')?.fallback, true);
+  });
+
+  it('keeps a Codex package with only missing optional states runtime-usable', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'yuheng-pet-fallback-'));
+    try {
+      await mkdir(path.join(root, 'guga'));
+      await writeFile(path.join(root, 'guga', 'pet.json'), JSON.stringify({ id: 'guga', displayName: 'Guga', spritesheetPath: 'spritesheet.webp' }));
+      await writeFile(path.join(root, 'guga', 'spritesheet.webp'), vp8xWebp(1_536, 1_872));
+      const [entry] = await inspectCodexPets([{ path: root, source: 'codex' }]);
+      assert.equal(entry.report.status, 'warning');
+      assert.equal(isCodexPetRuntimeUsable(entry), true);
+      assert.ok(entry.report.issues.some((item) => item.code === 'missing_states' && item.severity === 'warning'));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('keeps malformed packages in the management catalog without exposing them to the runtime', async () => {
