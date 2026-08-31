@@ -1,16 +1,19 @@
-# Issue tracker: GitHub
+# Issue tracker: Local Markdown
 
-本仓库的 Issue 和 PRD 使用 GitHub Issues 管理，通过 `gh` CLI 操作。
+本仓库的 Issue 和 PRD 使用 `.scratch/` 下的本地 Markdown 文档管理。
 
 ## Conventions
 
-- 创建：`gh issue create --title "..." --body "..."`
-- 读取：`gh issue view <number> --comments`
-- 列表：`gh issue list --state open --json number,title,body,labels,comments`
-- 评论：`gh issue comment <number> --body "..."`
-- 添加或移除标签：`gh issue edit <number> --add-label "..."` / `--remove-label "..."`
-- 关闭：`gh issue close <number> --comment "..."`
+- 每个功能使用独立目录：`.scratch/<feature-slug>/`
+- PRD 位于：`.scratch/<feature-slug>/PRD.md`
+- 实现任务位于：`.scratch/<feature-slug>/issues/<NN>-<slug>.md`，从 `01` 开始编号
+- 每个任务在文件开头附近使用 `Status:` 记录状态，状态值见 `triage-labels.md`
+- 评论和过程记录追加到文件末尾的 `## Comments` 下
 
-仓库信息从 `git remote -v` 推断。在仓库目录内运行时，`gh` 会自动使用当前 GitHub 仓库。
+## When a skill says "publish to the issue tracker"
 
-当技能要求“发布到 issue tracker”时，创建 GitHub Issue；要求“读取相关 ticket”时，使用 `gh issue view <number> --comments`。
+在 `.scratch/<feature-slug>/` 下创建对应 Markdown 文件；目录不存在时一并创建。
+
+## When a skill says "fetch the relevant ticket"
+
+读取用户给出的本地文件路径或任务编号对应的 Markdown 文件。

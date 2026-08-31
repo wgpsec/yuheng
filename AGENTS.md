@@ -13,7 +13,7 @@
 
 ### Issue tracker
 
-使用当前仓库的 GitHub Issues。详见 `docs/agents/issue-tracker.md`。
+使用 `.scratch/` 下的本地 Markdown 文档。详见 `docs/agents/issue-tracker.md`。
 
 ### Triage labels
 
