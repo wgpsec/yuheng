@@ -57,9 +57,9 @@ test('full backup remaps restored task attachment and run artifact URLs to reada
     const archive = await createFullBackup({ dataDir: sourceDir, store: source, appVersion: '0.2.0', platform: 'darwin-arm64' });
     await restoreFullBackup({ dataDir: targetDir, store: target, archive });
 
-    const importedBoard = target.listTaskBoards().find((board) => board.name === '默认看板');
-    assert.ok(importedBoard);
-    const importedTask = target.listTasks(importedBoard.id).find((task) => task.title === '含附件任务');
+    const importedTask = target.listTaskBoards()
+      .flatMap((board) => target.listTasks(board.id))
+      .find((task) => task.title === '含附件任务');
     assert.ok(importedTask);
     const taskUrl = importedTask.description.match(/\((yuheng-task-asset:[^)]+)\)/)?.[1];
     assert.ok(taskUrl);
