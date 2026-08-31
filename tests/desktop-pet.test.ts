@@ -128,7 +128,7 @@ describe('Desktop pet dragging', () => {
   it('uses explicit pointer drag IPC instead of relying on a CSS drag region', () => {
     const renderer = readFileSync(new URL('../frontend/src/production/PetRenderer.tsx', import.meta.url), 'utf8');
     const preload = readFileSync(new URL('../electron/pet-preload.ts', import.meta.url), 'utf8');
-    const main = readFileSync(new URL('../electron/main.ts', import.meta.url), 'utf8');
+    const petIpc = readFileSync(new URL('../electron/ipc/register-pet-ipc.ts', import.meta.url), 'utf8');
     const css = readFileSync(new URL('../frontend/src/styles/global.css', import.meta.url), 'utf8');
     assert.match(renderer, /onPointerDown=\{startDrag\}/);
     assert.match(renderer, /onPointerMove=\{moveDrag\}/);
@@ -138,17 +138,19 @@ describe('Desktop pet dragging', () => {
     assert.match(renderer, /focusMain\(visibleFeedback\?\.openTarget\)/);
     assert.match(preload, /beginDrag: .*pet:drag-start/);
     assert.match(preload, /dragTo: .*pet:drag-move/);
-    assert.match(main, /ipcMain\.on\('pet:drag-start'/);
-    assert.match(main, /ipcMain\.on\('pet:drag-move'/);
+    assert.match(petIpc, /registrar\.onPet\('pet:drag-start'/);
+    assert.match(petIpc, /registrar\.onPet\('pet:drag-move'/);
     assert.match(css, /\.desktop-pet\s*\{[^}]*-webkit-app-region:\s*no-drag/);
   });
 
   it('runs the pet in a sandbox with a pet-only preload surface', () => {
-    const main = readFileSync(new URL('../electron/main.ts', import.meta.url), 'utf8');
+    const main = readFileSync(new URL('../electron/app/normal-application.ts', import.meta.url), 'utf8');
+    const petWindow = readFileSync(new URL('../electron/windows/pet-window.ts', import.meta.url), 'utf8');
     const preload = readFileSync(new URL('../electron/pet-preload.ts', import.meta.url), 'utf8');
-    assert.match(main, /preload: path\.join\(__dirname, 'pet-preload\.js'\)[\s\S]*?sandbox: true/);
-    assert.match(main, /registerRenderer\(window, 'pet'\);\s*window\.webContents\.on\('will-navigate'/);
-    assert.match(main, /window\.webContents\.setWindowOpenHandler\(\(\) => \(\{ action: 'deny' \}\)\)/);
+    assert.match(main, /preloadPath: path\.join\(__dirname, '\.\.\/pet-preload\.js'\)/);
+    assert.match(petWindow, /webPreferences: \{[\s\S]*?preload: this\.options\.preloadPath[\s\S]*?sandbox: true/);
+    assert.match(petWindow, /this\.options\.registerRenderer\(window\);\s*window\.webContents\.on\('will-navigate'/);
+    assert.match(petWindow, /window\.webContents\.setWindowOpenHandler\(\(\) => \(\{ action: 'deny' \}\)\)/);
     assert.match(preload, /contextBridge\.exposeInMainWorld\('desktopBridge', \{\s*pet:/);
     assert.doesNotMatch(preload, /\b(?:provider|conversations|notes|tasks|runs|backup):\s*\{/);
   });
@@ -189,19 +191,20 @@ describe('Desktop pet dragging', () => {
 
   it('exposes state controls and protects locked drag at both IPC boundaries', () => {
     const renderer = readFileSync(new URL('../frontend/src/production/PetRenderer.tsx', import.meta.url), 'utf8');
-    const main = readFileSync(new URL('../electron/main.ts', import.meta.url), 'utf8');
+    const petWindow = readFileSync(new URL('../electron/windows/pet-window.ts', import.meta.url), 'utf8');
+    const mainWindow = readFileSync(new URL('../electron/windows/main-window.ts', import.meta.url), 'utf8');
     const settings = readFileSync(new URL('../frontend/src/production/ProductionRenderer.tsx', import.meta.url), 'utf8');
     assert.match(renderer, /if \(petLocked\) return;/);
-    assert.match(main, /store\.getDesktopPetConfig\(\)\.locked === true/);
-    assert.match(main, /context-menu/);
+    assert.match(petWindow, /this\.options\.getConfig\(\)\.locked === true/);
+    assert.match(petWindow, /context-menu/);
     assert.match(settings, /锁定位置/);
     assert.match(settings, /不透明度/);
     assert.match(settings, /始终置顶/);
     assert.match(settings, /边缘吸附/);
     assert.match(settings, /轻微惯性/);
     assert.match(settings, /边界回弹/);
-    assert.match(main, /display-removed/);
-    assert.match(main, /setPetFullscreenHidden\(true\)/);
+    assert.match(petWindow, /display-removed/);
+    assert.match(mainWindow, /this\.options\.onFullScreenChange\(true\)/);
   });
 
   it('exposes persistent anti-interruption controls in pet settings', () => {
@@ -218,7 +221,7 @@ describe('Desktop pet dragging', () => {
 
   it('routes feedback preferences through the isolated pet bridge', () => {
     const preload = readFileSync(new URL('../electron/pet-preload.ts', import.meta.url), 'utf8');
-    const main = readFileSync(new URL('../electron/main.ts', import.meta.url), 'utf8');
+    const main = readFileSync(new URL('../electron/app/normal-application.ts', import.meta.url), 'utf8');
     assert.match(main, /input\.feedbackMode === 'important'/);
     assert.match(main, /soundEnabled/);
     assert.match(main, /mutedUntil/);
@@ -237,7 +240,7 @@ describe('Desktop pet dragging', () => {
   });
 
   it('coordinates run states in the main process instead of letting events overwrite each other', () => {
-    const main = readFileSync(new URL('../electron/main.ts', import.meta.url), 'utf8');
+    const main = readFileSync(new URL('../electron/app/normal-application.ts', import.meta.url), 'utf8');
     assert.match(main, /new PetStateCoordinator/);
     assert.match(main, /petStateCoordinator\.update\(event\)/);
     assert.match(main, /schedulePetStateExpiry\(\)/);
@@ -249,7 +252,7 @@ describe('Desktop pet dragging', () => {
     const production = readFileSync(new URL('../frontend/src/production/ProductionRenderer.tsx', import.meta.url), 'utf8');
     const preload = readFileSync(new URL('../electron/preload.ts', import.meta.url), 'utf8');
     const petPreload = readFileSync(new URL('../electron/pet-preload.ts', import.meta.url), 'utf8');
-    const main = readFileSync(new URL('../electron/main.ts', import.meta.url), 'utf8');
+    const main = readFileSync(new URL('../electron/app/normal-application.ts', import.meta.url), 'utf8');
     const css = readFileSync(new URL('../frontend/src/styles/global.css', import.meta.url), 'utf8');
     assert.match(renderer, /bridge\.pet\.onFeedback/);
     assert.match(renderer, /desktop-pet-feedback/);
@@ -266,13 +269,14 @@ describe('Desktop pet dragging', () => {
   });
 
   it('connects task reminders and Pet task shortcuts to task navigation', () => {
-    const main = readFileSync(new URL('../electron/main.ts', import.meta.url), 'utf8');
-    const production = readFileSync(new URL('../frontend/src/production/ProductionRenderer.tsx', import.meta.url), 'utf8');
+    const main = readFileSync(new URL('../electron/app/normal-application.ts', import.meta.url), 'utf8');
+    const petWindow = readFileSync(new URL('../electron/windows/pet-window.ts', import.meta.url), 'utf8');
+    const taskWorkspace = readFileSync(new URL('../frontend/src/features/tasks/use-task-workspace.ts', import.meta.url), 'utf8');
     const taskBoard = readFileSync(new URL('../frontend/src/features/tasks/task-board.tsx', import.meta.url), 'utf8');
     assert.match(main, /enqueueTaskPetReminder\(task\)/);
-    assert.match(main, /label: '今日任务'/);
-    assert.match(main, /label: '快速记录'/);
-    assert.match(production, /event\.type === 'open_today' \|\| event\.type === 'quick_record'/);
+    assert.match(petWindow, /label: '今日任务'/);
+    assert.match(petWindow, /label: '快速记录'/);
+    assert.match(taskWorkspace, /event\.type === 'open_today' \|\| event\.type === 'quick_record'/);
     assert.match(taskBoard, /setFilter\('today'\)/);
     assert.match(taskBoard, /openNew\(taskTypes\[0\]\.id\)/);
   });
@@ -280,16 +284,16 @@ describe('Desktop pet dragging', () => {
   it('exposes skin diagnostics and managed lifecycle actions only to the main renderer', () => {
     const preload = readFileSync(new URL('../electron/preload.ts', import.meta.url), 'utf8');
     const petPreload = readFileSync(new URL('../electron/pet-preload.ts', import.meta.url), 'utf8');
-    const main = readFileSync(new URL('../electron/main.ts', import.meta.url), 'utf8');
+    const petIpc = readFileSync(new URL('../electron/ipc/register-pet-ipc.ts', import.meta.url), 'utf8');
     assert.match(preload, /catalog: \(\) => ipcRenderer\.invoke\('pet:catalog'\)/);
     assert.match(preload, /import: \(\) => ipcRenderer\.invoke\('pet:import'\)/);
     assert.match(preload, /delete: \(petId: string\) => ipcRenderer\.invoke\('pet:delete', petId\)/);
     assert.match(preload, /reveal: \(petId: string\) => ipcRenderer\.invoke\('pet:reveal', petId\)/);
     assert.doesNotMatch(petPreload, /pet:catalog|pet:import|pet:delete|pet:reveal/);
-    assert.match(main, /handleMain\('pet:catalog'/);
-    assert.match(main, /handleMain\('pet:import'/);
-    assert.match(main, /handleMain\('pet:delete'/);
-    assert.match(main, /handleMain\('pet:reveal'/);
+    assert.match(petIpc, /registrar\.main\('pet:catalog'/);
+    assert.match(petIpc, /registrar\.main\('pet:import'/);
+    assert.match(petIpc, /registrar\.main\('pet:delete'/);
+    assert.match(petIpc, /registrar\.main\('pet:reveal'/);
   });
 
   it('renders state-aware skin previews and compatibility guidance in settings', () => {
