@@ -72,6 +72,67 @@ export type RunEvent =
   | { type: 'failed'; runId: string; conversationId: string; error: string }
   | { type: 'cancelled'; runId: string; conversationId: string };
 
+/** Stable, renderer-safe startup failure categories. Raw storage errors stay in diagnostics. */
+export type StartupFailureCode =
+  | 'storage_unavailable'
+  | 'database_corrupt'
+  | 'schema_too_new'
+  | 'snapshot_failed'
+  | 'migration_failed'
+  | 'verification_failed'
+  | 'initialization_failed'
+  | 'interrupted_migration';
+export type StartupPhase = 'preflight' | 'checking' | 'snapshotting' | 'migrating' | 'verifying' | 'initializing';
+export type StartupFailure = {
+  code: StartupFailureCode;
+  phase: StartupPhase;
+  retryable: boolean;
+  currentSchemaVersion: number;
+  targetSchemaVersion: number;
+  diagnosticId: string;
+  message: string;
+};
+export type RecoveryStatus = {
+  state: 'recovery_required';
+  failure: StartupFailure;
+  currentSchemaVersion: number;
+  targetSchemaVersion: number;
+  attemptId: string | null;
+};
+export type RecoverySnapshot = {
+  id: string;
+  createdAt: string;
+  schemaVersion: number;
+  appVersion: string;
+  sizeBytes: number;
+  sha256: string;
+  state: 'available' | 'restored' | 'invalid';
+};
+export type RecoveryOperationCode = 'not_available' | 'invalid_selection' | 'restore_failed' | 'export_failed' | 'directory_unavailable' | 'quit_failed';
+export const RECOVERY_CHANNELS = {
+  getStatus: 'recovery:get-status',
+  retry: 'recovery:retry',
+  listSnapshots: 'recovery:list-snapshots',
+  restoreSnapshot: 'recovery:restore-snapshot',
+  exportDiagnostics: 'recovery:export-diagnostics',
+  openDataDirectory: 'recovery:open-data-directory',
+  openLogDirectory: 'recovery:open-log-directory',
+  quit: 'recovery:quit',
+} as const;
+export type RecoveryOperationError = { code: RecoveryOperationCode; message: string };
+export type RecoveryOperationResult = { ok: true } | { ok: false; error: RecoveryOperationError };
+export type RecoveryRetryResult = { status: 'ready' } | { status: 'recovery_required'; recovery: RecoveryStatus };
+export type RecoveryBridge = {
+  getStatus: () => Promise<RecoveryStatus>;
+  retry: () => Promise<RecoveryRetryResult>;
+  listSnapshots: () => Promise<RecoverySnapshot[]>;
+  restoreSnapshot: (snapshotId: string) => Promise<RecoveryOperationResult>;
+  exportDiagnostics: () => Promise<RecoveryOperationResult>;
+  openDataDirectory: () => Promise<RecoveryOperationResult>;
+  openLogDirectory: () => Promise<RecoveryOperationResult>;
+  quit: () => Promise<RecoveryOperationResult>;
+};
+
 export type DesktopBridge = {
   app: {
     getInfo: () => Promise<AppInfo>;
