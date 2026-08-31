@@ -16,7 +16,7 @@ export const normalizeLegacyV1Migration: Migration = {
   },
 };
 
-function normalizeLegacyV1(db: DatabaseConnection): void {
+export function normalizeLegacyV1(db: DatabaseConnection): void {
   dropSearchTriggers(db);
   createFoundations(db);
   addLegacyColumns(db);
@@ -58,7 +58,7 @@ function addLegacyColumns(db: DatabaseConnection): void {
   addColumn(db, 'conversations', 'reasoning_level', "TEXT NOT NULL DEFAULT 'default'");
   addColumn(db, 'conversations', 'provider_id', 'TEXT');
   addColumn(db, 'conversations', 'profile_id', "TEXT NOT NULL DEFAULT 'assistant'");
-  db.prepare('UPDATE conversations SET project_id = ? WHERE project_id IS NULL').run('personal');
+  if (tableExists(db, 'conversations')) db.prepare('UPDATE conversations SET project_id = ? WHERE project_id IS NULL').run('personal');
 
   addColumn(db, 'runs', 'input_message_id', 'TEXT REFERENCES messages(id) ON DELETE SET NULL');
   for (const column of ['input_tokens', 'output_tokens', 'total_tokens', 'context_tokens', 'context_window']) addColumn(db, 'runs', column, 'INTEGER');

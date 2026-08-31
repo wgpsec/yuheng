@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type { DatabaseConnection } from '../database';
+import { RepositoryBase } from './repository-base';
 
 export type ProviderRepositoryConfig = {
   id: string;
@@ -13,8 +13,7 @@ export type ProviderRepositoryConfig = {
 
 type Row = Record<string, unknown>;
 
-export class ProviderRepository {
-  constructor(private readonly db: DatabaseConnection) {}
+export class ProviderRepository extends RepositoryBase {
 
   list(): ProviderRepositoryConfig[] {
     const rows = this.db.prepare("SELECT id, protocol, base_url AS baseUrl, model, display_name AS displayName, context_window AS contextWindow FROM provider_profiles ORDER BY CASE WHEN id = 'default' THEN 0 ELSE 1 END, updated_at ASC, id ASC").all() as Row[];
@@ -37,10 +36,12 @@ export class ProviderRepository {
     const existingCount = Number((this.db.prepare('SELECT COUNT(*) AS count FROM provider_profiles').get() as Row).count);
     const id = config.id?.trim() || (existingCount === 0 ? 'default' : crypto.randomUUID());
     const now = new Date().toISOString();
-    this.db.prepare(`INSERT INTO provider_profiles (id, protocol, base_url, model, display_name, context_window, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET protocol=excluded.protocol, base_url=excluded.base_url, model=excluded.model, display_name=excluded.display_name, context_window=excluded.context_window, updated_at=excluded.updated_at`)
-      .run(id, config.protocol, config.baseUrl, config.model, config.displayName, config.contextWindow, now);
-    if (existingCount === 0) this.db.prepare('UPDATE conversations SET provider_id = ? WHERE provider_id IS NULL').run(id);
+    this.transaction(() => {
+      this.db.prepare(`INSERT INTO provider_profiles (id, protocol, base_url, model, display_name, context_window, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET protocol=excluded.protocol, base_url=excluded.base_url, model=excluded.model, display_name=excluded.display_name, context_window=excluded.context_window, updated_at=excluded.updated_at`)
+        .run(id, config.protocol, config.baseUrl, config.model, config.displayName, config.contextWindow, now);
+      if (existingCount === 0) this.db.prepare('UPDATE conversations SET provider_id = ? WHERE provider_id IS NULL').run(id);
+    });
     return { ...config, id, hasApiKey: true };
   }
 

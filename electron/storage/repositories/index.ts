@@ -1,4 +1,4 @@
-import type { DatabaseConnection } from '../database';
+import type { DatabaseOwner } from '../database';
 import { BackupRepository } from './backup-repository';
 import { ConversationRepository } from './conversation-repository';
 import { NoteRepository } from './note-repository';
@@ -19,15 +19,15 @@ export type StorageRepositories = {
   backups: BackupRepository;
 };
 
-export function createStorageRepositories(db: DatabaseConnection): StorageRepositories {
+export function createStorageRepositories(owner: DatabaseOwner): StorageRepositories {
   return {
-    conversations: new ConversationRepository(db),
-    notes: new NoteRepository(db),
-    providers: new ProviderRepository(db),
-    runs: new RunRepository(db),
-    search: new SearchRepository(db),
-    settings: new SettingsRepository(db),
-    tasks: new TaskRepository(db),
-    backups: new BackupRepository(db),
+    conversations: new ConversationRepository(owner),
+    notes: new NoteRepository(owner),
+    providers: new ProviderRepository(owner),
+    runs: new RunRepository(owner),
+    search: new SearchRepository(owner),
+    settings: new SettingsRepository(owner),
+    tasks: new TaskRepository(owner),
+    backups: new BackupRepository(owner),
   };
 }

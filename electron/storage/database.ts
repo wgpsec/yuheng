@@ -11,6 +11,7 @@ export class DatabaseOwner {
   readonly databasePath: string;
   readonly database: DatabaseConnection;
   private closed = false;
+  private transactionDepth = 0;
 
   private constructor(databasePath: string, options: DatabaseOpenOptions) {
     this.databasePath = databasePath;
@@ -27,14 +28,22 @@ export class DatabaseOwner {
   }
 
   transaction<T>(operation: (database: DatabaseConnection) => T): T {
-    this.database.exec('BEGIN IMMEDIATE');
+    const depth = this.transactionDepth;
+    const savepoint = `yuheng_transaction_${depth}`;
+    this.database.exec(depth === 0 ? 'BEGIN IMMEDIATE' : `SAVEPOINT ${savepoint}`);
+    this.transactionDepth += 1;
     try {
       const result = operation(this.database);
-      this.database.exec('COMMIT');
+      this.database.exec(depth === 0 ? 'COMMIT' : `RELEASE SAVEPOINT ${savepoint}`);
       return result;
     } catch (error) {
-      try { this.database.exec('ROLLBACK'); } catch { /* Preserve the original failure. */ }
+      try {
+        if (depth === 0) this.database.exec('ROLLBACK');
+        else this.database.exec(`ROLLBACK TO SAVEPOINT ${savepoint}; RELEASE SAVEPOINT ${savepoint}`);
+      } catch { /* Preserve the original failure. */ }
       throw error;
+    } finally {
+      this.transactionDepth -= 1;
     }
   }
 
