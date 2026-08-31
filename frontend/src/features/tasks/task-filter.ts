@@ -1,6 +1,6 @@
 import type { Task } from '../../contracts/desktop-bridge';
 
-export type TaskFilter = 'all' | 'open' | 'due' | 'reminder';
+export type TaskFilter = 'all' | 'open' | 'due' | 'reminder' | 'today';
 
 function localDateKey(date: Date): string {
   const year = date.getFullYear();
@@ -17,6 +17,10 @@ function dueOnOrBeforeToday(task: Task, today: string): boolean {
   return Boolean(task.dueAt && task.dueAt.slice(0, 10) <= today);
 }
 
+function reminderToday(task: Task, today: string): boolean {
+  return Boolean(task.remindAt && !task.reminderFiredAt && task.remindAt.slice(0, 10) === today);
+}
+
 export function filterBoardTasks(tasks: Task[], query: string, filter: TaskFilter, now = new Date()): Task[] {
   const normalizedQuery = query.trim().toLocaleLowerCase('zh-CN');
   const today = localDateKey(now);
@@ -26,6 +30,7 @@ export function filterBoardTasks(tasks: Task[], query: string, filter: TaskFilte
     if (filter === 'open') return !isClosed(task.status);
     if (filter === 'due') return !isClosed(task.status) && dueOnOrBeforeToday(task, today);
     if (filter === 'reminder') return !isClosed(task.status) && Boolean(task.remindAt && !task.reminderFiredAt);
+    if (filter === 'today') return !isClosed(task.status) && (dueOnOrBeforeToday(task, today) || reminderToday(task, today));
     return true;
   });
 }

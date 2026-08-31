@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 import { AppStore } from '../electron/store';
 import { NoteCoverStore } from '../electron/note-covers';
 
@@ -52,6 +53,63 @@ test('persists note icon and cover metadata and includes it in backups', () => {
   }
 });
 
+test('records visible note revisions and restores one without losing the current version', () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-note-history-'));
+  const store = new AppStore(dataDir);
+  try {
+    const note = store.createNote({ title: '计划', content: '第一版' });
+    store.updateNote(note.id, { content: '第二版' });
+    store.updateNote(note.id, { favorite: true });
+    store.updateNote(note.id, { content: '第二版' });
+    const versions = store.listNoteVersions(note.id);
+    assert.equal(versions.length, 1);
+    assert.equal(versions[0]?.content, '第一版');
+
+    const restored = store.restoreNoteVersion(note.id, versions[0]!.id);
+    assert.equal(restored.content, '第一版');
+    assert.equal(store.listNoteVersions(note.id)[0]?.content, '第二版');
+  } finally {
+    store.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('normalizes lightweight properties and includes them in history restoration', () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-note-properties-'));
+  const store = new AppStore(dataDir);
+  try {
+    const note = store.createNote('路线图');
+    const updated = store.updateNote(note.id, { properties: { status: ' 进行中 ', date: '2026-09-01', tags: [' 产品 ', '产品', '', 'Roadmap'] } });
+    assert.deepEqual(updated.properties, { status: '进行中', date: '2026-09-01', tags: ['产品', 'Roadmap'] });
+    const version = store.listNoteVersions(note.id)[0]!;
+    assert.deepEqual(version.properties, { status: null, date: null, tags: [] });
+    assert.deepEqual(store.restoreNoteVersion(note.id, version.id).properties, { status: null, date: null, tags: [] });
+    assert.deepEqual(store.listNoteVersions(note.id)[0]?.properties, updated.properties);
+  } finally {
+    store.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('bounds page history and rejects a version owned by another page', () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-note-history-boundary-'));
+  const store = new AppStore(dataDir);
+  try {
+    const first = store.createNote({ title: '第一篇', content: 'v0' });
+    const second = store.createNote({ title: '第二篇', content: 'other' });
+    for (let index = 1; index <= 55; index += 1) store.updateNote(first.id, { content: `v${index}` });
+    const versions = store.listNoteVersions(first.id);
+    assert.equal(versions.length, 50);
+    assert.equal(versions.some((version) => version.content === 'v0'), false);
+    const foreignVersion = store.updateNote(second.id, { content: 'changed' }) && store.listNoteVersions(second.id)[0]!;
+    assert.throws(() => store.restoreNoteVersion(first.id, foreignVersion.id), /version not found/i);
+    assert.equal(store.getNote(first.id)?.content, 'v55');
+  } finally {
+    store.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test('stores custom note covers inside the managed directory and rejects unsafe input', () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-note-covers-'));
   const covers = new NoteCoverStore(dataDir);
@@ -74,6 +132,81 @@ test('creates an untitled child when the parent is supplied separately', () => {
     const child = store.createNote(undefined, root.id);
     assert.equal(child.parentId, root.id);
     assert.equal(child.title, '未命名笔记');
+  } finally {
+    store.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('creates a note from a template payload in one write', () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-notes-template-'));
+  const store = new AppStore(dataDir);
+  try {
+    const parent = store.createNote('项目');
+    const note = store.createNote({ title: '会议记录', parentId: parent.id, icon: '🗓️', content: '## 议题\n\n- [ ] 跟进' });
+    assert.equal(note.parentId, parent.id);
+    assert.equal(note.icon, '🗓️');
+    assert.equal(note.content, '## 议题\n\n- [ ] 跟进');
+  } finally {
+    store.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('moves a markdown block between notes atomically', () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-notes-block-move-'));
+  const store = new AppStore(dataDir);
+  try {
+    const source = store.createNote({ title: '来源', content: '保留内容\n\n待移动内容' });
+    const target = store.createNote({ title: '目标', content: '目标内容' });
+    const moved = store.moveNoteBlock(source.id, target.id, '保留内容', '待移动内容');
+    assert.equal(moved.source.content, '保留内容');
+    assert.equal(moved.target.content, '目标内容\n\n待移动内容');
+    assert.throws(() => store.moveNoteBlock(source.id, 'missing', '', '不应丢失'), /not found/i);
+    assert.equal(store.getNote(source.id)?.content, '保留内容');
+  } finally {
+    store.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('persists note favorites and only updates recency through explicit touch', () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-notes-navigation-'));
+  let store = new AppStore(dataDir);
+  try {
+    const first = store.createNote('常用页面');
+    const second = store.createNote('最近页面');
+    assert.equal(store.getNote(first.id)?.lastOpenedAt, null);
+    store.listNotes();
+    assert.equal(store.getNote(first.id)?.lastOpenedAt, null);
+    const favorite = store.updateNote(first.id, { favorite: true });
+    assert.equal(favorite.favorite, true);
+    const touched = store.touchNote(second.id);
+    assert.ok(touched.lastOpenedAt);
+    const quickNotes = store.search('').filter((result) => result.kind === 'note');
+    assert.equal(quickNotes[0]?.id, first.id);
+    store.close();
+    store = new AppStore(dataDir);
+    assert.equal(store.getNote(first.id)?.favorite, true);
+    assert.equal(store.getNote(second.id)?.lastOpenedAt, touched.lastOpenedAt);
+  } finally {
+    store.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('migrates legacy note tables without losing pages', () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-notes-legacy-'));
+  const database = new DatabaseSync(path.join(dataDir, 'yuheng.sqlite'));
+  database.exec('CREATE TABLE notes (id TEXT PRIMARY KEY, parent_id TEXT, title TEXT NOT NULL, content TEXT NOT NULL DEFAULT \'\', position INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)');
+  database.prepare('INSERT INTO notes (id, parent_id, title, content, position, archived, created_at, updated_at) VALUES (?, NULL, ?, ?, 0, 0, ?, ?)').run('legacy-note', '历史页面', '保留正文', '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z');
+  database.close();
+  const store = new AppStore(dataDir);
+  try {
+    const note = store.getNote('legacy-note');
+    assert.equal(note?.content, '保留正文');
+    assert.equal(note?.favorite, false);
+    assert.equal(note?.lastOpenedAt, null);
   } finally {
     store.close();
     fs.rmSync(dataDir, { recursive: true, force: true });
@@ -130,9 +263,11 @@ test('includes notes in full backup snapshots with remapped parent identities', 
   try {
     const root = source.createNote('项目笔记');
     const child = source.createNote('决策记录', root.id);
-    source.updateNote(child.id, { content: '保留这段内容' });
+    source.updateNote(child.id, { content: '保留这段内容', favorite: true, properties: { status: '已确认', date: '2026-09-02', tags: ['决策'] } });
+    source.touchNote(child.id);
     const snapshot = source.exportFullBackupSnapshot();
     assert.equal(snapshot.notes?.length, 2);
+    assert.equal(snapshot.noteVersions?.length, 1);
 
     const report = target.importFullBackupSnapshot(snapshot);
     assert.equal(report.notes, 2);
@@ -141,11 +276,38 @@ test('includes notes in full backup snapshots with remapped parent identities', 
     assert.notEqual(imported[0]?.id, root.id);
     assert.equal(imported[1]?.parentId, imported[0]?.id);
     assert.equal(imported[1]?.content, '保留这段内容');
+    assert.equal(imported[1]?.favorite, true);
+    assert.deepEqual(imported[1]?.properties, { status: '已确认', date: '2026-09-02', tags: ['决策'] });
+    assert.ok(imported[1]?.lastOpenedAt);
+    assert.equal(target.listNoteVersions(imported[1]!.id)[0]?.content, '');
+    assert.deepEqual(target.listNoteVersions(imported[1]!.id)[0]?.properties, { status: null, date: null, tags: [] });
   } finally {
     source.close();
     target.close();
     fs.rmSync(sourceDir, { recursive: true, force: true });
     fs.rmSync(targetDir, { recursive: true, force: true });
+  }
+});
+
+test('remaps internal note links when restoring a backup with fresh note identities', () => {
+  const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-notes-links-source-'));
+  const targetDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-notes-links-target-'));
+  const source = new AppStore(sourceDir); const target = new AppStore(targetDir);
+  try {
+    const sourceA = source.createNote('来源');
+    const sourceB = source.createNote('目标');
+    source.updateNote(sourceA.id, { content: `[目标](yuheng-note://${sourceB.id})\n\n[外部](yuheng-note://missing)` });
+    const report = target.importFullBackupSnapshot(source.exportFullBackupSnapshot());
+    assert.equal(report.notes, 2);
+    const imported = target.listNotes();
+    const importedA = imported.find((note) => note.title === '来源')!;
+    const importedB = imported.find((note) => note.title === '目标')!;
+    assert.match(importedA.content, new RegExp(`yuheng-note://${importedB.id}`));
+    assert.doesNotMatch(importedA.content, new RegExp(`yuheng-note://${sourceB.id}`));
+    assert.match(importedA.content, /yuheng-note:\/\/missing/);
+  } finally {
+    source.close(); target.close();
+    fs.rmSync(sourceDir, { recursive: true, force: true }); fs.rmSync(targetDir, { recursive: true, force: true });
   }
 });
 

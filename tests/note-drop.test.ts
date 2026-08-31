@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resolveNoteDrop } from '../frontend/src/features/notes/note-drop';
+import { noteDropPlacementFromPointer, resolveNoteDrop } from '../frontend/src/features/notes/note-drop';
 import type { Note } from '../frontend/src/contracts/desktop-bridge';
 
 const notes: Note[] = [
@@ -15,4 +15,10 @@ test('resolves note drop placement and prevents descendant cycles', () => {
   assert.deepEqual(resolveNoteDrop(notes, 'root-a', 'root-b', 'after'), { parentId: null });
   assert.equal(resolveNoteDrop(notes, 'root-a', 'child', 'inside'), null);
   assert.equal(resolveNoteDrop(notes, 'root-a', 'root-a', 'before'), null);
+});
+
+test('divides a note row into stable before, inside, and after drop zones', () => {
+  assert.equal(noteDropPlacementFromPointer(101, 100, 40), 'before');
+  assert.equal(noteDropPlacementFromPointer(115, 100, 40), 'inside');
+  assert.equal(noteDropPlacementFromPointer(139, 100, 40), 'after');
 });

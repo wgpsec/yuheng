@@ -6,3 +6,7 @@ test('recognizes pasted Markdown checklists and nested list syntax', () => {
   assert.equal(shouldInterpretMarkdownPaste('- [x] 已完成\n  - [ ] 子任务'), true);
   assert.equal(shouldInterpretMarkdownPaste('普通文本，- 只是句子的一部分'), false);
 });
+
+test('recognizes copied internal note links as Markdown', () => {
+  assert.equal(shouldInterpretMarkdownPaste('[项目计划](yuheng-note://note-project)'), true);
+});

@@ -156,15 +156,16 @@ function RunDuration({ run, pending }: { run?: RunSummary; pending: boolean }) {
   return <div className="message-duration" aria-label="本轮运行耗时">{duration ?? '耗时未知'}{status && <span>{status}</span>}</div>;
 }
 
-function RunHistory({ runs }: { runs: RunSummary[] }) {
+function RunHistory({ runs, highlightedRunId }: { runs: RunSummary[]; highlightedRunId?: string | null }) {
   if (runs.length === 0) return null;
   const statusLabel = (status: RunSummary['status']) => ({ running: '处理中', completed: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断' }[status]);
-  return <details className="run-history"><summary>运行记录 <span>{runs.length} 次</span></summary><div className="run-history-list">{[...runs].reverse().map((run) => <div className="run-history-row" key={run.id}><span className={`run-history-dot is-${run.status}`} /><span className="run-history-status">{statusLabel(run.status)}</span><time>{new Date(run.startedAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time>{formatRunDuration(run) && <span>{formatRunDuration(run)}</span>}{run.usage && <span>{run.usage.inputTokens.toLocaleString()} in · {run.usage.outputTokens.toLocaleString()} out</span>}{run.error && <span className="run-history-error" title={run.error}>{run.error}</span>}</div>)}</div></details>;
+  return <details className="run-history"><summary>运行记录 <span>{runs.length} 次</span></summary><div className="run-history-list">{[...runs].reverse().map((run) => <div className={`run-history-row ${highlightedRunId === run.id ? 'is-search-target' : ''}`} data-run-id={run.id} key={run.id}><span className={`run-history-dot is-${run.status}`} /><span className="run-history-status">{statusLabel(run.status)}</span><time>{new Date(run.startedAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time>{formatRunDuration(run) && <span>{formatRunDuration(run)}</span>}{run.usage && <span>{run.usage.inputTokens.toLocaleString()} in · {run.usage.outputTokens.toLocaleString()} out</span>}{run.error && <span className="run-history-error" title={run.error}>{run.error}</span>}</div>)}</div></details>;
 }
 
-export function Transcript({ messages, isThinking, activities = [], runs = [], recoveryNotice, latestUsage, requestedMessageId, onRequestedMessageHandled, onOpenTask, onCreateTask, onEditLastUser, onRegenerate, onBranch }: { messages: TranscriptMessage[]; isThinking: boolean; activities?: ToolActivity[]; runs?: RunSummary[]; recoveryNotice?: RecoveryNotice | null; latestUsage?: RunUsageView | null; requestedMessageId?: string | null; onRequestedMessageHandled?: () => void; onOpenTask?: (boardId: string, taskId: string) => void; onCreateTask?: (message: TranscriptMessage) => void; onEditLastUser?: (message: TranscriptMessage) => void; onRegenerate?: () => void; onBranch?: (message: TranscriptMessage) => void }) {
+export function Transcript({ messages, isThinking, activities = [], runs = [], recoveryNotice, latestUsage, requestedMessageId, onRequestedMessageHandled, requestedRunId, onRequestedRunHandled, onOpenTask, onCreateTask, onEditLastUser, onRegenerate, onBranch }: { messages: TranscriptMessage[]; isThinking: boolean; activities?: ToolActivity[]; runs?: RunSummary[]; recoveryNotice?: RecoveryNotice | null; latestUsage?: RunUsageView | null; requestedMessageId?: string | null; onRequestedMessageHandled?: () => void; requestedRunId?: string | null; onRequestedRunHandled?: () => void; onOpenTask?: (boardId: string, taskId: string) => void; onCreateTask?: (message: TranscriptMessage) => void; onEditLastUser?: (message: TranscriptMessage) => void; onRegenerate?: () => void; onBranch?: (message: TranscriptMessage) => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [highlightedRunId, setHighlightedRunId] = useState<string | null>(null);
   const timestamps = messageTimestamps(messages);
   const lastUserId = [...messages].reverse().find((message) => message.role === 'user')?.id;
   const lastAssistantId = [...messages].reverse().find((message) => message.role === 'assistant')?.id;
@@ -203,6 +204,21 @@ export function Transcript({ messages, isThinking, activities = [], runs = [], r
     const timer = window.setTimeout(() => setHighlightedMessageId(null), 1600);
     return () => window.clearTimeout(timer);
   }, [highlightedMessageId]);
+  useEffect(() => {
+    if (!requestedRunId) return;
+    const target = Array.from(containerRef.current?.querySelectorAll<HTMLElement>('[data-run-id]') ?? []).find((element) => element.dataset.runId === requestedRunId);
+    if (!target) return;
+    const history = target.closest<HTMLDetailsElement>('details.run-history');
+    if (history) history.open = true;
+    setHighlightedRunId(requestedRunId);
+    window.requestAnimationFrame(() => target.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+    onRequestedRunHandled?.();
+  }, [onRequestedRunHandled, requestedRunId, runs]);
+  useEffect(() => {
+    if (!highlightedRunId) return;
+    const timer = window.setTimeout(() => setHighlightedRunId(null), 1600);
+    return () => window.clearTimeout(timer);
+  }, [highlightedRunId]);
   return (
     <div className="transcript" aria-live="polite" ref={containerRef}>
       {timeline.length > 0 && <div className="message-list">
@@ -220,7 +236,7 @@ export function Transcript({ messages, isThinking, activities = [], runs = [], r
         })}
       </div>}
       {latestUsage && <div className="run-usage" aria-label="最近一次运行用量"><span>输入 {latestUsage.inputTokens.toLocaleString()} tokens</span><span>输出 {latestUsage.outputTokens.toLocaleString()}</span></div>}
-      <RunHistory runs={runs} />
+      <RunHistory runs={runs} highlightedRunId={highlightedRunId} />
       {recoveryNotice && <div className="recovery-notice" role="status"><div><strong>上次运行已中断</strong><p>{recoveryNotice.message}</p></div>{recoveryNotice.onRetry && <button type="button" onClick={recoveryNotice.onRetry} disabled={recoveryNotice.busy}>{recoveryNotice.busy ? '恢复中…' : '恢复运行'}</button>}</div>}
       {isThinking && (
         <div className="assistant-message pending-message">

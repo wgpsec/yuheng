@@ -16,7 +16,24 @@ export type ProviderConfig = {
 };
 export type BrowserUseConfig = { enabled: boolean };
 export type ComputerUseConfig = { enabled: boolean };
-export type DesktopPetConfig = { enabled: boolean; petId?: string; scale?: number };
+export type PetFeedbackMode = 'important' | 'all' | 'hidden';
+export type DesktopPetConfig = {
+  enabled: boolean;
+  petId?: string;
+  scale?: number;
+  locked?: boolean;
+  opacity?: number;
+  alwaysOnTop?: boolean;
+  edgeSnap?: boolean;
+  inertia?: boolean;
+  boundaryBounce?: boolean;
+  feedbackMode?: PetFeedbackMode;
+  completionFeedback?: boolean;
+  errorFeedback?: boolean;
+  approvalFeedback?: boolean;
+  soundEnabled?: boolean;
+  mutedUntil?: number;
+};
 export type ReasoningSelection = 'default' | 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export const DEFAULT_CONVERSATION_PROJECT_ID = 'personal';
@@ -62,11 +79,16 @@ export type Note = {
   cover: string | null;
   position: number;
   archived: boolean;
+  favorite: boolean;
+  lastOpenedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  properties: NoteProperties;
 };
-export type CreateNoteInput = { title?: string; parentId?: string | null };
-export type UpdateNoteInput = Partial<Pick<Note, 'title' | 'content' | 'archived' | 'icon' | 'cover'>>;
+export type NoteProperties = { status: string | null; date: string | null; tags: string[] };
+export type NoteVersion = { id: string; noteId: string; title: string; content: string; icon: string | null; cover: string | null; properties: NoteProperties; createdAt: string };
+export type CreateNoteInput = { title?: string; parentId?: string | null; content?: string; icon?: string | null };
+export type UpdateNoteInput = Partial<Pick<Note, 'title' | 'content' | 'archived' | 'icon' | 'cover' | 'favorite' | 'properties'>>;
 export type CreateTaskInput = Pick<Task, 'title'> & Partial<Pick<Task, 'description' | 'status' | 'priority' | 'dueAt' | 'remindAt' | 'sourceConversationId'>>;
 export type UpdateTaskInput = Partial<Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'dueAt' | 'remindAt'>>;
 export type SearchResultKind = 'conversation' | 'message' | 'task' | 'board' | 'note';
@@ -93,7 +115,8 @@ export type FullBackupSnapshot = {
   taskBoards: Array<{ id: string; name: string; position: number }>;
   taskTypes: Array<{ id: string; boardId: string; name: string; position: number }>;
   tasks: Array<{ id: string; boardId: string; title: string; description: string; position: number; status: string; priority: TaskPriority; dueAt: string | null; remindAt: string | null; reminderFiredAt: string | null; sourceConversationId: string | null; createdAt: string; updatedAt: string }>;
-  notes?: Array<{ id: string; parentId: string | null; title: string; content: string; icon?: string | null; cover?: string | null; position: number; archived: boolean; createdAt: string; updatedAt: string }>;
+  notes?: Array<{ id: string; parentId: string | null; title: string; content: string; icon?: string | null; cover?: string | null; properties?: NoteProperties; position: number; archived: boolean; favorite?: boolean; lastOpenedAt?: string | null; createdAt: string; updatedAt: string }>;
+  noteVersions?: Array<{ id: string; noteId: string; title: string; content: string; icon?: string | null; cover?: string | null; properties?: NoteProperties; createdAt: string }>;
 };
 export type BackupConfig = { enabled: boolean; directory: string; retention: number; lastRunAt: string | null; lastError: string | null };
 export type DesktopPresenceConfig = { notificationsEnabled: boolean; menuBarEnabled: boolean };
@@ -109,6 +132,16 @@ function normalizeNoteCover(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const cover = value.trim();
   return NOTE_COVER_ID_PATTERN.test(cover) || NOTE_COVER_URL_PATTERN.test(cover) ? cover : null;
+}
+
+const EMPTY_NOTE_PROPERTIES: NoteProperties = { status: null, date: null, tags: [] };
+function normalizeNoteProperties(value: unknown): NoteProperties {
+  let source: Record<string, unknown> = {};
+  try { source = typeof value === 'string' ? JSON.parse(value) as Record<string, unknown> : value && typeof value === 'object' ? value as Record<string, unknown> : {}; } catch { source = {}; }
+  const status = typeof source.status === 'string' ? source.status.trim().slice(0, 80) || null : null;
+  const date = typeof source.date === 'string' && /^\d{4}-\d{2}-\d{2}$/u.test(source.date) ? source.date : null;
+  const tags = Array.isArray(source.tags) ? [...new Set(source.tags.filter((tag): tag is string => typeof tag === 'string').map((tag) => tag.trim().slice(0, 40)).filter(Boolean))].slice(0, 20) : [];
+  return { status, date, tags };
 }
 
 function searchSnippet(value: string, query: string): string {
@@ -240,10 +273,23 @@ export class AppStore {
         content TEXT NOT NULL DEFAULT '',
         icon TEXT,
         cover TEXT,
+        properties_json TEXT NOT NULL DEFAULT '{}',
         position INTEGER NOT NULL DEFAULT 0,
         archived INTEGER NOT NULL DEFAULT 0,
+        favorite INTEGER NOT NULL DEFAULT 0,
+        last_opened_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS note_versions (
+        id TEXT PRIMARY KEY,
+        note_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        icon TEXT,
+        cover TEXT,
+        properties_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
       );
     `);
     const providerSchema = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'provider_profiles'").get() as Row | undefined;
@@ -263,6 +309,11 @@ export class AppStore {
     const noteColumns = this.db.prepare('PRAGMA table_info(notes)').all() as Row[];
     if (!noteColumns.some((column) => column.name === 'icon')) this.db.exec('ALTER TABLE notes ADD COLUMN icon TEXT');
     if (!noteColumns.some((column) => column.name === 'cover')) this.db.exec('ALTER TABLE notes ADD COLUMN cover TEXT');
+    if (!noteColumns.some((column) => column.name === 'favorite')) this.db.exec('ALTER TABLE notes ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0');
+    if (!noteColumns.some((column) => column.name === 'last_opened_at')) this.db.exec('ALTER TABLE notes ADD COLUMN last_opened_at TEXT');
+    if (!noteColumns.some((column) => column.name === 'properties_json')) this.db.exec("ALTER TABLE notes ADD COLUMN properties_json TEXT NOT NULL DEFAULT '{}'");
+    const noteVersionColumns = this.db.prepare('PRAGMA table_info(note_versions)').all() as Row[];
+    if (!noteVersionColumns.some((column) => column.name === 'properties_json')) this.db.exec("ALTER TABLE note_versions ADD COLUMN properties_json TEXT NOT NULL DEFAULT '{}'");
     this.seedConversationProject();
     const conversationColumns = this.db.prepare('PRAGMA table_info(conversations)').all() as Row[];
     if (!conversationColumns.some((column) => column.name === 'description')) this.db.exec("ALTER TABLE conversations ADD COLUMN description TEXT NOT NULL DEFAULT ''");
@@ -289,6 +340,7 @@ export class AppStore {
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_conversations_project_updated ON conversations(project_id, updated_at DESC)');
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_run_artifacts_activity ON run_artifacts(run_id, tool_call_id, created_at ASC)');
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_notes_parent_position ON notes(parent_id, archived, position, id)');
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_note_versions_note_created ON note_versions(note_id, created_at DESC)');
     this.seed();
     this.setupSearchIndex();
     // Keep a monotonic marker for future migrations without introducing a
@@ -440,17 +492,18 @@ export class AppStore {
   private recentSearchResults(limit: number): SearchResult[] {
     const rows = this.db.prepare(`
       SELECT 'conversation' AS kind, id, NULL AS parentId, title, description AS content,
-        '会话' AS context, updated_at AS updatedAt, archived
+        '会话' AS context, updated_at AS updatedAt, archived, 0 AS sortPriority
       FROM conversations
       UNION ALL
       SELECT 'task' AS kind, tasks.id, board_id AS parentId, tasks.title, tasks.description AS content,
-        task_boards.name AS context, tasks.updated_at AS updatedAt, 0 AS archived
+        task_boards.name AS context, tasks.updated_at AS updatedAt, 0 AS archived, 0 AS sortPriority
       FROM tasks JOIN task_boards ON task_boards.id = tasks.board_id
       UNION ALL
       SELECT 'note' AS kind, id, parent_id AS parentId, title, content,
-        '笔记' AS context, updated_at AS updatedAt, archived
+        '笔记' AS context, COALESCE(last_opened_at, updated_at) AS updatedAt, archived,
+        CASE WHEN favorite = 1 THEN 1 ELSE 0 END AS sortPriority
       FROM notes
-      ORDER BY updatedAt DESC
+      ORDER BY sortPriority DESC, updatedAt DESC
       LIMIT ?
     `).all(limit) as Row[];
     return rows.map((row) => this.mapSearchResult(row, ''));
@@ -951,20 +1004,23 @@ export class AppStore {
       cover: normalizeNoteCover(row.cover),
       position: Number(row.position ?? 0),
       archived: Number(row.archived) === 1,
+      favorite: Number(row.favorite) === 1,
+      lastOpenedAt: row.lastOpenedAt == null ? null : String(row.lastOpenedAt),
       createdAt: String(row.createdAt),
       updatedAt: String(row.updatedAt),
+      properties: normalizeNoteProperties(row.propertiesJson),
     };
   }
 
   listNotes(includeArchived = false): Note[] {
     const query = includeArchived
-      ? `SELECT id, parent_id AS parentId, title, content, icon, cover, position, archived, created_at AS createdAt, updated_at AS updatedAt FROM notes ORDER BY CASE WHEN parent_id IS NULL THEN 0 ELSE 1 END, parent_id, position, id`
+      ? `SELECT id, parent_id AS parentId, title, content, icon, cover, properties_json AS propertiesJson, position, archived, favorite, last_opened_at AS lastOpenedAt, created_at AS createdAt, updated_at AS updatedAt FROM notes ORDER BY CASE WHEN parent_id IS NULL THEN 0 ELSE 1 END, parent_id, position, id`
       : `WITH RECURSIVE archived_tree(id) AS (
           SELECT id FROM notes WHERE archived = 1
           UNION ALL
           SELECT notes.id FROM notes JOIN archived_tree ON notes.parent_id = archived_tree.id
         )
-        SELECT id, parent_id AS parentId, title, content, icon, cover, position, archived, created_at AS createdAt, updated_at AS updatedAt
+        SELECT id, parent_id AS parentId, title, content, icon, cover, properties_json AS propertiesJson, position, archived, favorite, last_opened_at AS lastOpenedAt, created_at AS createdAt, updated_at AS updatedAt
         FROM notes WHERE archived = 0 AND id NOT IN (SELECT id FROM archived_tree)
         ORDER BY CASE WHEN parent_id IS NULL THEN 0 ELSE 1 END, parent_id, position, id`;
     const rows = this.db.prepare(query).all() as Row[];
@@ -972,7 +1028,7 @@ export class AppStore {
   }
 
   getNote(id: string): Note | null {
-    const row = this.db.prepare(`SELECT id, parent_id AS parentId, title, content, icon, cover, position, archived,
+    const row = this.db.prepare(`SELECT id, parent_id AS parentId, title, content, icon, cover, properties_json AS propertiesJson, position, archived, favorite, last_opened_at AS lastOpenedAt,
       created_at AS createdAt, updated_at AS updatedAt FROM notes WHERE id = ?`).get(id) as Row | undefined;
     return row ? this.noteFromRow(row) : null;
   }
@@ -982,12 +1038,14 @@ export class AppStore {
       ? { title: input, parentId }
       : { ...(input ?? {}), ...(parentId !== undefined ? { parentId } : {}) };
     const title = typeof values.title === 'string' && values.title.trim() ? values.title.trim() : '未命名笔记';
+    const content = typeof values.content === 'string' ? values.content : '';
+    const icon = typeof values.icon === 'string' ? values.icon.trim().slice(0, 32) || null : null;
     const normalizedParentId = values.parentId == null ? null : String(values.parentId);
     if (normalizedParentId && !this.db.prepare('SELECT 1 FROM notes WHERE id = ?').get(normalizedParentId)) throw new Error('Parent note not found.');
     const id = crypto.randomUUID();
     const position = Number((this.db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM notes WHERE parent_id IS ?').get(normalizedParentId) as Row).position);
     const now = new Date().toISOString();
-    this.db.prepare('INSERT INTO notes (id, parent_id, title, content, icon, cover, position, archived, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, NULL, ?, 0, ?, ?)').run(id, normalizedParentId, title, '', position, now, now);
+    this.db.prepare("INSERT INTO notes (id, parent_id, title, content, icon, cover, properties_json, position, archived, favorite, last_opened_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, '{}', ?, 0, 0, NULL, ?, ?)").run(id, normalizedParentId, title, content, icon, position, now, now);
     return this.getNote(id)!;
   }
 
@@ -1000,9 +1058,83 @@ export class AppStore {
     const icon = patch.icon === undefined ? current.icon : (patch.icon == null ? null : patch.icon.trim() || null);
     const cover = patch.cover === undefined ? current.cover : normalizeNoteCover(patch.cover);
     const archived = patch.archived === undefined ? current.archived : patch.archived === true;
+    const favorite = patch.favorite === undefined ? current.favorite : patch.favorite === true;
+    const properties = patch.properties === undefined ? current.properties : normalizeNoteProperties(patch.properties);
     const updatedAt = new Date().toISOString();
-    this.db.prepare('UPDATE notes SET title = ?, content = ?, icon = ?, cover = ?, archived = ?, updated_at = ? WHERE id = ?').run(title, content, icon, cover, archived ? 1 : 0, updatedAt, id);
+    const visibleChanged = title !== current.title || content !== current.content || icon !== current.icon || cover !== current.cover || JSON.stringify(properties) !== JSON.stringify(current.properties);
+    this.db.exec('BEGIN');
+    try {
+      if (visibleChanged) this.recordNoteVersion(current, updatedAt);
+      this.db.prepare('UPDATE notes SET title = ?, content = ?, icon = ?, cover = ?, properties_json = ?, archived = ?, favorite = ?, updated_at = ? WHERE id = ?').run(title, content, icon, cover, JSON.stringify(properties), archived ? 1 : 0, favorite ? 1 : 0, updatedAt, id);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
     return this.getNote(id)!;
+  }
+
+  private recordNoteVersion(note: Pick<Note, 'id' | 'title' | 'content' | 'icon' | 'cover' | 'properties'>, createdAt = new Date().toISOString()): void {
+    this.db.prepare('INSERT INTO note_versions (id, note_id, title, content, icon, cover, properties_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(crypto.randomUUID(), note.id, note.title, note.content, note.icon, note.cover, JSON.stringify(note.properties), createdAt);
+    this.db.prepare(`DELETE FROM note_versions WHERE id IN (
+      SELECT id FROM note_versions WHERE note_id = ? ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET 50
+    )`).run(note.id);
+  }
+
+  listNoteVersions(noteId: string): NoteVersion[] {
+    if (!this.getNote(noteId)) throw new Error('Note not found.');
+    return (this.db.prepare(`SELECT id, note_id AS noteId, title, content, icon, cover, properties_json AS propertiesJson, created_at AS createdAt
+      FROM note_versions WHERE note_id = ? ORDER BY created_at DESC, rowid DESC`).all(noteId) as Row[]).map((row) => ({
+      id: String(row.id), noteId: String(row.noteId), title: String(row.title), content: String(row.content ?? ''), icon: row.icon == null ? null : String(row.icon), cover: normalizeNoteCover(row.cover), properties: normalizeNoteProperties(row.propertiesJson), createdAt: String(row.createdAt),
+    }));
+  }
+
+  restoreNoteVersion(noteId: string, versionId: string): Note {
+    const current = this.getNote(noteId);
+    if (!current) throw new Error('Note not found.');
+    const row = this.db.prepare('SELECT id, note_id AS noteId, title, content, icon, cover, properties_json AS propertiesJson FROM note_versions WHERE id = ? AND note_id = ?').get(versionId, noteId) as Row | undefined;
+    if (!row) throw new Error('Note version not found.');
+    const updatedAt = new Date().toISOString();
+    this.db.exec('BEGIN');
+    try {
+      this.recordNoteVersion(current, updatedAt);
+      this.db.prepare('UPDATE notes SET title = ?, content = ?, icon = ?, cover = ?, properties_json = ?, updated_at = ? WHERE id = ?').run(String(row.title), String(row.content ?? ''), row.icon == null ? null : String(row.icon), normalizeNoteCover(row.cover), JSON.stringify(normalizeNoteProperties(row.propertiesJson)), updatedAt, noteId);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return this.getNote(noteId)!;
+  }
+
+  touchNote(id: string): Note {
+    if (!this.getNote(id)) throw new Error('Note not found.');
+    this.db.prepare('UPDATE notes SET last_opened_at = ? WHERE id = ?').run(new Date().toISOString(), id);
+    return this.getNote(id)!;
+  }
+
+  moveNoteBlock(sourceId: string, targetId: string, sourceContent: string, blockMarkdown: string): { source: Note; target: Note } {
+    if (sourceId === targetId) throw new Error('Target note must be different from source note.');
+    const source = this.getNote(sourceId);
+    const target = this.getNote(targetId);
+    if (!source || !target) throw new Error('Note not found.');
+    const block = blockMarkdown.trim();
+    if (!block) throw new Error('Block content is required.');
+    const targetContent = target.content.trimEnd();
+    const nextTargetContent = targetContent ? `${targetContent}\n\n${block}` : block;
+    const updatedAt = new Date().toISOString();
+    this.db.exec('BEGIN');
+    try {
+      this.recordNoteVersion(source, updatedAt);
+      this.recordNoteVersion(target, updatedAt);
+      this.db.prepare('UPDATE notes SET content = ?, updated_at = ? WHERE id = ?').run(sourceContent, updatedAt, sourceId);
+      this.db.prepare('UPDATE notes SET content = ?, updated_at = ? WHERE id = ?').run(nextTargetContent, updatedAt, targetId);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return { source: this.getNote(sourceId)!, target: this.getNote(targetId)! };
   }
 
   moveNote(id: string, parentId: string | null = null, targetId?: string): Note {
@@ -1350,10 +1482,22 @@ export class AppStore {
     const row = this.db.prepare("SELECT value FROM app_settings WHERE key = 'desktop_pet'").get() as Row | undefined;
     if (!row) return { enabled: false };
     try {
-      const value = JSON.parse(String(row.value)) as { enabled?: unknown; petId?: unknown; scale?: unknown };
+      const value = JSON.parse(String(row.value)) as Record<string, unknown>;
       const petId = typeof value.petId === 'string' && value.petId.trim() ? value.petId.trim() : undefined;
       const scale = typeof value.scale === 'number' && Number.isFinite(value.scale) ? Math.min(1.4, Math.max(0.8, value.scale)) : undefined;
-      return { enabled: value.enabled === true, ...(petId ? { petId } : {}), ...(scale ? { scale } : {}) };
+      const opacity = typeof value.opacity === 'number' && Number.isFinite(value.opacity) ? Math.min(1, Math.max(0.2, value.opacity)) : undefined;
+      const locked = typeof value.locked === 'boolean' ? value.locked : undefined;
+      const alwaysOnTop = typeof value.alwaysOnTop === 'boolean' ? value.alwaysOnTop : undefined;
+      const edgeSnap = typeof value.edgeSnap === 'boolean' ? value.edgeSnap : undefined;
+      const inertia = typeof value.inertia === 'boolean' ? value.inertia : undefined;
+      const boundaryBounce = typeof value.boundaryBounce === 'boolean' ? value.boundaryBounce : undefined;
+      const feedbackMode = value.feedbackMode === 'important' || value.feedbackMode === 'all' || value.feedbackMode === 'hidden' ? value.feedbackMode : undefined;
+      const completionFeedback = typeof value.completionFeedback === 'boolean' ? value.completionFeedback : undefined;
+      const errorFeedback = typeof value.errorFeedback === 'boolean' ? value.errorFeedback : undefined;
+      const approvalFeedback = typeof value.approvalFeedback === 'boolean' ? value.approvalFeedback : undefined;
+      const soundEnabled = typeof value.soundEnabled === 'boolean' ? value.soundEnabled : undefined;
+      const mutedUntil = typeof value.mutedUntil === 'number' && Number.isFinite(value.mutedUntil) && value.mutedUntil > 0 ? value.mutedUntil : undefined;
+      return { enabled: value.enabled === true, ...(petId ? { petId } : {}), ...(scale !== undefined ? { scale } : {}), ...(locked !== undefined ? { locked } : {}), ...(opacity !== undefined ? { opacity } : {}), ...(alwaysOnTop !== undefined ? { alwaysOnTop } : {}), ...(edgeSnap !== undefined ? { edgeSnap } : {}), ...(inertia !== undefined ? { inertia } : {}), ...(boundaryBounce !== undefined ? { boundaryBounce } : {}), ...(feedbackMode ? { feedbackMode } : {}), ...(completionFeedback !== undefined ? { completionFeedback } : {}), ...(errorFeedback !== undefined ? { errorFeedback } : {}), ...(approvalFeedback !== undefined ? { approvalFeedback } : {}), ...(soundEnabled !== undefined ? { soundEnabled } : {}), ...(mutedUntil !== undefined ? { mutedUntil } : {}) };
     } catch {
       return { enabled: false };
     }
@@ -1362,7 +1506,19 @@ export class AppStore {
   saveDesktopPetConfig(config: DesktopPetConfig): DesktopPetConfig {
     const petId = typeof config.petId === 'string' && config.petId.trim() ? config.petId.trim() : undefined;
     const scale = typeof config.scale === 'number' && Number.isFinite(config.scale) ? Math.min(1.4, Math.max(0.8, config.scale)) : undefined;
-    const value = { enabled: config.enabled === true, ...(petId ? { petId } : {}), ...(scale ? { scale } : {}) } satisfies DesktopPetConfig;
+    const opacity = typeof config.opacity === 'number' && Number.isFinite(config.opacity) ? Math.min(1, Math.max(0.2, config.opacity)) : undefined;
+    const locked = typeof config.locked === 'boolean' ? config.locked : undefined;
+    const alwaysOnTop = typeof config.alwaysOnTop === 'boolean' ? config.alwaysOnTop : undefined;
+    const edgeSnap = typeof config.edgeSnap === 'boolean' ? config.edgeSnap : undefined;
+    const inertia = typeof config.inertia === 'boolean' ? config.inertia : undefined;
+    const boundaryBounce = typeof config.boundaryBounce === 'boolean' ? config.boundaryBounce : undefined;
+    const feedbackMode = config.feedbackMode === 'important' || config.feedbackMode === 'all' || config.feedbackMode === 'hidden' ? config.feedbackMode : undefined;
+    const completionFeedback = typeof config.completionFeedback === 'boolean' ? config.completionFeedback : undefined;
+    const errorFeedback = typeof config.errorFeedback === 'boolean' ? config.errorFeedback : undefined;
+    const approvalFeedback = typeof config.approvalFeedback === 'boolean' ? config.approvalFeedback : undefined;
+    const soundEnabled = typeof config.soundEnabled === 'boolean' ? config.soundEnabled : undefined;
+    const mutedUntil = typeof config.mutedUntil === 'number' && Number.isFinite(config.mutedUntil) && config.mutedUntil > 0 ? config.mutedUntil : undefined;
+    const value = { enabled: config.enabled === true, ...(petId ? { petId } : {}), ...(scale !== undefined ? { scale } : {}), ...(locked !== undefined ? { locked } : {}), ...(opacity !== undefined ? { opacity } : {}), ...(alwaysOnTop !== undefined ? { alwaysOnTop } : {}), ...(edgeSnap !== undefined ? { edgeSnap } : {}), ...(inertia !== undefined ? { inertia } : {}), ...(boundaryBounce !== undefined ? { boundaryBounce } : {}), ...(feedbackMode ? { feedbackMode } : {}), ...(completionFeedback !== undefined ? { completionFeedback } : {}), ...(errorFeedback !== undefined ? { errorFeedback } : {}), ...(approvalFeedback !== undefined ? { approvalFeedback } : {}), ...(soundEnabled !== undefined ? { soundEnabled } : {}), ...(mutedUntil !== undefined ? { mutedUntil } : {}) } satisfies DesktopPetConfig;
     this.db.prepare("INSERT INTO app_settings (key, value, updated_at) VALUES ('desktop_pet', ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at").run(JSON.stringify(value), new Date().toISOString());
     return value;
   }
@@ -1470,7 +1626,8 @@ export class AppStore {
       taskBoards: mapRows('SELECT id, name, position FROM task_boards').map((r) => ({ id: String(r.id), name: String(r.name), position: Number(r.position) })),
       taskTypes: mapRows('SELECT id, board_id AS boardId, name, position FROM task_types').map((r) => ({ id: String(r.id), boardId: String(r.boardId), name: String(r.name), position: Number(r.position) })),
       tasks: mapRows('SELECT id, board_id AS boardId, title, description, position, status, priority, due_at AS dueAt, remind_at AS remindAt, reminder_fired_at AS reminderFiredAt, source_conversation_id AS sourceConversationId, created_at AS createdAt, updated_at AS updatedAt FROM tasks').map((r) => ({ id: String(r.id), boardId: String(r.boardId), title: String(r.title), description: String(r.description ?? ''), position: Number(r.position ?? 0), status: String(r.status), priority: r.priority as TaskPriority, dueAt: r.dueAt == null ? null : String(r.dueAt), remindAt: r.remindAt == null ? null : String(r.remindAt), reminderFiredAt: r.reminderFiredAt == null ? null : String(r.reminderFiredAt), sourceConversationId: r.sourceConversationId == null ? null : String(r.sourceConversationId), createdAt: String(r.createdAt), updatedAt: String(r.updatedAt) })),
-      notes: mapRows('SELECT id, parent_id AS parentId, title, content, icon, cover, position, archived, created_at AS createdAt, updated_at AS updatedAt FROM notes ORDER BY CASE WHEN parent_id IS NULL THEN 0 ELSE 1 END, parent_id, position, id').map((r) => ({ id: String(r.id), parentId: r.parentId == null ? null : String(r.parentId), title: String(r.title), content: String(r.content ?? ''), icon: r.icon == null ? null : String(r.icon), cover: normalizeNoteCover(r.cover), position: Number(r.position ?? 0), archived: Number(r.archived) === 1, createdAt: String(r.createdAt), updatedAt: String(r.updatedAt) })),
+      notes: mapRows('SELECT id, parent_id AS parentId, title, content, icon, cover, properties_json AS propertiesJson, position, archived, favorite, last_opened_at AS lastOpenedAt, created_at AS createdAt, updated_at AS updatedAt FROM notes ORDER BY CASE WHEN parent_id IS NULL THEN 0 ELSE 1 END, parent_id, position, id').map((r) => ({ id: String(r.id), parentId: r.parentId == null ? null : String(r.parentId), title: String(r.title), content: String(r.content ?? ''), icon: r.icon == null ? null : String(r.icon), cover: normalizeNoteCover(r.cover), properties: normalizeNoteProperties(r.propertiesJson), position: Number(r.position ?? 0), archived: Number(r.archived) === 1, favorite: Number(r.favorite) === 1, lastOpenedAt: r.lastOpenedAt == null ? null : String(r.lastOpenedAt), createdAt: String(r.createdAt), updatedAt: String(r.updatedAt) })),
+      noteVersions: mapRows('SELECT id, note_id AS noteId, title, content, icon, cover, properties_json AS propertiesJson, created_at AS createdAt FROM note_versions ORDER BY created_at, rowid').map((r) => ({ id: String(r.id), noteId: String(r.noteId), title: String(r.title), content: String(r.content ?? ''), icon: r.icon == null ? null : String(r.icon), cover: normalizeNoteCover(r.cover), properties: normalizeNoteProperties(r.propertiesJson), createdAt: String(r.createdAt) })),
     };
   }
 
@@ -1506,7 +1663,7 @@ export class AppStore {
       for (const item of snapshot.taskTypes) { const boardId = boardMap.get(item.boardId); if (!boardId) continue; const id = crypto.randomUUID(); typeMap.set(item.id, id); this.db.prepare('INSERT INTO task_types (id, board_id, name, position) VALUES (?, ?, ?, ?)').run(id, boardId, item.name, item.position); }
       for (const item of snapshot.tasks) { const boardId = boardMap.get(item.boardId); const status = typeMap.get(item.status); if (!boardId || !status) continue; this.db.prepare('INSERT INTO tasks (id, board_id, title, description, position, status, priority, due_at, remind_at, reminder_fired_at, source_conversation_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(crypto.randomUUID(), boardId, item.title, item.description, item.position, status, item.priority, item.dueAt, item.remindAt, item.reminderFiredAt, item.sourceConversationId ? conversationMap.get(item.sourceConversationId) ?? null : null, item.createdAt || now, item.updatedAt || now); importedTasks += 1; }
       const pendingNotes = [...(snapshot.notes ?? [])];
-      const insertNote = this.db.prepare('INSERT INTO notes (id, parent_id, title, content, icon, cover, position, archived, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      const insertNote = this.db.prepare('INSERT INTO notes (id, parent_id, title, content, icon, cover, properties_json, position, archived, favorite, last_opened_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
       while (pendingNotes.length) {
         let progressed = false;
         for (let index = pendingNotes.length - 1; index >= 0; index -= 1) {
@@ -1516,12 +1673,46 @@ export class AppStore {
           const parentId = mappedParentId ?? null;
           const id = crypto.randomUUID();
           noteMap.set(item.id, id);
-          insertNote.run(id, parentId, item.title, item.content, typeof item.icon === 'string' ? item.icon.trim().slice(0, 32) || null : null, normalizeNoteCover(item.cover), item.position, item.archived ? 1 : 0, item.createdAt || now, item.updatedAt || now);
+          insertNote.run(id, parentId, item.title, item.content, typeof item.icon === 'string' ? item.icon.trim().slice(0, 32) || null : null, normalizeNoteCover(item.cover), JSON.stringify(normalizeNoteProperties(item.properties ?? EMPTY_NOTE_PROPERTIES)), item.position, item.archived ? 1 : 0, item.favorite ? 1 : 0, typeof item.lastOpenedAt === 'string' ? item.lastOpenedAt : null, item.createdAt || now, item.updatedAt || now);
           pendingNotes.splice(index, 1);
           importedNotes += 1;
           progressed = true;
         }
         if (!progressed) break;
+      }
+      // Notes receive fresh identities on import; rewrite only links that point
+      // to notes in this same snapshot, leaving external/unknown links intact.
+      const importedNoteLink = /yuheng-note:\/\/([^\s)]+)/gu;
+      for (const [, mappedId] of noteMap) {
+        const imported = this.getNote(mappedId);
+        if (!imported) continue;
+        const content = imported.content.replace(importedNoteLink, (url, encodedId: string) => {
+          let sourceId: string;
+          try { sourceId = decodeURIComponent(encodedId); } catch { return url; }
+          const replacement = noteMap.get(sourceId);
+          return replacement ? `yuheng-note://${encodeURIComponent(replacement)}` : url;
+        });
+        if (content !== imported.content) this.db.prepare('UPDATE notes SET content = ? WHERE id = ?').run(content, mappedId);
+      }
+      const versionsByNote = new Map<string, NonNullable<FullBackupSnapshot['noteVersions']>>();
+      for (const version of snapshot.noteVersions ?? []) {
+        if (!noteMap.has(version.noteId)) continue;
+        const versions = versionsByNote.get(version.noteId) ?? [];
+        versions.push(version);
+        versionsByNote.set(version.noteId, versions);
+      }
+      const insertVersion = this.db.prepare('INSERT INTO note_versions (id, note_id, title, content, icon, cover, properties_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+      for (const [sourceNoteId, versions] of versionsByNote) {
+        const noteId = noteMap.get(sourceNoteId)!;
+        for (const version of versions.slice(-50)) {
+          const content = version.content.replace(importedNoteLink, (url, encodedId: string) => {
+            let linkedSourceId: string;
+            try { linkedSourceId = decodeURIComponent(encodedId); } catch { return url; }
+            const replacement = noteMap.get(linkedSourceId);
+            return replacement ? `yuheng-note://${encodeURIComponent(replacement)}` : url;
+          });
+          insertVersion.run(crypto.randomUUID(), noteId, version.title, content, typeof version.icon === 'string' ? version.icon.trim().slice(0, 32) || null : null, normalizeNoteCover(version.cover), JSON.stringify(normalizeNoteProperties(version.properties ?? EMPTY_NOTE_PROPERTIES)), version.createdAt || now);
+        }
       }
       const insertSetting = this.db.prepare("INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)");
       // Automatic backup is an opt-in local policy and is never enabled by an import.

@@ -31,7 +31,7 @@ function loadSavedTaskFilters(): SavedTaskFilter[] {
   try {
     const value = JSON.parse(localStorage.getItem(SAVED_TASK_FILTERS_STORAGE_KEY) ?? '[]');
     if (!Array.isArray(value)) return [];
-    return value.filter((item): item is SavedTaskFilter => Boolean(item && typeof item.id === 'string' && typeof item.name === 'string' && typeof item.query === 'string' && ['all', 'open', 'due', 'reminder'].includes(item.filter)));
+    return value.filter((item): item is SavedTaskFilter => Boolean(item && typeof item.id === 'string' && typeof item.name === 'string' && typeof item.query === 'string' && ['all', 'open', 'due', 'reminder', 'today'].includes(item.filter)));
   } catch { return []; }
 }
 
@@ -79,6 +79,7 @@ function dateTimeLabel(value: string): string {
 
 const filters: { value: TaskFilter; label: string }[] = [
   { value: 'all', label: '全部' },
+  { value: 'today', label: '今天' },
   { value: 'open', label: '待办' },
   { value: 'due', label: '已到期' },
   { value: 'reminder', label: '待提醒' },
@@ -117,7 +118,7 @@ function taskDescriptionPreview(value: string): string {
     .trim();
 }
 
-export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loading, headerControl, requestedOpenTaskId, onOpenTaskHandled, sourceConversations = [], onOpenConversation, onCreate, onUpdate, onDelete, onReorder, onMoveToBoard, onCopyToBoard, onCreateType, onRenameType, onDeleteType, onImportAsset, onPickAssets, onOpenAsset, onRunAi }: {
+export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loading, headerControl, requestedOpenTaskId, onOpenTaskHandled, taskActionRequest, onTaskActionHandled, sourceConversations = [], onOpenConversation, onCreate, onUpdate, onDelete, onReorder, onMoveToBoard, onCopyToBoard, onCreateType, onRenameType, onDeleteType, onImportAsset, onPickAssets, onOpenAsset, onRunAi }: {
   boardId?: string;
   boardName: string;
   boards: { id: string; name: string }[];
@@ -127,6 +128,8 @@ export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loadin
   headerControl?: ReactNode;
   requestedOpenTaskId?: string | null;
   onOpenTaskHandled?: () => void;
+  taskActionRequest?: { kind: 'today' | 'quick_record'; id: number } | null;
+  onTaskActionHandled?: () => void;
   sourceConversations?: { id: string; title: string }[];
   onOpenConversation?: (conversationId: string) => void;
   onCreate: (input: CreateTaskInput) => Promise<Task>;
@@ -384,6 +387,20 @@ export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loadin
     openTask(requested);
     onOpenTaskHandled?.();
   }, [loading, requestedOpenTaskId, tasks]);
+  useEffect(() => {
+    const request = taskActionRequest;
+    if (!request) return;
+    if (request.kind === 'today') {
+      setQuery('');
+      setFilter('today');
+      setView('list');
+      onTaskActionHandled?.();
+      return;
+    }
+    if (loading || taskTypes.length === 0) return;
+    openNew(taskTypes[0].id);
+    onTaskActionHandled?.();
+  }, [loading, taskActionRequest, taskTypes]);
   const closeEditor = async () => {
     const sessionKey = editorSessionKeyRef.current;
     if (!editingIdRef.current || editorClosing || editorCloseRequestRef.current === sessionKey) return;

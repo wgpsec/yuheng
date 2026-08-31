@@ -1,18 +1,21 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { ArchiveRestore, ArrowLeft, Bell, BrainCircuit, Check, ChevronDown, Download, ExternalLink, FolderOpen, Info, KeyRound, ListTodo, MessageSquare, NotebookPen, Palette, PanelLeftOpen, PawPrint, RefreshCw, Upload, X } from 'lucide-react';
+import { AlertTriangle, ArchiveRestore, ArrowLeft, Bell, BrainCircuit, Check, ChevronDown, Download, ExternalLink, FolderOpen, Info, KeyRound, ListTodo, MapPin, MessageSquare, NotebookPen, Palette, PanelLeftOpen, PawPrint, Play, RefreshCw, Trash2, Upload, X } from 'lucide-react';
 import { ThinkingOrb } from 'thinking-orbs';
 import { Composer } from '../features/conversation/workspace/composer';
 import { ConversationStart } from '../features/conversation/workspace/conversation-start';
 import { Sidebar, type Conversation as SidebarConversation } from '../features/conversation/workspace/sidebar';
 import { Transcript, type ToolActivity, type TranscriptMessage } from '../features/conversation/workspace/transcript';
 import { GlobalSearch } from '../features/search/global-search';
-import { AGENT_PROFILES, DEFAULT_AGENT_PROFILE_ID, type AgentProfileId, type AppInfo, type Attachment, type BrowserUseConfig, type ComputerUseConfig, type ConversationProject, type CreateTaskInput, type DesktopBridge, type DesktopPetConfig, type CodexPetManifest, type Message, type ProviderConfig, type ProviderProtocol, type ProviderTestResult, type ReasoningLevel, type ReasoningSelection, type RunEvent, type RunSummary, type SearchResult, type Task, type TaskAsset, type TaskBoard, type TaskEvent, type TaskType, type ToolPermissionMode, type UpdateTaskInput } from '../contracts/desktop-bridge';
+import { AGENT_PROFILES, DEFAULT_AGENT_PROFILE_ID, type AgentProfileId, type AppInfo, type Attachment, type BrowserUseConfig, type ComputerUseConfig, type ConversationProject, type CreateTaskInput, type DesktopBridge, type DesktopPetConfig, type CodexPetCatalogEntry, type CodexPetManifest, type Message, type PetOpenTarget, type PetState, type ProviderConfig, type ProviderProtocol, type ProviderTestResult, type ReasoningLevel, type ReasoningSelection, type RunEvent, type RunSummary, type SearchResult, type Task, type TaskAsset, type TaskBoard, type TaskEvent, type TaskType, type ToolPermissionMode, type UpdateTaskInput } from '../contracts/desktop-bridge';
 import { releaseNotes } from '../features/settings/releases';
 import { taskDraftFromMessage } from '../features/tasks/task-from-message';
 import { buildNoteAiPrompt, type NoteAiAction } from '../features/notes/note-ai';
 import { buildContextAiPrompt, buildBoardAiContext } from '../features/ai/context-ai';
 import { taskDraftFromNote } from '../features/notes/task-from-note';
+import { normalizeSettingsSection, type SettingsSection } from './settings-section';
+import { clampSidebarWidth, DEFAULT_SIDEBAR_WIDTH, loadSidebarWidth, MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH, SIDEBAR_WIDTH_STORAGE_KEY } from './sidebar-preferences';
+import { animationForState, nextCodexPetFrame } from './pet-animation';
 const NotesWorkspace = lazy(() => import('../features/notes/notes-workspace').then((module) => ({ default: module.NotesWorkspace })));
 
 type WorkspaceTab = { id: string; type: 'conversation' | 'tasks' | 'notes'; resourceId: string };
@@ -30,8 +33,6 @@ const readStoredWorkspaceTabs = (): WorkspaceTab[] => {
 const TaskBoard = lazy(() => import('../features/tasks/task-board').then((module) => ({ default: module.TaskBoard })));
 
 type ThemeName = 'dark' | 'light' | 'graphite' | 'notion';
-type SettingsSection = 'provider' | 'capabilities' | 'appearance' | 'pet' | 'desktop' | 'backup' | 'about';
-
 const fallbackConversations: SidebarConversation[] = [
   { id: 'inbox', projectId: 'personal', title: '收件箱', time: '现在', pinned: false },
   { id: 'weekly-plan', projectId: 'personal', title: '本周计划', time: '昨天', pinned: false },
@@ -89,38 +90,94 @@ function platformLabel(appInfo: AppInfo | null): string {
   return `${platform} · ${arch}`;
 }
 
-function PetManagementSettings({ config, pets, assets, loading, onRefresh, onSelect, onToggle, onScaleChange, onOpenFolder }: { config: DesktopPetConfig; pets: CodexPetManifest[]; assets: Record<string, { dataUrl: string; manifest: CodexPetManifest }>; loading: boolean; onRefresh: () => void; onSelect: (petId?: string) => void; onToggle: () => void; onScaleChange: (scale: number) => void; onOpenFolder: () => void }) {
+const PET_STATE_LABELS: Record<PetState, string> = { idle: '待机', thinking: '思考', working: '工作', attention: '提醒', error: '错误', celebrate: '完成' };
+
+function isPetRuntimeUsable(entry: CodexPetCatalogEntry): boolean {
+  return Boolean(entry.manifest && !entry.report.issues.some((issue) => issue.severity === 'error' && (issue.code === 'dimensions' || issue.code === 'blank_frames' || issue.code === 'manifest')));
+}
+
+function PetSkinPreview({ entry, asset }: { entry: CodexPetCatalogEntry; asset: { dataUrl: string; manifest: CodexPetManifest } }) {
+  const [previewState, setPreviewState] = useState<PetState>('idle');
+  const [frame, setFrame] = useState(0);
+  const manifest = asset.manifest;
+  const animation = animationForState(previewState, manifest.animations);
+  useEffect(() => { setFrame(0); }, [previewState, manifest.id]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setFrame((current) => nextCodexPetFrame(previewState, current, manifest.animations)), animation.durations[frame] ?? animation.durations[0]);
+    return () => window.clearTimeout(timer);
+  }, [animation, frame, manifest.animations, previewState]);
+  const frameWidth = 96;
+  const frameHeight = frameWidth * manifest.cellHeight / manifest.cellWidth;
+  const selectedState = entry.report.states.find((item) => item.state === previewState);
+  return <div className="pet-preview-panel" aria-label="皮肤动画预览">
+    <div className="pet-preview-stage"><span className="pet-preview-sprite" style={{ width: frameWidth, height: frameHeight, backgroundImage: `url(${asset.dataUrl})`, backgroundSize: `${manifest.columns * frameWidth}px ${manifest.rows * frameHeight}px`, backgroundPosition: `-${(frame % animation.durations.length) * frameWidth}px -${animation.row * frameHeight}px` }} /></div>
+    <div className="pet-preview-copy"><strong>动画预览</strong><small>{selectedState?.fallback ? `${PET_STATE_LABELS[previewState]} · 回退到玉衡默认动画` : `${PET_STATE_LABELS[previewState]} · ${selectedState?.frameCount ?? animation.durations.length} 帧 · 平均 ${selectedState?.frameDurationMs ?? Math.round(animation.durations.reduce((sum, value) => sum + value, 0) / animation.durations.length)}ms`}</small><div className="pet-preview-states" role="tablist" aria-label="预览状态">{(Object.keys(PET_STATE_LABELS) as PetState[]).map((state) => <button type="button" key={state} role="tab" aria-selected={previewState === state} className={previewState === state ? 'is-selected' : ''} onClick={() => setPreviewState(state)}>{PET_STATE_LABELS[state]}</button>)}</div><div className="pet-preview-fallbacks" aria-label="状态兼容关系">{entry.report.states.map((state) => <span key={state.state}>{PET_STATE_LABELS[state.state]}：{state.fallback ? '玉衡默认' : 'manifest'}</span>)}</div></div>
+  </div>;
+}
+
+function PetManagementSettings({ config, pets, assets, loading, onRefresh, onSelect, onToggle, onScaleChange, onLockedChange, onOpacityChange, onAlwaysOnTopChange, onFeedbackChange, onOpenFolder, onImport, onDelete, onReveal, error }: { config: DesktopPetConfig; pets: CodexPetCatalogEntry[]; assets: Record<string, { dataUrl: string; manifest: CodexPetManifest }>; loading: boolean; onRefresh: () => void; onSelect: (petId?: string) => void; onToggle: () => void; onScaleChange: (scale: number) => void; onLockedChange: (locked: boolean) => void; onOpacityChange: (opacity: number) => void; onAlwaysOnTopChange: (alwaysOnTop: boolean) => void; onFeedbackChange: (patch: Partial<DesktopPetConfig>) => void; onOpenFolder: () => void; onImport: () => void; onDelete: (petId: string) => void; onReveal: (petId: string) => void; error: string | null }) {
+  const [previewPetId, setPreviewPetId] = useState<string | null>(config.petId ?? null);
   const builtinSelected = !config.petId;
-  const entries = [{ id: '', displayName: '玉衡', description: '玉衡的默认桌面宠物。', source: 'yuheng' as const }, ...pets];
+  const feedbackMode = config.feedbackMode ?? 'all';
+  const focusActive = typeof config.mutedUntil === 'number' && config.mutedUntil > Date.now();
+  const entries: Array<CodexPetCatalogEntry & { builtin?: boolean }> = [{ id: '', displayName: '玉衡', description: '玉衡的默认桌面宠物。', source: 'yuheng', builtin: true, report: { status: 'compatible', expected: { width: 0, height: 0 }, actual: { width: 0, height: 0 }, states: [], issues: [] } }, ...pets];
+  const previewEntry = pets.find((pet) => pet.id === previewPetId && isPetRuntimeUsable(pet));
+  useEffect(() => {
+    if (previewPetId || config.petId) return;
+    const first = pets.find((pet) => isPetRuntimeUsable(pet));
+    if (first) setPreviewPetId(first.id);
+  }, [config.petId, pets, previewPetId]);
   return <div className="settings-section settings-section-first pet-management-section">
-    <div className="settings-section-heading pet-management-heading"><div><h3>选择宠物</h3><p>宠物会管理对话，并突出显示需要你关注的事项。</p></div><div className="pet-management-actions"><button type="button" className="icon-button pet-refresh-button" onClick={onRefresh} disabled={loading} aria-label="刷新宠物列表" title="刷新宠物列表"><RefreshCw size={16} className={loading ? 'is-spinning' : ''} /></button><button type="button" className="secondary-action" onClick={onOpenFolder}><FolderOpen size={15} aria-hidden="true" />打开文件夹</button><button type="button" className={`send-button ${config.enabled ? 'is-enabled' : ''}`} onClick={onToggle}>{config.enabled ? '关闭桌面宠物' : '唤醒虚拟宠物'}</button></div></div>
+    <div className="settings-section-heading pet-management-heading"><div><h3>选择宠物</h3><p>宠物会管理对话，并突出显示需要你关注的事项。</p></div><div className="pet-management-actions"><button type="button" className="icon-button pet-refresh-button" onClick={onRefresh} disabled={loading} aria-label="刷新宠物列表" title="刷新宠物列表"><RefreshCw size={16} className={loading ? 'is-spinning' : ''} /></button><button type="button" className="secondary-action" onClick={onImport}><Upload size={15} aria-hidden="true" />导入皮肤</button><button type="button" className="secondary-action" onClick={onOpenFolder}><FolderOpen size={15} aria-hidden="true" />打开文件夹</button><button type="button" className={`send-button ${config.enabled ? 'is-enabled' : ''}`} onClick={onToggle}>{config.enabled ? '关闭桌面宠物' : '唤醒虚拟宠物'}</button></div></div>
     <div className="pet-catalog" aria-label="宠物列表">
       {loading && <div className="pet-catalog-loading">正在扫描本地宠物...</div>}
       {!loading && entries.map((pet) => {
         const asset = pet.id ? assets[pet.id] : undefined;
         const selected = pet.id ? config.petId === pet.id : builtinSelected;
-        const frameWidth = asset?.manifest.cellWidth ?? 192;
-        const frameHeight = asset?.manifest.cellHeight ?? 208;
-        const columns = asset?.manifest.columns ?? 8;
-        const rows = asset?.manifest.rows ?? 9;
-        return <div className={`pet-catalog-row ${selected ? 'is-selected' : ''}`} key={pet.id || 'builtin'}>
-          <span className={`pet-catalog-preview ${asset ? 'has-sprite' : ''}`} style={asset ? { backgroundImage: `url(${asset.dataUrl})`, backgroundSize: `${columns * 64}px ${rows * (64 * frameHeight / frameWidth)}px` } : undefined} aria-hidden="true"><span>{asset ? '' : '玉'}</span></span>
-          <div className="pet-catalog-copy"><strong>{pet.displayName}</strong><small>{pet.description ?? (pet.source === 'codex' ? '来自 Codex Pet 的本地皮肤。' : '玉衡内置宠物。')}</small></div>
-          <div className="pet-catalog-row-actions">{pet.source === 'codex' && <span className="pet-source-tag">Codex</span>}{selected ? <span className="pet-selected-state"><Check size={15} aria-hidden="true" />已选</span> : <button type="button" className="secondary-action" onClick={() => onSelect(pet.id || undefined)}>选择</button>}</div>
+        const canUse = Boolean(pet.builtin || (isPetRuntimeUsable(pet) && asset));
+        const statusLabel = pet.builtin ? '内置' : !isPetRuntimeUsable(pet) ? '不可用' : pet.report.status === 'invalid' ? '可回退' : pet.report.status === 'warning' ? '需注意' : '兼容';
+        return <div className={`pet-catalog-row ${selected ? 'is-selected' : ''} ${!canUse ? 'is-invalid' : ''}`} key={pet.id || 'builtin'}>
+          <span className={`pet-catalog-preview ${asset ? 'has-sprite' : ''}`} style={asset ? { backgroundImage: `url(${asset.dataUrl})`, backgroundSize: `${asset.manifest.columns * 64}px ${asset.manifest.rows * (64 * asset.manifest.cellHeight / asset.manifest.cellWidth)}px` } : undefined} aria-hidden="true"><span>{asset ? '' : '玉'}</span></span>
+          <div className="pet-catalog-copy"><strong>{pet.displayName}</strong><small>{pet.description ?? (pet.source === 'codex' ? '来自 Codex Pet 的本地皮肤。' : '玉衡内置宠物。')}</small>{!pet.builtin && <span className={`pet-compatibility-status is-${pet.report.status}`}>{pet.report.status === 'invalid' ? <AlertTriangle size={13} aria-hidden="true" /> : <Check size={13} aria-hidden="true" />}{statusLabel}{pet.report.issues[0] ? ` · ${pet.report.issues[0].message}` : ''}</span>}</div>
+          <div className="pet-catalog-row-actions">{pet.source === 'codex' && <span className="pet-source-tag">Codex</span>}{selected ? <span className="pet-selected-state"><Check size={15} aria-hidden="true" />已选</span> : canUse ? <button type="button" className="secondary-action" onClick={() => { setPreviewPetId(pet.id); onSelect(pet.id || undefined); }}>选择</button> : <span className="pet-selected-state">不可选择</span>}{canUse && !pet.builtin && <button type="button" className="icon-button" onClick={() => setPreviewPetId(pet.id)} aria-label={`预览${pet.displayName}`} title="预览皮肤"><Play size={15} /></button>}{!pet.builtin && pet.manifest && <><button type="button" className="icon-button" onClick={() => onReveal(pet.id)} aria-label={`在 Finder 中显示${pet.displayName}`} title="在 Finder 中显示"><MapPin size={15} /></button><button type="button" className="icon-button pet-delete-button" onClick={() => onDelete(pet.id)} aria-label={`删除${pet.displayName}`} title="删除皮肤"><Trash2 size={15} /></button></>}</div>
         </div>;
       })}
       {!loading && pets.length === 0 && <div className="pet-catalog-empty">未发现 Codex Pet 皮肤。将皮肤目录放入 `~/.codex/pets` 后点击刷新。</div>}
-      <div className="pet-catalog-footer"><strong>自定义宠物</strong><span>支持 `pet.json` + `spritesheet.webp` 的 Codex Pet 格式</span><button type="button" className="text-button" onClick={onOpenFolder}>打开文件夹 <ExternalLink size={14} aria-hidden="true" /></button></div>
+      <div className="pet-catalog-footer"><strong>自定义宠物</strong><span>支持 `pet.json` + `spritesheet.webp` 的 Codex Pet 格式；异常包会保留在列表中供诊断。</span><button type="button" className="text-button" onClick={onOpenFolder}>打开文件夹 <ExternalLink size={14} aria-hidden="true" /></button></div>
     </div>
+    {previewEntry && assets[previewEntry.id] && <PetSkinPreview entry={previewEntry} asset={assets[previewEntry.id]} />}
+    {error && <p className="form-error pet-management-error" role="alert">{error}</p>}
     <div className="pet-appearance-panel"><div><strong>宠物大小</strong><small>桌面宠物窗口的显示比例 · {Math.round((config.scale ?? 1) * 100)}%</small></div><input type="range" min="80" max="140" step="5" value={Math.round((config.scale ?? 1) * 100)} onChange={(event) => onScaleChange(Number(event.target.value) / 100)} aria-label="宠物大小" /></div>
+    <div className="pet-control-panel" aria-label="宠物行为设置">
+      <div className="plugin-toggle-row pet-control-row"><div><strong>锁定位置</strong><small>锁定后不能拖动，但仍可以点击宠物打开玉衡。</small></div><button type="button" className={`switch-control ${config.locked ? 'is-on' : ''}`} role="switch" aria-checked={config.locked === true} aria-label={config.locked ? '解锁宠物位置' : '锁定宠物位置'} onClick={() => onLockedChange(!config.locked)}><span /></button></div>
+      <div className="plugin-toggle-row pet-control-row"><div><strong>始终置顶</strong><small>让宠物保持在其他窗口上方。</small></div><button type="button" className={`switch-control ${config.alwaysOnTop !== false ? 'is-on' : ''}`} role="switch" aria-checked={config.alwaysOnTop !== false} aria-label={config.alwaysOnTop !== false ? '关闭宠物置顶' : '开启宠物置顶'} onClick={() => onAlwaysOnTopChange(config.alwaysOnTop === false)}><span /></button></div>
+      <div className="plugin-toggle-row pet-control-row"><div><strong>边缘吸附</strong><small>拖动后靠近屏幕边缘时自动对齐。</small></div><button type="button" className={`switch-control ${config.edgeSnap === true ? 'is-on' : ''}`} role="switch" aria-checked={config.edgeSnap === true} aria-label={config.edgeSnap === true ? '关闭边缘吸附' : '开启边缘吸附'} onClick={() => onFeedbackChange({ edgeSnap: config.edgeSnap !== true })}><span /></button></div>
+      <div className="plugin-toggle-row pet-control-row"><div><strong>轻微惯性</strong><small>松开鼠标后保留短暂的移动惯性，默认关闭。</small></div><button type="button" className={`switch-control ${config.inertia === true ? 'is-on' : ''}`} role="switch" aria-checked={config.inertia === true} aria-label={config.inertia === true ? '关闭轻微惯性' : '开启轻微惯性'} onClick={() => onFeedbackChange({ inertia: config.inertia !== true })}><span /></button></div>
+      <div className="plugin-toggle-row pet-control-row"><div><strong>边界回弹</strong><small>惯性到达屏幕边界时轻微回弹；需要先开启惯性。</small></div><button type="button" className={`switch-control ${config.boundaryBounce === true ? 'is-on' : ''}`} role="switch" aria-checked={config.boundaryBounce === true} aria-label={config.boundaryBounce === true ? '关闭边界回弹' : '开启边界回弹'} onClick={() => onFeedbackChange({ boundaryBounce: config.boundaryBounce !== true })}><span /></button></div>
+      <div className="pet-opacity-control"><div><strong>不透明度</strong><small>降低透明度不会关闭宠物交互 · {Math.round((config.opacity ?? 1) * 100)}%</small></div><input type="range" min="20" max="100" step="5" value={Math.round((config.opacity ?? 1) * 100)} onChange={(event) => onOpacityChange(Number(event.target.value) / 100)} aria-label="宠物不透明度" /></div>
+    </div>
+    <div className="pet-feedback-settings">
+      <div className="pet-feedback-heading"><strong>反馈与打扰</strong><small>控制宠物何时显示气泡；提示音默认关闭。</small></div>
+      <div className="pet-feedback-mode" role="radiogroup" aria-label="宠物气泡模式">
+        {([['important', '重要状态'], ['all', '全部状态'], ['hidden', '隐藏气泡']] as const).map(([value, label]) => <button type="button" key={value} role="radio" aria-checked={feedbackMode === value} className={feedbackMode === value ? 'is-selected' : ''} onClick={() => onFeedbackChange({ feedbackMode: value })}>{label}</button>)}
+      </div>
+      <div className="pet-feedback-toggles">
+        <div className="plugin-toggle-row pet-control-row"><div><strong>完成提示</strong><small>任务完成后显示简短庆祝反馈。</small></div><button type="button" className={`switch-control ${config.completionFeedback !== false ? 'is-on' : ''}`} role="switch" aria-checked={config.completionFeedback !== false} onClick={() => onFeedbackChange({ completionFeedback: config.completionFeedback === false })}><span /></button></div>
+        <div className="plugin-toggle-row pet-control-row"><div><strong>错误提示</strong><small>运行失败时提示并支持定位执行记录。</small></div><button type="button" className={`switch-control ${config.errorFeedback !== false ? 'is-on' : ''}`} role="switch" aria-checked={config.errorFeedback !== false} onClick={() => onFeedbackChange({ errorFeedback: config.errorFeedback === false })}><span /></button></div>
+        <div className="plugin-toggle-row pet-control-row"><div><strong>审批提示</strong><small>需要确认工具操作时提醒你处理。</small></div><button type="button" className={`switch-control ${config.approvalFeedback !== false ? 'is-on' : ''}`} role="switch" aria-checked={config.approvalFeedback !== false} onClick={() => onFeedbackChange({ approvalFeedback: config.approvalFeedback === false })}><span /></button></div>
+        <div className="plugin-toggle-row pet-control-row"><div><strong>提示音</strong><small>仅在完成、错误或等待审批时播放轻提示音。</small></div><button type="button" className={`switch-control ${config.soundEnabled === true ? 'is-on' : ''}`} role="switch" aria-checked={config.soundEnabled === true} onClick={() => onFeedbackChange({ soundEnabled: config.soundEnabled !== true })}><span /></button></div>
+      </div>
+      <div className="pet-focus-control"><div><strong>{focusActive ? '专注中' : '临时专注'}</strong><small>{focusActive ? `反馈已暂停至 ${new Date(config.mutedUntil!).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}` : '临时暂停气泡和提示音，不会关闭宠物。'}</small></div><button type="button" className="secondary-action" onClick={() => onFeedbackChange({ mutedUntil: focusActive ? undefined : Date.now() + 30 * 60 * 1_000 })}>{focusActive ? '提前结束' : '专注 30 分钟'}</button></div>
+    </div>
   </div>;
 }
 
-function SettingsWorkspace({ appInfo, current, providers, browserUseConfig, computerUseConfig, desktopPetConfig: configuredDesktopPet, theme, onThemeChange, onClose, onSaved, onProvidersChange, onBrowserUseChange, onComputerUseChange, onDesktopPetChange }: { appInfo: AppInfo | null; current: ProviderConfig | null; providers: ProviderConfig[]; browserUseConfig: BrowserUseConfig; computerUseConfig: ComputerUseConfig; desktopPetConfig?: DesktopPetConfig; theme: ThemeName; onThemeChange: (theme: ThemeName) => void; onClose: () => void; onSaved: (provider: ProviderConfig) => void; onProvidersChange: (providers: ProviderConfig[]) => void; onBrowserUseChange: (config: BrowserUseConfig) => void; onComputerUseChange: (config: ComputerUseConfig) => void; onDesktopPetChange?: (config: DesktopPetConfig) => void }) {
+function SettingsWorkspace({ appInfo, current, providers, browserUseConfig, computerUseConfig, desktopPetConfig: configuredDesktopPet, initialSection = 'provider', theme, onThemeChange, onClose, onSaved, onProvidersChange, onBrowserUseChange, onComputerUseChange, onDesktopPetChange }: { appInfo: AppInfo | null; current: ProviderConfig | null; providers: ProviderConfig[]; browserUseConfig: BrowserUseConfig; computerUseConfig: ComputerUseConfig; desktopPetConfig?: DesktopPetConfig; initialSection?: SettingsSection; theme: ThemeName; onThemeChange: (theme: ThemeName) => void; onClose: () => void; onSaved: (provider: ProviderConfig) => void; onProvidersChange: (providers: ProviderConfig[]) => void; onBrowserUseChange: (config: BrowserUseConfig) => void; onComputerUseChange: (config: ComputerUseConfig) => void; onDesktopPetChange?: (config: DesktopPetConfig) => void }) {
   const [localDesktopPet, setLocalDesktopPet] = useState<DesktopPetConfig>(configuredDesktopPet ?? { enabled: false });
-  const [petOptions, setPetOptions] = useState<CodexPetManifest[]>([]);
+  const [petOptions, setPetOptions] = useState<CodexPetCatalogEntry[]>([]);
   const [petAssets, setPetAssets] = useState<Record<string, { dataUrl: string; manifest: CodexPetManifest }>>({});
   const [petLoading, setPetLoading] = useState(false);
+  const [petError, setPetError] = useState<string | null>(null);
   const desktopPetConfig = configuredDesktopPet ?? localDesktopPet;
   useEffect(() => {
     if (configuredDesktopPet) return;
@@ -131,18 +188,41 @@ function SettingsWorkspace({ appInfo, current, providers, browserUseConfig, comp
     const activeBridge = getBridge();
     if (!activeBridge || petLoading) return;
     setPetLoading(true);
+    setPetError(null);
     try {
-      const pets = await activeBridge.pet.list();
-      setPetOptions(pets);
-      const loaded = await Promise.all(pets.map(async (pet) => {
+      const catalog = await activeBridge.pet.catalog();
+      setPetOptions(catalog);
+      const loaded = await Promise.all(catalog.filter((pet) => isPetRuntimeUsable(pet)).map(async (pet) => {
         try { const asset = await activeBridge.pet.asset(pet.id); return asset ? [pet.id, asset] as const : null; } catch { return null; }
       }));
       setPetAssets(Object.fromEntries(loaded.filter((item): item is [string, { dataUrl: string; manifest: CodexPetManifest }] => Boolean(item))));
-    } catch { setPetOptions([]); setPetAssets({}); }
+    } catch (reason) { setPetError(reason instanceof Error ? reason.message : '读取皮肤列表失败。'); setPetOptions([]); setPetAssets({}); }
     finally { setPetLoading(false); }
   };
   useEffect(() => { void refreshPets(); }, []);
-  const [activeSection, setActiveSection] = useState<SettingsSection>('provider');
+  const importPet = async () => {
+    const activeBridge = getBridge();
+    if (!activeBridge || petLoading) return;
+    try {
+      const imported = await activeBridge.pet.import();
+      if (imported) { await refreshPets(); await selectDesktopPet(imported.id); }
+    } catch (reason) { setPetError(reason instanceof Error ? reason.message : '导入皮肤失败。'); }
+  };
+  const deletePet = async (petId: string) => {
+    const activeBridge = getBridge();
+    const pet = petOptions.find((entry) => entry.id === petId);
+    if (!activeBridge || !pet || !window.confirm(`删除皮肤“${pet.displayName}”？`)) return;
+    try { await activeBridge.pet.delete(petId); await refreshPets(); }
+    catch (reason) { setPetError(reason instanceof Error ? reason.message : '删除皮肤失败。'); }
+  };
+  const revealPet = async (petId: string) => {
+    const activeBridge = getBridge();
+    if (!activeBridge) return;
+    try { await activeBridge.pet.reveal(petId); }
+    catch (reason) { setPetError(reason instanceof Error ? reason.message : '打开皮肤位置失败。'); }
+  };
+  const [activeSection, setActiveSection] = useState<SettingsSection>(() => normalizeSettingsSection(initialSection));
+  useEffect(() => { setActiveSection(normalizeSettingsSection(initialSection)); }, [initialSection]);
   const [protocol, setProtocol] = useState<ProviderProtocol>(current?.protocol ?? 'openai');
   const [editingProviderId, setEditingProviderId] = useState(current?.id ?? '');
   const [baseUrl, setBaseUrl] = useState(current?.baseUrl ?? 'https://api.openai.com/v1');
@@ -210,7 +290,7 @@ function SettingsWorkspace({ appInfo, current, providers, browserUseConfig, comp
     const activeBridge = getBridge();
     if (!activeBridge) return;
     try {
-      const saved = await activeBridge.pet.save({ enabled: !desktopPetConfig.enabled, ...(desktopPetConfig.petId ? { petId: desktopPetConfig.petId } : {}), ...(desktopPetConfig.scale ? { scale: desktopPetConfig.scale } : {}) });
+      const saved = await activeBridge.pet.save({ ...desktopPetConfig, enabled: !desktopPetConfig.enabled });
       setLocalDesktopPet(saved);
       onDesktopPetChange?.(saved);
     } catch (reason) {
@@ -221,7 +301,7 @@ function SettingsWorkspace({ appInfo, current, providers, browserUseConfig, comp
     const activeBridge = getBridge();
     if (!activeBridge) return;
     try {
-      const saved = await activeBridge.pet.save({ enabled: desktopPetConfig.enabled, ...(petId ? { petId } : {}), ...(desktopPetConfig.scale ? { scale: desktopPetConfig.scale } : {}) });
+      const saved = await activeBridge.pet.save({ ...desktopPetConfig, enabled: desktopPetConfig.enabled, ...(petId ? { petId } : { petId: undefined }) });
       setLocalDesktopPet(saved);
       onDesktopPetChange?.(saved);
     } catch (reason) { setError(reason instanceof Error ? reason.message : '切换宠物失败。'); }
@@ -230,10 +310,19 @@ function SettingsWorkspace({ appInfo, current, providers, browserUseConfig, comp
     const activeBridge = getBridge();
     if (!activeBridge) return;
     try {
-      const saved = await activeBridge.pet.save({ enabled: desktopPetConfig.enabled, ...(desktopPetConfig.petId ? { petId: desktopPetConfig.petId } : {}), scale });
+      const saved = await activeBridge.pet.save({ ...desktopPetConfig, scale });
       setLocalDesktopPet(saved);
       onDesktopPetChange?.(saved);
     } catch (reason) { setError(reason instanceof Error ? reason.message : '调整宠物大小失败。'); }
+  };
+  const updateDesktopPetControl = async (patch: Partial<DesktopPetConfig>) => {
+    const activeBridge = getBridge();
+    if (!activeBridge) return;
+    try {
+      const saved = await activeBridge.pet.save({ ...desktopPetConfig, ...patch });
+      setLocalDesktopPet(saved);
+      onDesktopPetChange?.(saved);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '更新桌面宠物设置失败。'); }
   };
   const sectionCopy: Record<SettingsSection, { title: string; description: string }> = {
     provider: { title: '模型服务', description: '配置玉衡用于会话和任务处理的语言模型。' },
@@ -290,7 +379,7 @@ function SettingsWorkspace({ appInfo, current, providers, browserUseConfig, comp
 
       {activeSection === 'appearance' && <div className="settings-section settings-section-first appearance-section"><div className="settings-section-heading"><div><h3>主题</h3><p>选择玉衡工作区的基础配色。</p></div></div><div className="theme-options" role="radiogroup" aria-label="界面配色"><button type="button" className={`theme-option ${theme === 'dark' ? 'is-selected' : ''}`} onClick={() => onThemeChange('dark')} role="radio" aria-checked={theme === 'dark'}><span className="theme-swatch theme-swatch-dark" /><span><strong>深色</strong><small>适合长时间专注</small></span></button><button type="button" className={`theme-option ${theme === 'light' ? 'is-selected' : ''}`} onClick={() => onThemeChange('light')} role="radio" aria-checked={theme === 'light'}><span className="theme-swatch theme-swatch-light" /><span><strong>浅色</strong><small>明亮清晰</small></span></button><button type="button" className={`theme-option ${theme === 'graphite' ? 'is-selected' : ''}`} onClick={() => onThemeChange('graphite')} role="radio" aria-checked={theme === 'graphite'}><span className="theme-swatch theme-swatch-graphite" /><span><strong>石墨灰</strong><small>低对比度</small></span></button><button type="button" className={`theme-option ${theme === 'notion' ? 'is-selected' : ''}`} onClick={() => onThemeChange('notion')} role="radio" aria-checked={theme === 'notion'}><span className="theme-swatch theme-swatch-notion" /><span><strong>Notion</strong><small>温和中性</small></span></button></div></div>}
 
-      {activeSection === 'pet' && <PetManagementSettings config={desktopPetConfig} pets={petOptions} assets={petAssets} loading={petLoading} onRefresh={() => void refreshPets()} onSelect={(petId) => void selectDesktopPet(petId)} onToggle={() => void toggleDesktopPet()} onScaleChange={(scale) => void scaleDesktopPet(scale)} onOpenFolder={() => { const activeBridge = getBridge(); if (activeBridge) void activeBridge.pet.openFolder(); }} />}
+      {activeSection === 'pet' && <PetManagementSettings config={desktopPetConfig} pets={petOptions} assets={petAssets} loading={petLoading} error={petError} onRefresh={() => void refreshPets()} onSelect={(petId) => void selectDesktopPet(petId)} onToggle={() => void toggleDesktopPet()} onScaleChange={(scale) => void scaleDesktopPet(scale)} onLockedChange={(locked) => void updateDesktopPetControl({ locked })} onOpacityChange={(opacity) => void updateDesktopPetControl({ opacity })} onAlwaysOnTopChange={(alwaysOnTop) => void updateDesktopPetControl({ alwaysOnTop })} onFeedbackChange={(patch) => void updateDesktopPetControl(patch)} onOpenFolder={() => { const activeBridge = getBridge(); if (activeBridge) void activeBridge.pet.openFolder(); }} onImport={() => void importPet()} onDelete={(petId) => void deletePet(petId)} onReveal={(petId) => void revealPet(petId)} />}
 
       {activeSection === 'backup' && <BackupSettings />}
       {activeSection === 'desktop' && <DesktopPresenceSettings />}
@@ -350,6 +439,7 @@ export function ProductionRenderer() {
   const activeBridge = getBridge();
   const [windowFullscreen, setWindowFullscreen] = useState(false);
   const [conversationItems, setConversationItems] = useState<SidebarConversation[]>(fallbackConversations);
+  const [workspaceLoaded, setWorkspaceLoaded] = useState(!activeBridge);
   const [conversationProjects, setConversationProjects] = useState<ConversationProject[]>(fallbackProjects);
   const [activeConversation, setActiveConversation] = useState('inbox');
   const [activeConversationProject, setActiveConversationProject] = useState('personal');
@@ -363,6 +453,8 @@ export function ProductionRenderer() {
     else setActiveViewState(next);
   };
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth);
+  const [sidebarResizing, setSidebarResizing] = useState(false);
   const [messages, setMessages] = useState<Record<string, TranscriptMessage[]>>(fallbackMessages);
   const [activeRun, setActiveRun] = useState<{ id: string; conversationId: string } | null>(null);
   const [toolActivities, setToolActivities] = useState<Record<string, ToolActivity[]>>({});
@@ -402,6 +494,7 @@ export function ProductionRenderer() {
   const activeConversationRef = useRef(activeConversation);
   const [providerOpen, setProviderOpen] = useState(false);
   const [settingsMounted, setSettingsMounted] = useState(false);
+  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>('provider');
   const [settingsClosing, setSettingsClosing] = useState(false);
   const settingsCloseTimerRef = useRef<number | null>(null);
   const settingsMountedRef = useRef(false);
@@ -427,7 +520,9 @@ export function ProductionRenderer() {
   const [taskTypes, setTaskTypes] = useState<TaskType[]>([]);
   const [tasksLoading, setTasksLoading] = useState(Boolean(activeBridge));
   const [requestedOpenTaskId, setRequestedOpenTaskId] = useState<string | null>(null);
+  const [taskActionRequest, setTaskActionRequest] = useState<{ kind: 'today' | 'quick_record'; id: number } | null>(null);
   const [activeNoteId, setActiveNoteId] = useState<string | null>(() => typeof localStorage !== 'undefined' ? localStorage.getItem('yuheng-active-note') : null);
+  const [noteTitles, setNoteTitles] = useState<Record<string, string>>({});
   const [notesRevision, setNotesRevision] = useState(0);
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTab[]>(readStoredWorkspaceTabs);
   const [activeTabId, setActiveTabId] = useState(() => {
@@ -439,11 +534,26 @@ export function ProductionRenderer() {
   const restoredWorkspaceRef = useRef(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [requestedMessageId, setRequestedMessageId] = useState<string | null>(null);
+  const [requestedRunId, setRequestedRunId] = useState<string | null>(null);
+  const [requestedApprovalId, setRequestedApprovalId] = useState<string | null>(null);
   const [composerPrefill, setComposerPrefill] = useState<{ id: number; value: string } | null>(null);
   useEffect(() => {
     if (!activeBridge) return;
     return activeBridge.app.onFullscreen(setWindowFullscreen);
   }, [activeBridge]);
+  useEffect(() => { localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth)); }, [sidebarWidth]);
+  useEffect(() => {
+    if (!activeBridge) return;
+    void activeBridge.notes.list(true).then((items) => setNoteTitles(Object.fromEntries(items.map((note) => [note.id, note.title])))).catch(() => undefined);
+  }, [activeBridge]);
+  useEffect(() => {
+    const handleTitleChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ id?: string; title?: string }>).detail;
+      if (detail?.id && typeof detail.title === 'string') setNoteTitles((current) => ({ ...current, [detail.id as string]: detail.title as string }));
+    };
+    window.addEventListener('yuheng-note-title-change', handleTitleChange);
+    return () => window.removeEventListener('yuheng-note-title-change', handleTitleChange);
+  }, []);
   useEffect(() => {
     if (typeof localStorage === 'undefined') return;
     localStorage.setItem('yuheng-workspace-tabs', JSON.stringify(workspaceTabs));
@@ -464,6 +574,7 @@ export function ProductionRenderer() {
     if (type === 'conversation') setActiveConversation(resourceId);
     if (type === 'tasks') setActiveTaskBoardId(resourceId);
     if (type === 'notes') setActiveNoteId(resourceId);
+    if (type === 'notes') void activeBridge?.notes.get(resourceId).then((note) => { if (note) setNoteTitles((current) => ({ ...current, [note.id]: note.title })); }).catch(() => undefined);
   };
   const closeWorkspaceTab = (id: string) => {
     const index = workspaceTabs.findIndex((tab) => tab.id === id);
@@ -513,7 +624,8 @@ export function ProductionRenderer() {
     }, 170);
   };
 
-  const openSettings = () => {
+  const openSettings = (section?: unknown) => {
+    setSettingsInitialSection(normalizeSettingsSection(section));
     if (settingsCloseTimerRef.current !== null) window.clearTimeout(settingsCloseTimerRef.current);
     settingsMountedRef.current = true;
     settingsClosingRef.current = false;
@@ -535,6 +647,10 @@ export function ProductionRenderer() {
       settingsCloseTimerRef.current = null;
     }, 190);
   };
+  useEffect(() => {
+    if (!activeBridge) return;
+    return activeBridge.pet.onOpenSettings((section) => openSettings(normalizeSettingsSection(section)));
+  }, [activeBridge]);
   settingsMountedRef.current = settingsMounted;
   settingsClosingRef.current = settingsClosing;
   useEffect(() => () => {
@@ -573,6 +689,7 @@ export function ProductionRenderer() {
       setBrowserUseConfig(configuredBrowserUse);
       setComputerUseConfig(configuredComputerUse);
       setTaskBoards(storedTaskBoards);
+      setWorkspaceLoaded(true);
       setActiveTaskBoardId((current) => storedTaskBoards.some((board) => board.id === current) ? current : (storedTaskBoards[0]?.id ?? ''));
       const initialConversation = items.find((item) => !item.archived) ?? items[0];
       if (initialConversation) {
@@ -581,7 +698,7 @@ export function ProductionRenderer() {
         setActiveProfileId(initialConversation.profileId ?? DEFAULT_AGENT_PROFILE_ID);
         if (initialConversation.providerId) setProvider(configuredProviders.find((item) => item.id === initialConversation.providerId) ?? configuredProvider);
       }
-    }).catch((reason) => { if (mounted) { setTasksLoading(false); setError(reason instanceof Error ? reason.message : '加载本地数据失败。'); } });
+    }).catch((reason) => { if (mounted) { setWorkspaceLoaded(true); setTasksLoading(false); setError(reason instanceof Error ? reason.message : '加载本地数据失败。'); } });
     return () => { mounted = false; };
   }, [activeBridge]);
 
@@ -666,6 +783,13 @@ export function ProductionRenderer() {
           setTaskBoards(boards);
           setActiveTaskBoardId((current) => boards.some((board) => board.id === current) ? current : (boards[0]?.id ?? ''));
         }).catch((reason) => setError(reason instanceof Error ? reason.message : '加载任务看板失败。'));
+      } else if (event.type === 'open_today' || event.type === 'quick_record') {
+        closeSettings();
+        setActiveView('tasks');
+        setActiveTaskBoardId(event.boardId);
+        setRequestedOpenTaskId(null);
+        setTaskActionRequest({ kind: event.type === 'open_today' ? 'today' : 'quick_record', id: Date.now() });
+        openWorkspaceTab('tasks', event.boardId);
       } else {
         closeSettings();
         setActiveView('tasks');
@@ -755,7 +879,40 @@ export function ProductionRenderer() {
   const releaseAttachments = (items: Attachment[]) => {
     if (items.length > 0 && activeBridge) void activeBridge.attachments.release(items.map((item) => item.id));
   };
-  const selectConversation = (id: string) => { releaseAttachments(attachments); setError(null); setInterruptedRun(null); setAttachments([]); setComposerPrefill(null); setRequestedMessageId(null); setRequestedOpenTaskId(null); setActiveConversation(id); const conversation = conversationItems.find((item) => item.id === id); const projectId = conversation?.projectId; if (projectId) setActiveConversationProject(projectId); setActiveProfileId(conversation?.profileId ?? DEFAULT_AGENT_PROFILE_ID); const providerId = conversation?.providerId ?? providers[0]?.id; setProvider(providers.find((item) => item.id === providerId) ?? null); if (providerId) setNewProviderId(providerId); openWorkspaceTab('conversation', id); };
+  const selectConversation = (id: string) => { releaseAttachments(attachments); setError(null); setInterruptedRun(null); setAttachments([]); setComposerPrefill(null); setRequestedMessageId(null); setRequestedRunId(null); setRequestedApprovalId(null); setRequestedOpenTaskId(null); setActiveConversation(id); const conversation = conversationItems.find((item) => item.id === id); const projectId = conversation?.projectId; if (projectId) setActiveConversationProject(projectId); setActiveProfileId(conversation?.profileId ?? DEFAULT_AGENT_PROFILE_ID); const providerId = conversation?.providerId ?? providers[0]?.id; setProvider(providers.find((item) => item.id === providerId) ?? null); if (providerId) setNewProviderId(providerId); openWorkspaceTab('conversation', id); };
+  useEffect(() => {
+    if (!activeBridge || !workspaceLoaded) return;
+    const openTarget = (target: PetOpenTarget) => {
+      if (target.kind === 'task') {
+        closeSettings();
+        const boardId = taskBoards.some((board) => board.id === target.boardId) ? target.boardId : taskBoards[0]?.id;
+        if (!boardId) return;
+        setActiveView('tasks');
+        setActiveTaskBoardId(boardId);
+        setRequestedOpenTaskId(boardId === target.boardId ? target.taskId : null);
+        openWorkspaceTab('tasks', boardId);
+        return;
+      }
+      if (!conversationItems.some((item) => item.id === target.conversationId)) return;
+      closeSettings();
+      selectConversation(target.conversationId);
+      if (target.kind === 'conversation' && target.messageId) setRequestedMessageId(target.messageId);
+      else if (target.kind === 'run') setRequestedRunId(target.runId);
+      else if (target.kind === 'approval') setRequestedApprovalId(target.approvalId);
+    };
+    const unsubscribe = activeBridge.pet.onOpenTarget(openTarget);
+    void activeBridge.pet.takeOpenTarget().then((target) => { if (target) openTarget(target); }).catch(() => undefined);
+    return unsubscribe;
+  }, [activeBridge, conversationItems, workspaceLoaded]);
+  useEffect(() => {
+    if (!requestedApprovalId || pendingApproval?.approvalId !== requestedApprovalId) return;
+    const frame = window.requestAnimationFrame(() => {
+      const target = Array.from(document.querySelectorAll<HTMLElement>('[data-approval-id]')).find((element) => element.dataset.approvalId === requestedApprovalId);
+      target?.focus({ preventScroll: false });
+      setRequestedApprovalId(null);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [pendingApproval, requestedApprovalId]);
   useEffect(() => {
     if (restoredWorkspaceRef.current || !activeBridge) return;
     const tab = workspaceTabs.find((item) => item.id === activeTabId);
@@ -1160,8 +1317,7 @@ export function ProductionRenderer() {
       return;
     }
     if (result.kind === 'note') {
-      setActiveNoteId(result.id);
-      setActiveView('notes');
+      openWorkspaceTab('notes', result.id);
       return;
     }
     setRequestedMessageId(null);
@@ -1195,22 +1351,37 @@ export function ProductionRenderer() {
       setInterruptedRun(null); openWorkspaceTab('conversation', imported.id); closeSettings();
     } catch (reason) { setError(reason instanceof Error ? reason.message : '导入会话失败。'); }
   };
+  const resizeSidebar = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+    const shellLeft = event.currentTarget.parentElement?.getBoundingClientRect().left ?? 0;
+    setSidebarWidth(clampSidebarWidth(event.clientX - shellLeft));
+  };
+  const stopResizingSidebar = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    setSidebarResizing(false);
+  };
+  const resizeSidebarWithKeyboard = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    setSidebarWidth((current) => clampSidebarWidth(current + (event.key === 'ArrowRight' ? 20 : -20)));
+  };
 
   const tabMenuTarget = tabContextMenu ? workspaceTabs.find((tab) => tab.id === tabContextMenu.tabId) : null;
   const tabMenuIndex = tabMenuTarget ? workspaceTabs.findIndex((tab) => tab.id === tabMenuTarget.id) : -1;
   const tabMenu = tabContextMenu && tabMenuTarget && typeof document !== 'undefined' ? createPortal(<div className="workspace-tab-menu" role="menu" style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onClick={(event) => event.stopPropagation()}><button type="button" role="menuitem" onClick={() => closeWorkspaceTab(tabMenuTarget.id)}>关闭标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.filter((item) => item.id !== tabMenuTarget.id).map((item) => item.id))}>关闭其他标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.slice(tabMenuIndex + 1).map((item) => item.id))}>关闭右侧标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.slice(0, tabMenuIndex).map((item) => item.id))}>关闭左侧标签页</button></div>, document.body) : null;
   const collapsedSidebarControl = !settingsMounted && sidebarCollapsed && typeof document !== 'undefined' ? createPortal(<SidebarExpandControl onExpand={() => setSidebarCollapsed(false)} />, document.body) : null;
   useEffect(() => { document.documentElement.dataset.windowFullscreen = windowFullscreen ? 'true' : 'false'; return () => { delete document.documentElement.dataset.windowFullscreen; }; }, [windowFullscreen]);
-  return <main className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''} ${activeView === 'tasks' || activeView === 'notes' ? 'tasks-is-active' : ''} ${activeView === 'notes' ? 'notes-is-active' : ''} ${settingsMounted ? 'settings-is-active' : ''} ${settingsClosing ? 'settings-is-closing' : ''} ${profileMenuClosing || providerMenuClosing ? 'header-menu-closing' : ''}`}>
-    <Sidebar conversations={conversationItems} projects={conversationProjects} boards={taskBoards} providers={providers} newProviderId={newProviderId} activeId={activeConversation} activeProjectId={activeConversationProject} activeBoardId={activeTaskBoardId} activeNoteId={activeNoteId} notesBridge={activeBridge} notesRevision={notesRevision} onNotesChanged={() => setNotesRevision((value) => value + 1)} mode={sidebarMode} settingsOpen={providerOpen} collapsed={sidebarCollapsed} appVersion={appInfo?.version} onSearch={() => setSearchOpen(true)} onSelect={(id) => { closeSettings(); selectConversation(id); }} onSelectProject={setActiveConversationProject} onSelectBoard={(id) => { closeSettings(); setRequestedOpenTaskId(null); openWorkspaceTab('tasks', id); }} onSelectNote={(id) => { closeSettings(); if (id) openWorkspaceTab('notes', id); }} onModeChange={(mode) => { setSidebarModeState(mode); closeSettings(); }} onNew={(projectId, providerId) => void createConversation(projectId, providerId)} onNewProviderChange={setNewProviderId} onRenameConversation={renameConversation} onMoveConversation={moveConversation} onArchiveConversation={archiveConversation} onPinConversation={pinConversation} onDeleteConversation={deleteConversation} onCreateProject={createConversationProject} onRenameProject={renameConversationProject} onDeleteProject={deleteConversationProject} onCreateBoard={createTaskBoard} onRenameBoard={renameTaskBoard} onDeleteBoard={deleteTaskBoard} onReorderBoard={reorderTaskBoard} onMoveTaskToBoard={async (id, boardId) => { await moveTaskToBoard(id, boardId); }} onSettings={openSettings} onToggle={() => setSidebarCollapsed((current) => !current)} />
+  return <main className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''} ${sidebarResizing ? 'sidebar-is-resizing' : ''} ${activeView === 'tasks' || activeView === 'notes' ? 'tasks-is-active' : ''} ${activeView === 'notes' ? 'notes-is-active' : ''} ${settingsMounted ? 'settings-is-active' : ''} ${settingsClosing ? 'settings-is-closing' : ''} ${profileMenuClosing || providerMenuClosing ? 'header-menu-closing' : ''}`} style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
+    <Sidebar conversations={conversationItems} projects={conversationProjects} boards={taskBoards} providers={providers} newProviderId={newProviderId} activeId={activeConversation} activeProjectId={activeConversationProject} activeBoardId={activeTaskBoardId} activeNoteId={activeNoteId} notesBridge={activeBridge} notesRevision={notesRevision} onNotesChanged={() => setNotesRevision((value) => value + 1)} mode={sidebarMode} settingsOpen={providerOpen} collapsed={sidebarCollapsed} appVersion={appInfo?.version} onSearch={() => setSearchOpen(true)} onSelect={(id) => { closeSettings(); selectConversation(id); }} onSelectProject={setActiveConversationProject} onSelectBoard={(id) => { closeSettings(); setRequestedOpenTaskId(null); openWorkspaceTab('tasks', id); }} onSelectNote={(id) => { closeSettings(); if (id) openWorkspaceTab('notes', id); }} onModeChange={(mode) => { setSidebarModeState(mode); closeSettings(); }} onNew={(projectId, providerId) => void createConversation(projectId, providerId)} onNewProviderChange={setNewProviderId} onRenameConversation={renameConversation} onMoveConversation={moveConversation} onArchiveConversation={archiveConversation} onPinConversation={pinConversation} onDeleteConversation={deleteConversation} onCreateProject={createConversationProject} onRenameProject={renameConversationProject} onDeleteProject={deleteConversationProject} onCreateBoard={createTaskBoard} onRenameBoard={renameTaskBoard} onDeleteBoard={deleteTaskBoard} onReorderBoard={reorderTaskBoard} onMoveTaskToBoard={async (id, boardId) => { await moveTaskToBoard(id, boardId); }} onSettings={() => openSettings()} onToggle={() => setSidebarCollapsed((current) => !current)} />
+    {!settingsMounted && !sidebarCollapsed && <div className="sidebar-resize-handle" role="separator" aria-label="调整侧栏宽度" aria-orientation="vertical" aria-valuemin={MIN_SIDEBAR_WIDTH} aria-valuemax={MAX_SIDEBAR_WIDTH} aria-valuenow={sidebarWidth} tabIndex={0} title="拖拽调整侧栏宽度，双击恢复默认宽度" onDoubleClick={() => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)} onPointerDown={(event) => { if (event.button !== 0) return; event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); setSidebarResizing(true); }} onPointerMove={resizeSidebar} onPointerUp={stopResizingSidebar} onPointerCancel={stopResizingSidebar} onKeyDown={resizeSidebarWithKeyboard} />}
     <section className="workspace" aria-label="会话工作区">
-      {!settingsMounted && <nav className="workspace-tabs" aria-label="已打开页面">{workspaceTabs.map((tab, index) => { const label = tab.type === 'conversation' ? (conversationItems.find((item) => item.id === tab.resourceId)?.title ?? '对话') : tab.type === 'tasks' ? (taskBoards.find((board) => board.id === tab.resourceId)?.name ?? '任务看板') : '笔记'; const menuOpen = tabContextMenu?.tabId === tab.id; return <div className={`workspace-tab ${tab.id === activeTabId ? 'is-active' : ''}`} key={tab.id} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setTabContextMenu({ tabId: tab.id, x: event.clientX, y: event.clientY }); }}><button type="button" className="workspace-tab-select" onClick={() => activateWorkspaceTab(tab)}>{tab.type === 'conversation' ? <MessageSquare size={14} /> : tab.type === 'tasks' ? <ListTodo size={14} /> : <NotebookPen size={14} />}<span>{label}</span></button>{workspaceTabs.length > 1 && <button type="button" className="workspace-tab-close" onClick={(event) => { event.stopPropagation(); closeWorkspaceTab(tab.id); }} aria-label={`关闭${label}`} title={`关闭${label}`}><X size={13} /></button>}{menuOpen && <div className="workspace-tab-menu" role="menu" style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onClick={(event) => event.stopPropagation()}><button type="button" role="menuitem" onClick={() => closeWorkspaceTab(tab.id)} disabled={workspaceTabs.length <= 1}>关闭标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.filter((item) => item.id !== tab.id).map((item) => item.id))} disabled={workspaceTabs.length <= 1}>关闭其他标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.slice(index + 1).map((item) => item.id))} disabled={index === workspaceTabs.length - 1}>关闭右侧标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.slice(0, index).map((item) => item.id))} disabled={index === 0}>关闭左侧标签页</button></div>}</div>; })}</nav>}
-      {settingsMounted ? <SettingsWorkspace appInfo={appInfo} current={provider} providers={providers} browserUseConfig={browserUseConfig} computerUseConfig={computerUseConfig} theme={theme} onThemeChange={setTheme} onClose={closeSettings} onSaved={(saved) => { const boundProviderId = conversationItems.find((item) => item.id === activeConversation)?.providerId; if (!boundProviderId || boundProviderId === saved.id) setProvider(saved); }} onProvidersChange={setProviders} onBrowserUseChange={setBrowserUseConfig} onComputerUseChange={setComputerUseConfig} /> : activeView === 'tasks' ? <Suspense fallback={<div className="task-page-loading">正在打开任务看板...</div>}><TaskBoard boardId={activeTaskBoardId} boardName={taskBoards.find((board) => board.id === activeTaskBoardId)?.name ?? '任务'} boards={taskBoards} tasks={tasks} taskTypes={taskTypes} loading={tasksLoading} headerControl={sidebarCollapsed ? <SidebarExpandControl onExpand={() => setSidebarCollapsed(false)} /> : null} requestedOpenTaskId={requestedOpenTaskId} onOpenTaskHandled={() => setRequestedOpenTaskId(null)} sourceConversations={conversationItems} onOpenConversation={selectConversation} onCreate={createTask} onUpdate={updateTask} onDelete={deleteTask} onReorder={reorderTask} onMoveToBoard={moveTaskToBoard} onCopyToBoard={copyTaskToBoard} onCreateType={createTaskType} onRenameType={renameTaskType} onDeleteType={deleteTaskType} onImportAsset={importTaskAsset} onPickAssets={pickTaskAssets} onOpenAsset={openTaskAsset} onRunAi={(prompt, signal) => runAiForBoard(taskBoards.find((board) => board.id === activeTaskBoardId)?.name ?? '任务', tasks, prompt, signal)} /></Suspense> : activeView === 'notes' ? <Suspense fallback={<div className="task-page-loading">正在打开笔记...</div>}><NotesWorkspace bridge={activeBridge} initialNoteId={activeNoteId} refreshKey={notesRevision} showNavigation={false} onNotesChanged={() => setNotesRevision((value) => value + 1)} onActiveNoteChange={setActiveNoteId} onRunAi={(note, action, instruction, signal) => runAiForNote(note, action, instruction, signal)} onCreateTask={(note) => void createTaskFromNote(note)} /></Suspense> : <>
+      {!settingsMounted && <nav className="workspace-tabs" aria-label="已打开页面">{workspaceTabs.map((tab, index) => { const label = tab.type === 'conversation' ? (conversationItems.find((item) => item.id === tab.resourceId)?.title ?? '对话') : tab.type === 'tasks' ? (taskBoards.find((board) => board.id === tab.resourceId)?.name ?? '任务看板') : (noteTitles[tab.resourceId] ?? '笔记'); const menuOpen = tabContextMenu?.tabId === tab.id; return <div className={`workspace-tab ${tab.id === activeTabId ? 'is-active' : ''}`} key={tab.id} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setTabContextMenu({ tabId: tab.id, x: event.clientX, y: event.clientY }); }}><button type="button" className="workspace-tab-select" onClick={() => activateWorkspaceTab(tab)}>{tab.type === 'conversation' ? <MessageSquare size={14} /> : tab.type === 'tasks' ? <ListTodo size={14} /> : <NotebookPen size={14} />}<span>{label}</span></button>{workspaceTabs.length > 1 && <button type="button" className="workspace-tab-close" onClick={(event) => { event.stopPropagation(); closeWorkspaceTab(tab.id); }} aria-label={`关闭${label}`} title={`关闭${label}`}><X size={13} /></button>}{menuOpen && <div className="workspace-tab-menu" role="menu" style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onClick={(event) => event.stopPropagation()}><button type="button" role="menuitem" onClick={() => closeWorkspaceTab(tab.id)} disabled={workspaceTabs.length <= 1}>关闭标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.filter((item) => item.id !== tab.id).map((item) => item.id))} disabled={workspaceTabs.length <= 1}>关闭其他标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.slice(index + 1).map((item) => item.id))} disabled={index === workspaceTabs.length - 1}>关闭右侧标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.slice(0, index).map((item) => item.id))} disabled={index === 0}>关闭左侧标签页</button></div>}</div>; })}</nav>}
+      {settingsMounted ? <SettingsWorkspace initialSection={settingsInitialSection} appInfo={appInfo} current={provider} providers={providers} browserUseConfig={browserUseConfig} computerUseConfig={computerUseConfig} theme={theme} onThemeChange={setTheme} onClose={closeSettings} onSaved={(saved) => { const boundProviderId = conversationItems.find((item) => item.id === activeConversation)?.providerId; if (!boundProviderId || boundProviderId === saved.id) setProvider(saved); }} onProvidersChange={setProviders} onBrowserUseChange={setBrowserUseConfig} onComputerUseChange={setComputerUseConfig} /> : activeView === 'tasks' ? <Suspense fallback={<div className="task-page-loading">正在打开任务看板...</div>}><TaskBoard boardId={activeTaskBoardId} boardName={taskBoards.find((board) => board.id === activeTaskBoardId)?.name ?? '任务'} boards={taskBoards} tasks={tasks} taskTypes={taskTypes} loading={tasksLoading} headerControl={sidebarCollapsed ? <SidebarExpandControl onExpand={() => setSidebarCollapsed(false)} /> : null} requestedOpenTaskId={requestedOpenTaskId} onOpenTaskHandled={() => setRequestedOpenTaskId(null)} taskActionRequest={taskActionRequest} onTaskActionHandled={() => setTaskActionRequest(null)} sourceConversations={conversationItems} onOpenConversation={selectConversation} onCreate={createTask} onUpdate={updateTask} onDelete={deleteTask} onReorder={reorderTask} onMoveToBoard={moveTaskToBoard} onCopyToBoard={copyTaskToBoard} onCreateType={createTaskType} onRenameType={renameTaskType} onDeleteType={deleteTaskType} onImportAsset={importTaskAsset} onPickAssets={pickTaskAssets} onOpenAsset={openTaskAsset} onRunAi={(prompt, signal) => runAiForBoard(taskBoards.find((board) => board.id === activeTaskBoardId)?.name ?? '任务', tasks, prompt, signal)} /></Suspense> : activeView === 'notes' ? <Suspense fallback={<div className="task-page-loading">正在打开笔记...</div>}><NotesWorkspace bridge={activeBridge} initialNoteId={activeNoteId} refreshKey={notesRevision} showNavigation={false} onNotesChanged={() => setNotesRevision((value) => value + 1)} onActiveNoteChange={setActiveNoteId} onRunAi={(note, action, instruction, signal) => runAiForNote(note, action, instruction, signal)} onCreateTask={(note) => void createTaskFromNote(note)} onOpenTask={(boardId, taskId) => { closeSettings(); openWorkspaceTab('tasks', boardId); setRequestedOpenTaskId(taskId); }} onImportAsset={importTaskAsset} onPickAssets={pickTaskAssets} onOpenAsset={openTaskAsset} /></Suspense> : <>
       <header className="workspace-header">{sidebarCollapsed && <SidebarExpandControl onExpand={() => setSidebarCollapsed(false)} />}<div className="conversation-identity"><div className="identity-mark"><ThinkingOrb state={isThinking ? 'working' : 'breathing'} size={20} theme="dark" /></div><div><h1>{activeTitle}</h1><span className="identity-meta">个人工作区 <span className="meta-separator">·</span> 会话 ID <button type="button" className="conversation-id-button" onClick={() => void copyConversationId()} title={`复制完整会话 ID：${activeConversation}`} aria-label={`复制会话 ID：${activeConversation}`}>{copiedConversationId ? '已复制' : shortId(activeConversation)}</button><span className="meta-separator">·</span><span className="conversation-profile-picker"><span>Profile</span><span className="profile-picker-control"><button type="button" className="profile-picker-trigger" aria-haspopup="listbox" aria-expanded={profileMenuOpen} aria-label={`当前会话 Profile：${activeProfile.name}`} title={activeProfile.description} onClick={() => setProfileMenuOpen((current) => !current)}><span>{activeProfile.name}</span><ChevronDown size={13} aria-hidden="true" /></button>{profileMenuOpen && <span className="profile-picker-menu" role="listbox" aria-label="选择会话 Profile">{AGENT_PROFILES.map((item) => <button type="button" role="option" aria-selected={item.id === activeProfileId} className={item.id === activeProfileId ? 'is-selected' : ''} key={item.id} onClick={() => { setProfileMenuOpen(false); void selectConversationProfile(item.id); }}><span><strong>{item.name}</strong><small>{item.description}</small></span>{item.id === activeProfileId && <span className="profile-picker-check" aria-hidden="true">✓</span>}</button>)}</span>}</span></span>{providers.length > 0 && <><span className="meta-separator">·</span><span className="conversation-provider-picker"><span>Provider</span><span className="provider-picker-control"><button type="button" className="provider-picker-trigger" aria-haspopup="listbox" aria-expanded={providerMenuOpen} aria-label={`当前会话 Provider：${activeProvider?.displayName ?? '未选择'}`} title={activeProvider ? `${activeProvider.displayName} · ${activeProvider.model}` : '选择 Provider'} onClick={() => setProviderMenuOpen((current) => !current)}><span>{(activeProvider?.displayName ?? activeProviderId) || '未选择'}</span><ChevronDown size={13} aria-hidden="true" /></button>{providerMenuOpen && <span className="provider-picker-menu" role="listbox" aria-label="选择会话 Provider">{providers.map((item) => <button type="button" role="option" aria-selected={item.id === activeProviderId} className={`${item.id === activeProviderId ? 'is-selected' : ''} ${item.hasApiKey ? '' : 'is-disabled'}`} key={item.id} disabled={!item.hasApiKey} onClick={() => { setProviderMenuOpen(false); void selectConversationProvider(item.id); }}><span><strong>{item.displayName}</strong><small>{item.protocol} · {item.model}{item.hasApiKey ? '' : ' · 未配置 Key'}</small></span>{item.id === activeProviderId && <span className="profile-picker-check" aria-hidden="true">✓</span>}</button>)}</span>}</span></span></>}</span></div></div><div className="header-actions"><button type="button" className="header-icon-button" onClick={() => void importConversation()} aria-label="导入会话" title="导入会话"><Upload size={15} /></button><button type="button" className="header-icon-button" onClick={() => void exportActiveConversation()} aria-label="导出会话" title="导出会话"><Download size={15} /></button><ContextWindowStatus usage={latestCompletedRun?.usage ?? null} refreshing={Boolean(isThinking)} /><div className="header-status" aria-live="polite"><span className={`status-dot ${isThinking ? 'is-active' : ''}`} />{isThinking ? '处理中' : error ? '需要处理' : '就绪'}</div></div></header>
       {error && <div className="inline-error" role="alert">{error}<button type="button" onClick={() => setError(null)} aria-label="关闭错误提示">×</button></div>}
       <div className={`conversation-body ${conversationIsEmpty ? 'is-empty' : ''}`}>
         {conversationIsEmpty ? <ConversationStart composer={<Composer variant="start" prefill={composerPrefill} busy={Boolean(isThinking)} attachments={attachments} reasoningSelection={reasoningSelection} onReasoningSelectionChange={(selection) => { setReasoningSelection(selection); void activeBridge?.reasoning.save(activeConversation, selection); }} permissionMode={permissionMode} onPermissionModeChange={selectPermissionMode} onAttach={pickAttachments} onRemoveAttachment={removeAttachment} onSubmit={submitMessage} onCancel={cancelRun} />} onSelectPrompt={(value) => setComposerPrefill((current) => ({ id: (current?.id ?? 0) + 1, value }))} /> : <>
-          <Transcript messages={activeMessages} isThinking={isThinking} activities={activeActivities} runs={conversationRuns[activeConversation] ?? []} latestUsage={latestUsage} recoveryNotice={interruptedRun ? { message: interruptedRun.error ?? '应用重启时运行被中断。', onRetry: interruptedMessage ? () => void retryLastTurn(false, interruptedRun.inputMessageId ?? undefined) : undefined, busy: retryingRun } : null} requestedMessageId={requestedMessageId} onRequestedMessageHandled={() => setRequestedMessageId(null)} onCreateTask={(message) => void createTaskFromMessage(message)} onBranch={(message) => void branchConversation(message)} onEditLastUser={(message) => { setRetryDraft({ messageId: message.id, content: message.content }); setComposerPrefill((current) => ({ id: (current?.id ?? 0) + 1, value: message.content })); }} onRegenerate={() => void retryLastTurn()} onOpenTask={(boardId, taskId) => { closeSettings(); setActiveTaskBoardId(boardId); setActiveView('tasks'); setRequestedOpenTaskId(taskId); }} />
+          <Transcript messages={activeMessages} isThinking={isThinking} activities={activeActivities} runs={conversationRuns[activeConversation] ?? []} latestUsage={latestUsage} recoveryNotice={interruptedRun ? { message: interruptedRun.error ?? '应用重启时运行被中断。', onRetry: interruptedMessage ? () => void retryLastTurn(false, interruptedRun.inputMessageId ?? undefined) : undefined, busy: retryingRun } : null} requestedMessageId={requestedMessageId} onRequestedMessageHandled={() => setRequestedMessageId(null)} requestedRunId={requestedRunId} onRequestedRunHandled={() => setRequestedRunId(null)} onCreateTask={(message) => void createTaskFromMessage(message)} onBranch={(message) => void branchConversation(message)} onEditLastUser={(message) => { setRetryDraft({ messageId: message.id, content: message.content }); setComposerPrefill((current) => ({ id: (current?.id ?? 0) + 1, value: message.content })); }} onRegenerate={() => void retryLastTurn()} onOpenTask={(boardId, taskId) => { closeSettings(); setActiveTaskBoardId(boardId); setActiveView('tasks'); setRequestedOpenTaskId(taskId); }} />
           <Composer editing={Boolean(retryDraft)} prefill={composerPrefill} onCancelEdit={() => { setRetryDraft(null); setComposerPrefill(null); }} busy={Boolean(isThinking) || retryingRun} attachments={attachments} reasoningSelection={reasoningSelection} onReasoningSelectionChange={(selection) => { setReasoningSelection(selection); void activeBridge?.reasoning.save(activeConversation, selection); }} permissionMode={permissionMode} onPermissionModeChange={selectPermissionMode} onAttach={pickAttachments} onRemoveAttachment={removeAttachment} onSubmit={submitMessage} onCancel={cancelRun} />
         </>}
       </div>
@@ -1218,7 +1389,7 @@ export function ProductionRenderer() {
     </section>
     {searchOpen && <GlobalSearch onQuery={(query) => activeBridge?.search.query(query) ?? Promise.resolve([])} onOpen={openSearchResult} onClose={() => setSearchOpen(false)} onNewConversation={() => { closeSettings(); void createConversation(); }} onOpenTasks={() => { closeSettings(); setActiveView('tasks'); }} />}
     {permissionConfirmationOpen && <div className="approval-backdrop permission-confirm-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget && !permissionSaving) setPermissionConfirmationOpen(false); }}><section className="approval-dialog permission-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="permission-confirm-title" aria-describedby="permission-confirm-description"><div className="approval-dialog-header"><span>完全访问</span><h2 id="permission-confirm-title">为当前会话启用完全访问？</h2><p id="permission-confirm-description">玉衡将不再询问文件、Shell 与外部操作；基础隔离、输入校验和安全审计仍保持启用。此设置会在退出应用后失效。</p></div><div className="approval-actions"><button type="button" className="secondary-action" onClick={() => setPermissionConfirmationOpen(false)} disabled={permissionSaving}>取消</button><button type="button" className="danger-action" autoFocus onClick={() => void savePermissionMode('full_session')} disabled={permissionSaving}>{permissionSaving ? '启用中…' : '为当前会话启用'}</button></div></section></div>}
-    {pendingApproval && <div className={`approval-backdrop ${approvalClosing ? 'is-closing' : ''}`} role="presentation"><section className="approval-dialog" role="alertdialog" aria-modal="true" aria-labelledby="approval-title" aria-describedby="approval-description"><div className="approval-dialog-header"><span>Agent Runtime</span><h2 id="approval-title">允许这次工具操作？</h2><p id="approval-description">玉衡准备执行 <code>{pendingApproval.toolName}</code></p></div>{pendingApproval.input && <pre>{pendingApproval.input}</pre>}<div className="approval-actions"><button type="button" className="secondary-action" onClick={() => void resolveApproval(false)} disabled={approvalClosing}>拒绝</button><button type="button" className="send-button" autoFocus onClick={() => void resolveApproval(true)} disabled={approvalClosing}>允许一次</button></div></section></div>}
+    {pendingApproval && <div className={`approval-backdrop ${approvalClosing ? 'is-closing' : ''}`} role="presentation"><section className="approval-dialog" role="alertdialog" aria-modal="true" aria-labelledby="approval-title" aria-describedby="approval-description" data-approval-id={pendingApproval.approvalId} tabIndex={-1}><div className="approval-dialog-header"><span>Agent Runtime</span><h2 id="approval-title">允许这次工具操作？</h2><p id="approval-description">玉衡准备执行 <code>{pendingApproval.toolName}</code></p></div>{pendingApproval.input && <pre>{pendingApproval.input}</pre>}<div className="approval-actions"><button type="button" className="secondary-action" onClick={() => void resolveApproval(false)} disabled={approvalClosing}>拒绝</button><button type="button" className="send-button" autoFocus onClick={() => void resolveApproval(true)} disabled={approvalClosing}>允许一次</button></div></section></div>}
     {tabMenu}
     {collapsedSidebarControl}
   </main>;

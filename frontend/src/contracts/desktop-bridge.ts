@@ -15,8 +15,21 @@ export const AGENT_PROFILES: readonly AgentProfile[] = [
 export const DEFAULT_AGENT_PROFILE_ID: AgentProfileId = 'assistant';
 export type BrowserUseConfig = { enabled: boolean };
 export type ComputerUseConfig = { enabled: boolean };
-export type DesktopPetConfig = { enabled: boolean; petId?: string; scale?: number };
-export type CodexPetManifest = { id: string; displayName: string; description?: string; spritesheetPath: string; spriteVersionNumber?: number; source: 'codex' | 'yuheng'; columns: number; rows: number; cellWidth: number; cellHeight: number };
+export type PetFeedbackMode = 'important' | 'all' | 'hidden';
+export type DesktopPetConfig = { enabled: boolean; petId?: string; scale?: number; locked?: boolean; opacity?: number; alwaysOnTop?: boolean; edgeSnap?: boolean; inertia?: boolean; boundaryBounce?: boolean; feedbackMode?: PetFeedbackMode; completionFeedback?: boolean; errorFeedback?: boolean; approvalFeedback?: boolean; soundEnabled?: boolean; mutedUntil?: number };
+export type PetState = 'idle' | 'thinking' | 'working' | 'attention' | 'error' | 'celebrate';
+export type PetOpenTarget =
+  | { kind: 'conversation'; conversationId: string; runId?: string; messageId?: string }
+  | { kind: 'run'; conversationId: string; runId: string }
+  | { kind: 'approval'; conversationId: string; runId: string; approvalId: string }
+  | { kind: 'task'; boardId: string; taskId: string };
+export type PetFeedback = { state: PetState; label: string; kind?: 'task_reminder'; detail?: string; conversationId?: string; runId?: string; toolName?: string; openTarget?: PetOpenTarget };
+export type PetAnimation = { row: number; durations: readonly number[] };
+export type CodexPetManifest = { id: string; displayName: string; description?: string; spritesheetPath: string; spriteVersionNumber?: number; source: 'codex' | 'yuheng'; columns: number; rows: number; cellWidth: number; cellHeight: number; animations?: Partial<Record<PetState, PetAnimation>> };
+export type CodexPetValidationIssue = { code: 'dimensions' | 'blank_frames' | 'frame_rate' | 'missing_states' | 'manifest'; severity: 'error' | 'warning'; message: string };
+export type CodexPetStateReport = { state: PetState; row: number; frameCount: number; frameDurationMs: number; source: 'manifest' | 'default'; fallback: boolean };
+export type CodexPetCompatibilityReport = { status: 'compatible' | 'warning' | 'invalid'; expected: { width: number; height: number }; actual: { width: number; height: number }; states: CodexPetStateReport[]; issues: CodexPetValidationIssue[] };
+export type CodexPetCatalogEntry = { id: string; displayName: string; description?: string; source: 'codex' | 'yuheng'; manifest?: CodexPetManifest; report: CodexPetCompatibilityReport };
 export type ConversationProject = { id: string; name: string; position: number };
 export type Conversation = { id: string; projectId: string; title: string; updatedAt: string; archived: boolean; pinned: boolean; providerId?: string; profileId: AgentProfileId };
 export type Message = { id: string; role: 'user' | 'assistant'; content: string; createdAt: string };
@@ -31,13 +44,22 @@ export type TaskStatus = string;
 export type TaskType = { id: string; boardId: string; name: string; position: number };
 export type TaskPriority = 'low' | 'medium' | 'high';
 export type Task = { id: string; boardId: string; title: string; description: string; status: TaskStatus; priority: TaskPriority; dueAt: string | null; remindAt: string | null; reminderFiredAt: string | null; sourceConversationId: string | null; createdAt: string; updatedAt: string };
-export type Note = { id: string; parentId: string | null; title: string; content: string; icon: string | null; cover: string | null; position: number; archived: boolean; createdAt: string; updatedAt: string };
+export type NoteProperties = { status: string | null; date: string | null; tags: string[] };
+export type Note = { id: string; parentId: string | null; title: string; content: string; icon: string | null; cover: string | null; properties: NoteProperties; position: number; archived: boolean; favorite: boolean; lastOpenedAt: string | null; createdAt: string; updatedAt: string };
+export type NoteVersion = { id: string; noteId: string; title: string; content: string; icon: string | null; cover: string | null; properties: NoteProperties; createdAt: string };
 export type NoteCover = { id: string; mimeType: string; size: number; url: string };
+export type CreateNoteInput = { title?: string; parentId?: string | null; content?: string; icon?: string | null };
 export type CreateTaskInput = Pick<Task, 'title'> & Partial<Pick<Task, 'description' | 'status' | 'priority' | 'dueAt' | 'remindAt' | 'sourceConversationId'>>;
 export type UpdateTaskInput = Partial<Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'dueAt' | 'remindAt'>>;
 export type SearchResultKind = 'conversation' | 'message' | 'task' | 'board' | 'note';
 export type SearchResult = { kind: SearchResultKind; id: string; parentId: string | null; title: string; snippet: string; context: string; updatedAt: string; archived: boolean };
-export type TaskEvent = { type: 'changed'; task: Task } | { type: 'types_changed'; boardId: string } | { type: 'boards_changed' } | { type: 'open'; boardId: string; taskId: string };
+export type TaskEvent =
+  | { type: 'changed'; task: Task }
+  | { type: 'types_changed'; boardId: string }
+  | { type: 'boards_changed' }
+  | { type: 'open'; boardId: string; taskId: string }
+  | { type: 'open_today'; boardId: string }
+  | { type: 'quick_record'; boardId: string };
 export type TaskAsset = { id: string; name: string; mimeType: string; size: number; url: string };
 export type RunEvent =
   | { type: 'accepted'; runId: string; conversationId: string }
@@ -108,15 +130,23 @@ export type DesktopBridge = {
   pet: {
     get: () => Promise<DesktopPetConfig>;
     list: () => Promise<CodexPetManifest[]>;
+    catalog: () => Promise<CodexPetCatalogEntry[]>;
     asset: (petId: string) => Promise<{ manifest: CodexPetManifest; dataUrl: string } | null>;
+    import: () => Promise<CodexPetManifest | null>;
+    delete: (petId: string) => Promise<void>;
+    reveal: (petId: string) => Promise<void>;
     openFolder: () => Promise<void>;
     save: (config: DesktopPetConfig) => Promise<DesktopPetConfig>;
-    focusMain: () => Promise<void>;
+    focusMain: (target?: PetOpenTarget) => Promise<void>;
+    takeOpenTarget: () => Promise<PetOpenTarget | null>;
     beginDrag: (screenX: number, screenY: number) => void;
     dragTo: (screenX: number, screenY: number) => void;
     endDrag: () => void;
-    onState: (listener: (state: 'idle' | 'working' | 'celebrate') => void) => () => void;
+    onState: (listener: (state: PetState) => void) => () => void;
+    onFeedback: (listener: (feedback: PetFeedback) => void) => () => void;
+    onOpenTarget: (listener: (target: PetOpenTarget) => void) => () => void;
     onConfig: (listener: (config: DesktopPetConfig) => void) => () => void;
+    onOpenSettings: (listener: (section?: string) => void) => () => void;
   };
   reasoning: {
     get: (conversationId: string) => Promise<ReasoningSelection>;
@@ -162,11 +192,17 @@ export type DesktopBridge = {
   notes: {
     list: (includeArchived?: boolean) => Promise<Note[]>;
     get: (id: string) => Promise<Note | null>;
-    create: (title?: string, parentId?: string | null) => Promise<Note>;
-    update: (id: string, patch: { title?: string; content?: string; archived?: boolean; icon?: string | null; cover?: string | null }) => Promise<Note>;
+    create: (input?: CreateNoteInput | string, parentId?: string | null) => Promise<Note>;
+    update: (id: string, patch: { title?: string; content?: string; archived?: boolean; icon?: string | null; cover?: string | null; favorite?: boolean; properties?: NoteProperties }) => Promise<Note>;
+    touch: (id: string) => Promise<Note>;
+    moveBlock: (sourceId: string, targetId: string, sourceContent: string, blockMarkdown: string) => Promise<{ source: Note; target: Note }>;
     move: (id: string, parentId: string | null, targetId?: string) => Promise<Note>;
     delete: (id: string) => Promise<void>;
     covers: { pick: () => Promise<NoteCover | null> };
+    versions: {
+      list: (noteId: string) => Promise<NoteVersion[]>;
+      restore: (noteId: string, versionId: string) => Promise<Note>;
+    };
   };
   runs: {
     list: (conversationId: string) => Promise<RunSummary[]>;

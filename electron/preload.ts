@@ -1,4 +1,30 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { PetOpenTarget } from './pet-state';
+import type { DesktopPetConfig } from './store';
+
+function parsePetOpenTarget(value: unknown): PetOpenTarget | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const input = value as Record<string, unknown>;
+  const safeId = (candidate: unknown): string | undefined => {
+    if (typeof candidate !== 'string') return undefined;
+    const trimmed = candidate.trim();
+    return trimmed && trimmed.length <= 256 ? trimmed : undefined;
+  };
+  const conversationId = safeId(input.conversationId);
+  if (input.kind === 'conversation' && conversationId) {
+    const runId = safeId(input.runId);
+    const messageId = safeId(input.messageId);
+    return { kind: 'conversation', conversationId, ...(runId ? { runId } : {}), ...(messageId ? { messageId } : {}) };
+  }
+  const runId = safeId(input.runId);
+  if (input.kind === 'run' && conversationId && runId) return { kind: 'run', conversationId, runId };
+  const approvalId = safeId(input.approvalId);
+  if (input.kind === 'approval' && conversationId && runId && approvalId) return { kind: 'approval', conversationId, runId, approvalId };
+  const boardId = safeId(input.boardId);
+  const taskId = safeId(input.taskId);
+  if (input.kind === 'task' && boardId && taskId) return { kind: 'task', boardId, taskId };
+  return undefined;
+}
 
 contextBridge.exposeInMainWorld('desktopBridge', {
   app: {
@@ -62,26 +88,65 @@ contextBridge.exposeInMainWorld('desktopBridge', {
   pet: {
     get: () => ipcRenderer.invoke('pet:get'),
     list: () => ipcRenderer.invoke('pet:list'),
+    catalog: () => ipcRenderer.invoke('pet:catalog'),
     asset: (petId: string) => ipcRenderer.invoke('pet:asset', petId),
+    import: () => ipcRenderer.invoke('pet:import'),
+    delete: (petId: string) => ipcRenderer.invoke('pet:delete', petId),
+    reveal: (petId: string) => ipcRenderer.invoke('pet:reveal', petId),
     openFolder: () => ipcRenderer.invoke('pet:open-folder'),
     save: (config: unknown) => ipcRenderer.invoke('pet:save', config),
-    focusMain: () => ipcRenderer.invoke('pet:focus-main'),
+    focusMain: (target?: PetOpenTarget) => ipcRenderer.invoke('pet:focus-main', target),
+    takeOpenTarget: async () => parsePetOpenTarget(await ipcRenderer.invoke('pet:open-target:take')) ?? null,
     beginDrag: (screenX: number, screenY: number) => ipcRenderer.send('pet:drag-start', screenX, screenY),
     dragTo: (screenX: number, screenY: number) => ipcRenderer.send('pet:drag-move', screenX, screenY),
     endDrag: () => ipcRenderer.send('pet:drag-end'),
-    onState: (listener: (state: 'idle' | 'working' | 'celebrate') => void) => {
+    onState: (listener: (state: 'idle' | 'thinking' | 'working' | 'attention' | 'error' | 'celebrate') => void) => {
       const handler = (_event: Electron.IpcRendererEvent, state: unknown) => {
-        if (state === 'idle' || state === 'working' || state === 'celebrate') listener(state);
+        if (state === 'idle' || state === 'thinking' || state === 'working' || state === 'attention' || state === 'error' || state === 'celebrate') listener(state);
       };
       ipcRenderer.on('pet:state', handler);
       return () => ipcRenderer.removeListener('pet:state', handler);
     },
-    onConfig: (listener: (config: { enabled: boolean; petId?: string; scale?: number }) => void) => {
+    onFeedback: (listener: (feedback: { state: 'idle' | 'thinking' | 'working' | 'attention' | 'error' | 'celebrate'; label: string; detail?: string; conversationId?: string; runId?: string; toolName?: string; openTarget?: PetOpenTarget }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, feedback: unknown) => {
+        if (!feedback || typeof feedback !== 'object') return;
+        const value = feedback as Record<string, unknown>;
+        const states = ['idle', 'thinking', 'working', 'attention', 'error', 'celebrate'] as const;
+        if (!states.includes(value.state as typeof states[number]) || typeof value.label !== 'string') return;
+        const openTarget = parsePetOpenTarget(value.openTarget);
+        listener({
+          state: value.state as typeof states[number],
+          label: value.label,
+          ...(value.kind === 'task_reminder' ? { kind: 'task_reminder' as const } : {}),
+          ...(typeof value.detail === 'string' ? { detail: value.detail } : {}),
+          ...(typeof value.conversationId === 'string' ? { conversationId: value.conversationId } : {}),
+          ...(typeof value.runId === 'string' ? { runId: value.runId } : {}),
+          ...(typeof value.toolName === 'string' ? { toolName: value.toolName } : {}),
+          ...(openTarget ? { openTarget } : {}),
+        });
+      };
+      ipcRenderer.on('pet:feedback', handler);
+      return () => ipcRenderer.removeListener('pet:feedback', handler);
+    },
+    onOpenTarget: (listener: (target: PetOpenTarget) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, target: unknown) => {
+        const parsed = parsePetOpenTarget(target);
+        if (parsed) listener(parsed);
+      };
+      ipcRenderer.on('pet:open-target', handler);
+      return () => ipcRenderer.removeListener('pet:open-target', handler);
+    },
+    onConfig: (listener: (config: DesktopPetConfig) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, config: unknown) => {
-        if (config && typeof config === 'object' && typeof (config as Record<string, unknown>).enabled === 'boolean') listener(config as { enabled: boolean; petId?: string; scale?: number });
+        if (config && typeof config === 'object' && typeof (config as Record<string, unknown>).enabled === 'boolean') listener(config as DesktopPetConfig);
       };
       ipcRenderer.on('pet:config', handler);
       return () => ipcRenderer.removeListener('pet:config', handler);
+    },
+    onOpenSettings: (listener: (section?: string) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, section: unknown) => listener(typeof section === 'string' ? section : undefined);
+      ipcRenderer.on('pet:open-settings', handler);
+      return () => ipcRenderer.removeListener('pet:open-settings', handler);
     },
   },
   reasoning: {
@@ -132,11 +197,17 @@ contextBridge.exposeInMainWorld('desktopBridge', {
   notes: {
     list: (includeArchived?: boolean) => ipcRenderer.invoke('notes:list', includeArchived),
     get: (id: string) => ipcRenderer.invoke('notes:get', id),
-    create: (title?: string, parentId?: string | null) => ipcRenderer.invoke('notes:create', title, parentId),
+    create: (input?: unknown, parentId?: string | null) => ipcRenderer.invoke('notes:create', input, parentId),
     update: (id: string, patch: unknown) => ipcRenderer.invoke('notes:update', id, patch),
+    touch: (id: string) => ipcRenderer.invoke('notes:touch', id),
+    moveBlock: (sourceId: string, targetId: string, sourceContent: string, blockMarkdown: string) => ipcRenderer.invoke('notes:move-block', sourceId, targetId, sourceContent, blockMarkdown),
     move: (id: string, parentId: string | null, targetId?: string) => ipcRenderer.invoke('notes:move', id, parentId, targetId),
     delete: (id: string) => ipcRenderer.invoke('notes:delete', id),
     covers: { pick: () => ipcRenderer.invoke('notes:covers:pick') },
+    versions: {
+      list: (noteId: string) => ipcRenderer.invoke('notes:versions:list', noteId),
+      restore: (noteId: string, versionId: string) => ipcRenderer.invoke('notes:versions:restore', noteId, versionId),
+    },
   },
   runs: {
     list: (conversationId: string) => ipcRenderer.invoke('runs:list', conversationId),

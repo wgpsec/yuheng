@@ -395,7 +395,7 @@ export function Sidebar({ conversations, projects, boards, providers, newProvide
         {conversationError && !collapsed && <p className="sidebar-board-error" role="alert">{conversationError}</p>}
       </> : mode === 'tasks' ? <>
         <div className="task-board-list-heading">
-          {!collapsed && <span>任务看板</span>}
+          {!collapsed && <span>看板</span>}
           <button type="button" onClick={() => { if (collapsed) onToggle(); setCreatingBoard(true); }} aria-label="新建任务看板" title="新建任务看板"><Plus size={14} /></button>
         </div>
         <nav className="task-board-list" aria-label="任务看板">

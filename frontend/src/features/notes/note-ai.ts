@@ -1,4 +1,29 @@
 export type NoteAiAction = 'summarize' | 'rewrite' | 'expand' | 'extract_tasks' | 'custom';
+export type NoteDiffLine = { kind: 'same' | 'added' | 'removed'; text: string };
+
+export function diffNoteContent(original: string, generated: string): NoteDiffLine[] {
+  const before = original.split('\n');
+  const after = generated.split('\n');
+  const table = Array.from({ length: before.length + 1 }, () => Array<number>(after.length + 1).fill(0));
+  for (let row = before.length - 1; row >= 0; row -= 1) {
+    for (let column = after.length - 1; column >= 0; column -= 1) {
+      table[row][column] = before[row] === after[column] ? table[row + 1][column + 1] + 1 : Math.max(table[row + 1][column], table[row][column + 1]);
+    }
+  }
+  const result: NoteDiffLine[] = [];
+  let row = 0;
+  let column = 0;
+  while (row < before.length || column < after.length) {
+    if (row < before.length && column < after.length && before[row] === after[column]) {
+      result.push({ kind: 'same', text: before[row] }); row += 1; column += 1;
+    } else if (row < before.length && (column === after.length || table[row + 1][column] >= table[row][column + 1])) {
+      result.push({ kind: 'removed', text: before[row] }); row += 1;
+    } else {
+      result.push({ kind: 'added', text: after[column] }); column += 1;
+    }
+  }
+  return result;
+}
 
 const actionInstructions: Record<Exclude<NoteAiAction, 'custom'>, string> = {
   summarize: '请总结这篇笔记，保留关键事实、决定和待办。',

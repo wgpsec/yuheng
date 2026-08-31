@@ -172,6 +172,60 @@ describe('AppStore desktop pet settings', () => {
       assert.deepEqual(store.getDesktopPetConfig(), { enabled: true, petId: 'guga', scale: 1.4 });
     } finally { store.close(); fs.rmSync(dataDir, { recursive: true, force: true }); }
   });
+
+  it('persists pet controls and clamps opacity to a visible range', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-pet-controls-'));
+    const store = new AppStore(dataDir);
+    try {
+      assert.deepEqual(store.saveDesktopPetConfig({ enabled: true, locked: true, opacity: 0.05, alwaysOnTop: false, edgeSnap: true, inertia: true, boundaryBounce: true }), {
+        enabled: true,
+        locked: true,
+        opacity: 0.2,
+        alwaysOnTop: false,
+        edgeSnap: true,
+        inertia: true,
+        boundaryBounce: true,
+      });
+      store.close();
+      const reopened = new AppStore(dataDir);
+      assert.deepEqual(reopened.getDesktopPetConfig(), {
+        enabled: true,
+        locked: true,
+        opacity: 0.2,
+        alwaysOnTop: false,
+        edgeSnap: true,
+        inertia: true,
+        boundaryBounce: true,
+      });
+      reopened.close();
+    } finally {
+      try { store.close(); } catch { /* already closed */ }
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('persists desktop pet feedback preferences across store instances', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-pet-feedback-'));
+    let store = new AppStore(dataDir);
+    try {
+      const expected = {
+        enabled: true,
+        feedbackMode: 'important' as const,
+        completionFeedback: false,
+        errorFeedback: true,
+        approvalFeedback: false,
+        soundEnabled: true,
+        mutedUntil: 2_000_000_000_000,
+      };
+      assert.deepEqual(store.saveDesktopPetConfig(expected), expected);
+      store.close();
+      store = new AppStore(dataDir);
+      assert.deepEqual(store.getDesktopPetConfig(), expected);
+    } finally {
+      store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('AppStore provider settings', () => {

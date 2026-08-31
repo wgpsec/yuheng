@@ -14,7 +14,11 @@ dist/
 dist-electron/
 dist-renderer/
 build/
+release/
 target/
+assets/yuheng-1024.png
+assets/yuheng.iconset/
+assets/icon-mockups/
 
 # Local application data
 data/

@@ -25,4 +25,15 @@ describe('task board filtering', () => {
     assert.deepEqual(filterBoardTasks(tasks, '', 'due', now).map((item) => item.id), ['focus']);
     assert.deepEqual(filterBoardTasks(tasks, '', 'reminder', now).map((item) => item.id), ['remind']);
   });
+
+  it('filters today tasks across overdue, due, and unfired reminder dates', () => {
+    const now = new Date('2026-08-27T12:00:00.000Z');
+    const todayTasks = [
+      task({ id: 'overdue', dueAt: '2026-08-26T09:00:00.000Z' }),
+      task({ id: 'due-today', dueAt: '2026-08-27T09:00:00.000Z' }),
+      task({ id: 'reminder-today', remindAt: '2026-08-27T09:00:00.000Z' }),
+      task({ id: 'reminder-fired', remindAt: '2026-08-27T09:00:00.000Z', reminderFiredAt: '2026-08-27T10:00:00.000Z' }),
+    ];
+    assert.deepEqual(filterBoardTasks(todayTasks, '', 'today', now).map((item) => item.id), ['overdue', 'due-today', 'reminder-today']);
+  });
 });

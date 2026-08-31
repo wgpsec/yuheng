@@ -3,6 +3,13 @@ import type { Note } from '../../contracts/desktop-bridge';
 export type NoteDropPlacement = 'before' | 'inside' | 'after';
 export type NoteDropTarget = { parentId: string | null; targetId?: string };
 
+export function noteDropPlacementFromPointer(pointerY: number, rowTop: number, rowHeight: number): NoteDropPlacement {
+  const ratio = (pointerY - rowTop) / Math.max(1, rowHeight);
+  if (ratio < 0.25) return 'before';
+  if (ratio > 0.75) return 'after';
+  return 'inside';
+}
+
 export function resolveNoteDrop(notes: Note[], draggedId: string, targetId: string, placement: NoteDropPlacement): NoteDropTarget | null {
   if (draggedId === targetId) return null;
   const dragged = notes.find((note) => note.id === draggedId);

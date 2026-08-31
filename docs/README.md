@@ -15,3 +15,7 @@
 Electron 无边框窗口中的拖拽区域、上下文菜单命中和溢出裁剪约束见 [`electron-ui-interaction.md`](electron-ui-interaction.md)。
 
 笔记模式的产品、数据模型、AI 协作边界和分 slice 实施计划见 [`notes-mode-spec.md`](notes-mode-spec.md)。
+
+桌面 Pet 的状态机、配置边界、Codex 皮肤扩展和后续增强切片见 [`desktop-pet-enhancement-spec.md`](desktop-pet-enhancement-spec.md)。
+
+macOS arm64 应用的打包、图标、签名、公证和分发检查清单见 [`macos-packaging.md`](macos-packaging.md)。

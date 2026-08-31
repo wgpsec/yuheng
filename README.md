@@ -38,6 +38,34 @@ npm install
 npm run dev
 ```
 
+## 打包 macOS 应用
+
+玉衡支持打包为 Apple Silicon（arm64）的 macOS 应用，发给同事时不需要安装 Node.js。先在 macOS arm64 机器上安装依赖，然后运行：
+
+```bash
+npm install
+npm run package:mac
+```
+
+产物会写入 `release/`：
+
+- `玉衡-<版本>-arm64.dmg`：推荐分发，双击后将玉衡拖入“应用程序”目录
+- `玉衡-<版本>-arm64.zip`：适合通过网盘或内部文件系统传输
+
+完整的资源边界、图标生成、签名、公证和发布检查清单见 [`docs/macos-packaging.md`](docs/macos-packaging.md)。
+
+需要先检查未压缩的应用时，运行 `npm run package:mac:dir`，然后打开 `release/mac-arm64/玉衡.app`。打包会把前端资源、Electron 主进程和 `electron/prompts` 一起放入应用，不会使用开发环境的 `start-mac.command`。
+
+除 Browser Use 外，应用运行不需要 Node.js。Browser Use 目前仍通过 `uvx` 启动 Python sidecar；同事要使用该可选能力，需要另外安装 `uv` 并保证命令在 `PATH` 中。Computer Use 的 native helper 已随应用打包，但 macOS 14+ 仍需要授予 Accessibility 和 Screen Recording 权限。将 Browser Use 做成完全自包含的正式发行包，还需要单独集成固定的 Python 运行时和依赖。
+
+当前构建没有配置 Apple Developer ID 签名和公证。首次打开时若 macOS 提示“无法验证开发者”，可在 Finder 中右键玉衡选择“打开”；仅在确认文件来源可信时，也可以执行：
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/玉衡.app"
+```
+
+`package:mac` 为本地分发显式关闭了自动签名，避免误用开发机钥匙串中的证书。面向外部用户正式发布时，应使用 Developer ID Application 证书签名并完成 notarization，例如先设置 `CSC_NAME`，再执行 `npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --arm64 --publish never`，避免上述提示。
+
 会话运行需要先在应用设置中配置 OpenAI-compatible 或 Anthropic Provider 与 API Key。设置支持保存多个 Provider；新会话可在左侧选择 Provider，已有会话可在标题栏切换，后续运行和重试都会使用该会话绑定的配置。Pi 默认启用 `read`、`write`、`edit`、`bash` 工具，工作目录位于应用数据目录。
 
 玉衡的产品级系统提示词维护在 [`electron/prompts/yuheng-system.md`](electron/prompts/yuheng-system.md)。运行时会把它追加到 Pi 根据当前工具动态生成的基础系统提示词中，使玉衡身份、个人秘书行为和安全边界保持版本可追踪，同时保留 Browser Use、Computer Use 与任务工具各自的动态说明。
