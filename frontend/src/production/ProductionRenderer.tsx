@@ -139,7 +139,7 @@ function PetManagementSettings({ config, pets, assets, loading, onRefresh, onSel
         const selected = pet.id ? config.petId === pet.id : builtinSelected;
         const canUse = Boolean(pet.builtin || (isPetRuntimeUsable(pet) && asset));
         const structuralIssue = pet.report.issues.find((issue) => issue.severity === 'error' && (issue.code === 'dimensions' || issue.code === 'blank_frames' || issue.code === 'manifest'));
-        const fallbackOnly = !structuralIssue && pet.report.issues.length > 0 && pet.report.issues.every((issue) => issue.code === 'missing_states' && issue.severity === 'warning');
+        const fallbackOnly = !structuralIssue && pet.report.issues.length > 0 && pet.report.issues.every((issue) => issue.severity === 'warning' && (issue.code === 'missing_states' || issue.code === 'manifest'));
         const statusLabel = pet.builtin ? '内置' : structuralIssue ? '不可用' : fallbackOnly ? '兼容' : pet.report.status === 'warning' ? '需注意' : pet.report.status === 'invalid' ? '可回退' : '兼容';
         const statusIssue = structuralIssue ?? pet.report.issues[0];
         return <div className={`pet-catalog-row ${selected ? 'is-selected' : ''} ${!canUse ? 'is-invalid' : ''}`} key={pet.id || 'builtin'}>
