@@ -13,7 +13,8 @@
 .settings-navigation nav button svg, .settings-navigation-back svg { flex: 0 0 auto; color: var(--text-tertiary); }
 .settings-navigation nav button.is-selected svg { color: var(--text-primary); }
 .settings-navigation-back { margin-top: auto; }
-.settings-page { width: min(820px, 100%); min-height: 0; margin: 0 auto; padding: 52px 48px 72px; overflow: auto; scrollbar-color: var(--stroke-default) transparent; }
+.settings-page { width: 100%; min-height: 0; padding: 52px 48px 72px; overflow: auto; scrollbar-color: var(--stroke-default) transparent; }
+.settings-page-header, .settings-page > .settings-section, .settings-page > .settings-section-first { width: min(724px, 100%); margin-right: auto; margin-left: auto; }
 .settings-page-header { position: relative; display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding-bottom: 27px; border-bottom: 1px solid var(--stroke-subtle); -webkit-app-region: drag; }
 .settings-page-header h2 { margin: 0 0 7px; color: var(--text-primary); font-size: 24px; font-weight: 620; }
 .settings-page-header p, .settings-section-heading p { margin: 0; color: var(--text-tertiary); font-size: 13px; line-height: 1.6; }

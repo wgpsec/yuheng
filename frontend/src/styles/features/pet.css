@@ -94,13 +94,13 @@ html:has(.desktop-pet), body:has(.desktop-pet), body:has(.desktop-pet) #root { m
 .about-product > small { color: var(--text-tertiary); font-size: 13px; white-space: nowrap; }
 .release-list { max-width: 620px; border-top: 1px solid var(--stroke-subtle); }
 .release-list details { border-bottom: 1px solid var(--stroke-subtle); }
-.release-list summary { display: grid; grid-template-columns: 106px minmax(0, 1fr) 18px; align-items: center; gap: 12px; min-height: 50px; padding: 10px 0; color: var(--text-secondary); cursor: pointer; list-style: none; }
+.release-list summary { display: grid; grid-template-columns: 132px minmax(0, 1fr) 18px; align-items: center; gap: 12px; min-height: 50px; padding: 10px 0; color: var(--text-secondary); cursor: pointer; list-style: none; }
 .release-list summary::-webkit-details-marker { display: none; }
 .release-list summary:focus-visible { outline: 2px solid #8caebc66; outline-offset: 3px; }
 .release-list summary > strong { overflow-wrap: anywhere; color: var(--text-primary); font-size: 13px; font-weight: 600; }
 .release-list summary > svg { color: var(--text-muted); transition: transform 120ms ease; }
 .release-list details[open] summary > svg { transform: rotate(180deg); }
-.release-version { display: inline-flex; align-items: center; gap: 6px; color: var(--text-tertiary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.release-version { display: inline-flex; align-items: center; gap: 8px; min-width: 0; color: var(--text-tertiary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; white-space: nowrap; }
 .release-version small { padding: 3px 5px; border: 1px solid #405b51; border-radius: 4px; color: #a9ceb9; background: #1b2a24; font-family: inherit; font-size: 13px; white-space: nowrap; }
-.release-list ul { display: grid; gap: 7px; margin: -1px 0 16px 118px; padding: 0 22px 0 14px; color: var(--text-tertiary); font-size: 13px; line-height: 1.6; }
+.release-list ul { display: grid; gap: 7px; margin: -1px 0 16px 144px; padding: 0 22px 0 14px; color: var(--text-tertiary); font-size: 13px; line-height: 1.6; }
 .release-list li { padding-left: 2px; }
