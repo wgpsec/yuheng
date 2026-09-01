@@ -1,5 +1,4 @@
 import type { WebContents } from 'electron';
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getAgentProfile, loadAgentProfilePrompt, formatRuntimeContext } from '../agent-profiles';
 import { BrowserArtifactStore, browserImagesFromToolResult, type BrowserArtifact } from '../browser-artifacts';
@@ -11,6 +10,7 @@ import { ToolSecurityBroker, ToolSecurityPolicy, redactToolApprovalInput } from 
 import type { AppStore, ProviderConfig, RunUsage, Task } from '../store';
 import { loadYuhengSystemPrompt } from '../system-prompt';
 import { ApprovalCoordinator } from './approval-coordinator';
+import { ProjectRunWorkspace, type PreparedRunWorkspace } from './project-run-workspace';
 import { RunCoordinator } from './run-coordinator';
 
 export type StoredAttachment = {
@@ -40,6 +40,7 @@ export type RunExecutorOptions = {
   runCoordinator: RunCoordinator;
   approvalCoordinator: ApprovalCoordinator;
   userDataDirectory: string;
+  projectRunWorkspace?: ProjectRunWorkspace;
   applicationPath: string;
   emit(sender: WebContents, event: RunEvent): void;
   taskChanged(task: Task): void;
@@ -74,11 +75,14 @@ export class RunExecutor {
     const profile = getAgentProfile(profileId);
     let releaseComputerUse: (() => void) | undefined;
     let runtime: ReturnType<typeof createPiRuntime> | undefined;
+    let preparedWorkspace: PreparedRunWorkspace | undefined;
     try {
-      const workspaceDir = path.join(this.options.userDataDirectory, 'workspace');
-      await fs.mkdir(workspaceDir, { recursive: true });
+      const projectId = store.getConversation(conversationId).projectId;
+      const workspaceManager = this.options.projectRunWorkspace
+        ?? new ProjectRunWorkspace(path.join(this.options.userDataDirectory, 'workspace'));
+      preparedWorkspace = await workspaceManager.prepare(projectId, runId, runAttachments);
       const toolSecurity = new ToolSecurityBroker({
-        policy: new ToolSecurityPolicy(workspaceDir, run.permissionMode),
+        policy: new ToolSecurityPolicy(preparedWorkspace.projectDirectory, run.permissionMode),
         audit: this.options.securityAudit,
         requestApproval: ({ toolCallId, toolName, input, signal }) => this.requestApproval(
           sender,
@@ -127,15 +131,11 @@ export class RunExecutor {
       const images = runAttachments
         .filter((attachment) => attachment.mimeType.startsWith('image/'))
         .map((attachment) => ({ type: 'image' as const, data: Buffer.from(attachment.data).toString('base64'), mimeType: attachment.mimeType }));
-      const textAttachments = runAttachments
-        .filter((attachment) => !attachment.mimeType.startsWith('image/'))
-        .map((attachment) => `\n[附件：${attachment.name}]\n${Buffer.from(attachment.data).toString('utf8')}\n[/附件]`)
-        .join('');
       await runtime.start({
-        prompt: `${prompt || '请查看附件并回复。'}${textAttachments}`,
+        prompt: `${prompt || '请查看附件并回复。'}${preparedWorkspace.promptContext}`,
         images,
         sessionId: conversationId,
-        cwd: workspaceDir,
+        cwd: preparedWorkspace.projectDirectory,
         history: messages.slice(0, inputIndex).map(({ role, content, createdAt }) => ({ role, content, createdAt })),
         replayUser: run.replayUser,
         signal: run.controller.signal,
@@ -200,6 +200,7 @@ export class RunExecutor {
       } finally {
         releaseComputerUse?.();
         for (const attachment of runAttachments) this.options.removeAttachment(attachment.id);
+        await preparedWorkspace?.cleanup().catch(() => undefined);
         this.options.approvalCoordinator.rejectRun(runId);
         runCoordinator.finish(runId);
       }

@@ -33,6 +33,7 @@ import { registerRunIpc } from '../ipc/register-run-ipc';
 import { registerTaskIpc } from '../ipc/register-task-ipc';
 import { SecuredIpcRegistrar } from '../ipc/secured-ipc-registrar';
 import { ApprovalCoordinator } from '../runs/approval-coordinator';
+import { ProjectRunWorkspace } from '../runs/project-run-workspace';
 import { RunCoordinator } from '../runs/run-coordinator';
 import { RunExecutor, type RunEvent, type StoredAttachment } from '../runs/run-executor';
 import { registerManagedProtocols } from '../protocols/register-managed-protocols';
@@ -478,6 +479,7 @@ export async function initializeNormalApplication(owner: DatabaseOwner, shutdown
     runCoordinator,
     approvalCoordinator,
     userDataDirectory: app.getPath('userData'),
+    projectRunWorkspace: new ProjectRunWorkspace(path.join(app.getPath('userData'), 'workspace')),
     applicationPath: app.getAppPath(),
     emit,
     taskChanged: handleTaskChanged,

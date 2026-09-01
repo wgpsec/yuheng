@@ -31,6 +31,18 @@ describe('tool security policy', () => {
     assert.equal((await policy.evaluate('read', { path: 'linked/outside.txt' })).action, 'approve');
   });
 
+  it('treats another project workspace as a path escape', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'yuheng-project-security-'));
+    const projectA = path.join(root, 'projects', 'project-a');
+    const projectB = path.join(root, 'projects', 'project-b');
+    await mkdir(projectA, { recursive: true });
+    await mkdir(projectB, { recursive: true });
+    await writeFile(path.join(projectB, 'private.csv'), 'secret');
+    const policy = new ToolSecurityPolicy(projectA);
+
+    assert.equal((await policy.evaluate('read', { path: path.join(projectB, 'private.csv') })).action, 'approve');
+  });
+
   it('requires approval for mutations, shell commands, and unknown tools', async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), 'yuheng-security-'));
     const policy = new ToolSecurityPolicy(workspace);

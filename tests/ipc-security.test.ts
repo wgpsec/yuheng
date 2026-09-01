@@ -56,6 +56,6 @@ describe('IPC sender authorization', () => {
     assert.doesNotMatch(runIpc, /mainAndPet\('permissions:/);
     assert.match(preload, /permissions:\s*\{[\s\S]*?'permissions:get'[\s\S]*?'permissions:save'/);
     assert.match(main, /runCoordinator\.start\([^\n]+permissionMode/);
-    assert.match(executor, /new ToolSecurityPolicy\(workspaceDir, run\.permissionMode\)/);
+    assert.match(executor, /new ToolSecurityPolicy\(preparedWorkspace\.projectDirectory, run\.permissionMode\)/);
   });
 });
