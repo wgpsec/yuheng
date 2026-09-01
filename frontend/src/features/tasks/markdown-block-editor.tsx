@@ -11,6 +11,7 @@ import { AtSign, Bold, Braces, CalendarDays, Check, CheckSquare, Copy, GripVerti
 import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { TaskAsset } from '../../contracts/desktop-bridge';
 import { Callout, calloutBlock, detailsBlock, EnhancedCodeBlock, ResizableImage } from './editor-blocks';
+import { YuhengLink } from './internal-links';
 import { blockRangeAt, contiguousBlockRange, copyBlockRangeToClipboard, deleteBlockRange, duplicateBlockRange, moveBlockRange, type EditorBlockRange } from './block-batch';
 import { autoScrollDelta, blockAtPointerY, blockAtSelectionStartY, blockSelectionRange, canStartBlockSelection, frameAdjustedScrollDelta, type BlockPointerRange } from './block-selection';
 import { BlockSelectionDecorations, updateBlockSelectionDecorations } from './block-selection-decoration';
@@ -132,7 +133,8 @@ export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAsse
     extensions: [
       ...extensions,
       ...(blockRangeSelection ? [BlockSelectionDecorations] : []),
-      StarterKit.configure({ codeBlock: false, link: { openOnClick: false, protocols: ['yuheng-task-asset', 'yuheng-note', 'yuheng-task'] } }),
+      StarterKit.configure({ codeBlock: false, link: false }),
+      YuhengLink,
       EnhancedCodeBlock,
       Details.configure({ persist: true, renderToggleButton: ({ element, isOpen }) => { element.textContent = isOpen ? '▾' : '▸'; } }),
       DetailsSummary,
