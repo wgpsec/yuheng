@@ -1,6 +1,5 @@
 import { Markdown } from '@tiptap/markdown';
 import type { AnyExtension, Editor } from '@tiptap/core';
-import ImageExtension from '@tiptap/extension-image';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import TaskItem from '@tiptap/extension-task-item';
@@ -11,7 +10,7 @@ import { TableKit } from '@tiptap/extension-table';
 import { AtSign, Bold, Braces, CalendarDays, Check, CheckSquare, Copy, GripVertical, Heading1, Heading2, Info, Italic, Link, List, ListOrdered, ListTodo, Minus, MoveRight, Paperclip, Plus, Quote, Redo2, Strikethrough, Table2, Text, Trash2, Undo2 } from 'lucide-react';
 import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { TaskAsset } from '../../contracts/desktop-bridge';
-import { Callout, calloutBlock, detailsBlock, EnhancedCodeBlock } from './editor-blocks';
+import { Callout, calloutBlock, detailsBlock, EnhancedCodeBlock, ResizableImage } from './editor-blocks';
 import { blockRangeAt, contiguousBlockRange, copyBlockRangeToClipboard, deleteBlockRange, duplicateBlockRange, moveBlockRange, type EditorBlockRange } from './block-batch';
 import { autoScrollDelta, blockAtPointerY, blockAtSelectionStartY, blockSelectionRange, canStartBlockSelection, frameAdjustedScrollDelta, type BlockPointerRange } from './block-selection';
 import { BlockSelectionDecorations, updateBlockSelectionDecorations } from './block-selection-decoration';
@@ -142,7 +141,7 @@ export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAsse
       Callout,
       TaskList,
       TaskItem.configure({ nested: true }),
-      ImageExtension.configure({ inline: false, allowBase64: false }),
+      ResizableImage,
       Placeholder.configure({ placeholder: '输入内容，或键入 / 插入内容块...' }),
       Markdown,
     ],

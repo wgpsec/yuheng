@@ -1,8 +1,54 @@
 import type { JSONContent } from '@tiptap/core';
 import { createBlockMarkdownSpec, mergeAttributes, Node } from '@tiptap/core';
 import CodeBlock from '@tiptap/extension-code-block';
+import Image from '@tiptap/extension-image';
 
 export type CalloutKind = 'info' | 'tip' | 'warning';
+
+const resizableImagePattern = /^!\[([^\]]*)\]\((\S+?)(?:\s+["']([^"']*)["'])?\)\{width=(\d+)(?:\s+height=(\d+))?\}/u;
+
+export const ResizableImage = Image.extend({
+  parseMarkdown: (token, helpers) => helpers.createNode('image', {
+    src: token.href,
+    alt: token.text || null,
+    title: token.title || null,
+    width: token.width ? Number(token.width) : null,
+    height: token.height ? Number(token.height) : null,
+  }),
+  renderMarkdown: (node) => {
+    const src = node.attrs?.src ?? '';
+    const alt = node.attrs?.alt ?? '';
+    const title = node.attrs?.title ?? '';
+    const image = title ? `![${alt}](${src} "${title}")` : `![${alt}](${src})`;
+    if (!node.attrs?.width) return image;
+    const width = Math.round(Number(node.attrs.width));
+    const height = node.attrs?.height ? ` height=${Math.round(Number(node.attrs.height))}` : '';
+    return `${image}{width=${width}${height}}`;
+  },
+  markdownTokenizer: {
+    name: 'image',
+    level: 'inline',
+    start: '![',
+    tokenize(src) {
+      const match = resizableImagePattern.exec(src);
+      if (!match) return undefined;
+      return {
+        type: 'image', raw: match[0], text: match[1], href: match[2], title: match[3] || null,
+        width: Number(match[4]), height: match[5] ? Number(match[5]) : null,
+      };
+    },
+  },
+}).configure({
+  inline: false,
+  allowBase64: false,
+  resize: {
+    enabled: true,
+    directions: ['left', 'right'],
+    minWidth: 120,
+    minHeight: 60,
+    alwaysPreserveAspectRatio: true,
+  },
+});
 
 export const Callout = Node.create({
   name: 'callout',

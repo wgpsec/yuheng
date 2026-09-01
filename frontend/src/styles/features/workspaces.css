@@ -500,6 +500,16 @@ button.task-column-empty:hover { border-color: var(--stroke-default); color: var
 .block-editor-content .ProseMirror hr { margin: 15px 0; border: 0; border-top: 1px solid var(--stroke-default); }
 .block-editor-content .ProseMirror img { display: block; width: auto; max-width: 100%; max-height: 340px; margin: 11px 0; border: 1px solid var(--stroke-subtle); border-radius: 7px; object-fit: contain; background: var(--surface-raised); }
 .block-editor-content .ProseMirror img.ProseMirror-selectednode { border-color: #71868e; box-shadow: 0 0 0 2px #8caebc33; }
+.block-editor-content .ProseMirror [data-resize-container][data-node="image"] { width: fit-content; max-width: 100%; margin: 11px 0; line-height: 0; }
+.block-editor-content .ProseMirror [data-resize-container][data-node="image"] [data-resize-wrapper] { max-width: 100%; }
+.block-editor-content .ProseMirror [data-resize-container][data-node="image"] img { max-width: 100%; max-height: none; margin: 0; transition: border-color 140ms ease, box-shadow 140ms ease; }
+.block-editor-content .ProseMirror [data-resize-container][data-node="image"].ProseMirror-selectednode img,
+.block-editor-content .ProseMirror [data-resize-container][data-node="image"][data-resize-state="true"] img { border-color: #71868e; box-shadow: 0 0 0 2px #8caebc33; }
+.block-editor-content .ProseMirror [data-node="image"] [data-resize-handle] { z-index: 2; width: 14px; margin-right: -7px; margin-left: -7px; cursor: ew-resize; opacity: 0; touch-action: none; transition: opacity 140ms ease; -webkit-app-region: no-drag; }
+.block-editor-content .ProseMirror [data-node="image"] [data-resize-handle]::after { position: absolute; top: 50%; left: 5px; width: 4px; height: 42px; max-height: calc(100% - 16px); border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--stroke-default)); border-radius: 3px; background: var(--surface-raised); box-shadow: 0 1px 4px #0000002b; content: ''; transform: translateY(-50%); }
+.block-editor-content .ProseMirror [data-node="image"]:hover [data-resize-handle],
+.block-editor-content .ProseMirror [data-node="image"].ProseMirror-selectednode [data-resize-handle],
+.block-editor-content .ProseMirror [data-node="image"][data-resize-state="true"] [data-resize-handle] { opacity: 1; }
 .block-editor-content .ProseMirror a[href^="yuheng-task-asset://"] { display: flex; align-items: center; gap: 9px; min-height: 42px; padding: 8px 10px; border: 1px solid var(--stroke-subtle); border-radius: 7px; color: var(--text-primary); background: var(--surface-raised); text-decoration: none; }
 .block-editor-content .ProseMirror a[href^="yuheng-task-asset://"]::before { display: grid; flex: 0 0 auto; place-items: center; min-width: 34px; min-height: 25px; border-right: 1px solid var(--stroke-subtle); color: var(--text-muted); content: '附件'; font-size: 13px; }
 .block-editor-content .ProseMirror a[href^="yuheng-task-asset://"]:hover { border-color: var(--stroke-default); background: var(--surface-hover); }

@@ -5,7 +5,7 @@ import { Details, DetailsContent, DetailsSummary } from '@tiptap/extension-detai
 import { TableKit } from '@tiptap/extension-table';
 import { Markdown } from '@tiptap/markdown';
 import StarterKit from '@tiptap/starter-kit';
-import { Callout, calloutBlock, detailsBlock, EnhancedCodeBlock } from '../frontend/src/features/tasks/editor-blocks';
+import { Callout, calloutBlock, detailsBlock, EnhancedCodeBlock, ResizableImage } from '../frontend/src/features/tasks/editor-blocks';
 
 test('builds schema-valid callout and details block payloads', () => {
   assert.deepEqual(calloutBlock('warning').attrs, { kind: 'warning' });
@@ -29,5 +29,28 @@ test('round-trips enhanced note blocks through markdown', () => {
     assert.match(editor.getMarkdown(), /:::callout \{kind="warning"\}/);
     assert.match(editor.getMarkdown(), /\| 玉衡\s+\| 完成/);
     assert.match(editor.getMarkdown(), /```typescript/);
+  } finally { editor.destroy(); }
+});
+
+test('round-trips resizable image dimensions without changing legacy images', () => {
+  assert.deepEqual(ResizableImage.options.resize, {
+    enabled: true, directions: ['left', 'right'], minWidth: 120, minHeight: 60, alwaysPreserveAspectRatio: true,
+  });
+  const legacy = '![image.png](yuheng-task-asset://local/legacy.png "image.png")';
+  const resized = '![diagram.png](yuheng-task-asset://local/resized.png "diagram.png"){width=420 height=210}';
+  const editor = new Editor({
+    extensions: [StarterKit, ResizableImage, Markdown],
+    content: `${legacy}\n\n${resized}`,
+    contentType: 'markdown',
+  });
+  try {
+    const images = editor.getJSON().content?.filter((node) => node.type === 'image') ?? [];
+    assert.deepEqual({ ...images[0]?.attrs }, {
+      src: 'yuheng-task-asset://local/legacy.png', alt: 'image.png', title: 'image.png', width: null, height: null,
+    });
+    assert.deepEqual({ ...images[1]?.attrs }, {
+      src: 'yuheng-task-asset://local/resized.png', alt: 'diagram.png', title: 'diagram.png', width: 420, height: 210,
+    });
+    assert.equal(editor.getMarkdown(), `${legacy}\n\n${resized}`);
   } finally { editor.destroy(); }
 });
