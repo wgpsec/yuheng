@@ -75,6 +75,8 @@ contextBridge.exposeInMainWorld('desktopBridge', {
   provider: {
     get: () => ipcRenderer.invoke('provider:get'),
     list: () => ipcRenderer.invoke('provider:list'),
+    getDefault: () => ipcRenderer.invoke('provider:default-get'),
+    setDefault: (providerId: string) => ipcRenderer.invoke('provider:default-save', providerId),
     save: (config: unknown) => ipcRenderer.invoke('provider:save', config),
     delete: (providerId: string) => ipcRenderer.invoke('provider:delete', providerId),
     test: (config: unknown) => ipcRenderer.invoke('provider:test', config),

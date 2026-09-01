@@ -8,6 +8,7 @@ export function useSettingsController(bridge: DesktopBridge | undefined) {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [provider, setProvider] = useState<ProviderConfig | null>(null);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
+  const [defaultProviderId, setDefaultProviderId] = useState<string | null>(null);
   const [browserUse, setBrowserUse] = useState<BrowserUseConfig>({ enabled: false });
   const [computerUse, setComputerUse] = useState<ComputerUseConfig>({ enabled: false });
   const [theme, setTheme] = useState<ThemeName>(() => {
@@ -42,9 +43,9 @@ export function useSettingsController(bridge: DesktopBridge | undefined) {
   useEffect(() => {
     if (!bridge) return;
     let disposed = false;
-    void Promise.all([bridge.app.getInfo(), bridge.provider.get(), bridge.provider.list(), bridge.browserUse.get(), bridge.computerUse.get()]).then(([info, configuredProvider, configuredProviders, configuredBrowserUse, configuredComputerUse]) => {
+    void Promise.all([bridge.app.getInfo(), bridge.provider.get(), bridge.provider.list(), bridge.provider.getDefault(), bridge.browserUse.get(), bridge.computerUse.get()]).then(([info, configuredProvider, configuredProviders, configuredDefaultProviderId, configuredBrowserUse, configuredComputerUse]) => {
       if (disposed) return;
-      setAppInfo(info); setProvider(configuredProvider); setProviders(configuredProviders); setBrowserUse(configuredBrowserUse); setComputerUse(configuredComputerUse);
+      setAppInfo(info); setProvider(configuredProvider); setProviders(configuredProviders); setDefaultProviderId(configuredDefaultProviderId); setBrowserUse(configuredBrowserUse); setComputerUse(configuredComputerUse);
     }).catch((reason) => { if (!disposed) setError(reason instanceof Error ? reason.message : '加载设置失败。'); });
     return () => { disposed = true; };
   }, [bridge]);
@@ -58,5 +59,5 @@ export function useSettingsController(bridge: DesktopBridge | undefined) {
   }, [theme]);
   useEffect(() => () => { if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current); }, []);
 
-  return { appInfo, provider, setProvider, providers, setProviders, browserUse, setBrowserUse, computerUse, setComputerUse, theme, setTheme, mounted, closing, initialSection, open, close, error, clearError: () => setError(null) };
+  return { appInfo, provider, setProvider, providers, setProviders, defaultProviderId, setDefaultProviderId, browserUse, setBrowserUse, computerUse, setComputerUse, theme, setTheme, mounted, closing, initialSection, open, close, error, clearError: () => setError(null) };
 }

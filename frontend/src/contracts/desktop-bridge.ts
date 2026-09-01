@@ -178,6 +178,8 @@ export type DesktopBridge = {
   provider: {
     get: () => Promise<ProviderConfig | null>;
     list: () => Promise<ProviderConfig[]>;
+    getDefault: () => Promise<string | null>;
+    setDefault: (providerId: string) => Promise<string>;
     save: (config: { id?: string; protocol: ProviderProtocol; baseUrl: string; model: string; displayName: string; contextWindow: number; apiKey: string }) => Promise<ProviderConfig>;
     delete: (providerId: string) => Promise<void>;
     test: (config: { id?: string; protocol: ProviderProtocol; baseUrl: string; model: string; displayName?: string; contextWindow?: number; apiKey?: string }) => Promise<ProviderTestResult>;

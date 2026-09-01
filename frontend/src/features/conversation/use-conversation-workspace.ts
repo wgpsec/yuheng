@@ -3,7 +3,7 @@ import { DEFAULT_AGENT_PROFILE_ID, type AgentProfileId, type DesktopBridge, type
 import type { Conversation as SidebarConversation } from './workspace/sidebar';
 import type { ToolActivity, TranscriptMessage } from './workspace/transcript';
 
-type ConversationProject = { id: string; name: string; position: number };
+type ConversationProject = { id: string; name: string; position: number; workspacePath?: string | null };
 
 const fallbackItems: SidebarConversation[] = [
   { id: 'inbox', projectId: 'personal', title: '收件箱', time: '现在', pinned: false },

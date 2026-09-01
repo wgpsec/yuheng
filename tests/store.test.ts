@@ -245,8 +245,21 @@ describe('AppStore provider settings', () => {
       assert.equal(store.getConversationProviderId(conversation.id), second.id);
       store.setConversationProvider(conversation.id, first.id);
       assert.equal(store.getConversation(conversation.id).providerId, first.id);
-    } finally {
+      store.setDefaultProviderId(second.id);
+      assert.equal(store.defaultProviderId(), second.id);
+      assert.equal(store.createConversation('显式默认路由').providerId, second.id);
+      assert.throws(() => store.deleteProvider(second.id), /先选择其他默认 Provider/);
+      assert.throws(() => store.setDefaultProviderId('missing-provider'), /Provider not found/);
       store.close();
+      const reopened = new AppStore(dataDir);
+      try {
+        assert.equal(reopened.defaultProviderId(), second.id);
+        assert.equal(reopened.createConversation('重启后默认路由').providerId, second.id);
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      try { store.close(); } catch { /* already closed after the persistence check */ }
       fs.rmSync(dataDir, { recursive: true, force: true });
     }
   });

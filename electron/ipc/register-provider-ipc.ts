@@ -14,7 +14,7 @@ import { assertText } from './ipc-input';
 import type { DomainIpcRegistrar } from './secured-ipc-registrar';
 
 type ProviderStore = Pick<AppStore,
-  | 'getProvider' | 'listProviders' | 'deleteProvider' | 'saveProvider'
+  | 'getProvider' | 'listProviders' | 'deleteProvider' | 'saveProvider' | 'defaultProviderId' | 'setDefaultProviderId'
   | 'getBrowserUseConfig' | 'saveBrowserUseConfig' | 'getComputerUseConfig' | 'saveComputerUseConfig'
 >;
 
@@ -36,6 +36,8 @@ export function registerProviderIpc({ registrar, store, secrets, browserUse }: P
     return provider ? { ...provider, hasApiKey: secrets.hasProviderKey(provider.id ?? 'default') } : null;
   });
   registrar.main('provider:list', () => store.listProviders().map((provider) => ({ ...provider, hasApiKey: secrets.hasProviderKey(provider.id ?? 'default') })));
+  registrar.main('provider:default-get', () => store.defaultProviderId());
+  registrar.main('provider:default-save', (_event, providerId: unknown) => store.setDefaultProviderId(assertText(providerId, 'providerId')));
   registrar.main('provider:delete', (_event, providerId: unknown) => {
     const id = assertText(providerId, 'providerId'); store.deleteProvider(id); secrets.deleteProviderKey(id);
   });

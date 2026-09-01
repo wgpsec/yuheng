@@ -393,7 +393,7 @@ button.task-column-empty:hover { border-color: var(--stroke-default); color: var
 .block-editor-toolbar button.is-active { color: var(--text-primary); background: var(--surface-hover); box-shadow: inset 0 0 0 1px var(--stroke-default); }
 .block-editor-toolbar button:disabled { cursor: default; opacity: .45; }
 .block-editor-save-state { margin: 0 5px 0 4px; color: var(--text-muted); font-size: 11px; white-space: nowrap; }
-.run-history { width: min(760px, calc(100% - 32px)); margin: 10px auto 18px; border: 1px solid var(--stroke-subtle); border-radius: 7px; color: var(--text-tertiary); background: var(--surface-raised); font-size: var(--font-size-caption); }
+.run-history { width: 100%; max-width: none; margin: 10px 0 18px; border: 1px solid var(--stroke-subtle); border-radius: 7px; color: var(--text-tertiary); background: var(--surface-raised); font-size: var(--font-size-caption); }
 .run-history summary { display: flex; align-items: center; justify-content: space-between; padding: 8px 11px; cursor: pointer; list-style: none; }
 .run-history summary::-webkit-details-marker { display: none; }
 .run-history summary span { color: var(--text-muted); }

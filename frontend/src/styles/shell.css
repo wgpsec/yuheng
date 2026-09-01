@@ -288,6 +288,9 @@ html[data-window-fullscreen="true"] .sidebar-is-collapsed .workspace-tabs { padd
 .identity-mark { display: grid; place-items: center; width: 29px; height: 29px; border: 1px solid #30383d; border-radius: 8px; background: #171b1e; }
 .conversation-identity h1 { margin: 0; color: var(--text-primary); font-size: 13px; font-weight: 600; }
 .identity-meta { display: block; margin-top: 4px; color: var(--text-tertiary); font-size: 13px; -webkit-app-region: no-drag; }
+.conversation-workspace-path { display: inline-flex; align-items: center; gap: 5px; max-width: min(420px, 38vw); vertical-align: middle; color: var(--text-secondary); }
+.conversation-workspace-path svg { flex: 0 0 auto; color: var(--accent); }
+.conversation-workspace-path > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conversation-id-button { padding: 0; border: 0; color: inherit; background: transparent; font-size: inherit; line-height: inherit; font-variant-numeric: tabular-nums; }
 .conversation-id-button:hover { color: var(--text-secondary); text-decoration: underline; text-underline-offset: 2px; }
 .meta-separator { padding: 0 4px; color: var(--text-muted); }

@@ -2,7 +2,6 @@ import { Archive, ArchiveRestore, Check, ChevronDown, Folder, FolderOpen, Layout
 import { useEffect, useRef, useState, type KeyboardEvent, type SetStateAction } from 'react';
 import { createPortal } from 'react-dom';
 import type { AgentProfileId, ConversationProject, TaskBoard } from '../../../contracts/desktop-bridge';
-import type { ProviderConfig } from '../../../contracts/desktop-bridge';
 import type { DesktopBridge } from '../../../contracts/desktop-bridge';
 import { NotesNavigation } from '../../notes/notes-navigation';
 
@@ -39,13 +38,10 @@ export function conversationMenuKey(conversationId: string, placement: string) {
   return `${placement}:${conversationId}`;
 }
 
-export function Sidebar({ conversations, projects, boards, providers, newProviderId, onNewProviderChange, activeId, activeProjectId, activeBoardId, activeNoteId, notesBridge, notesRevision, onNotesChanged, mode, settingsOpen, collapsed, appVersion, onSearch, onSelect, onSelectProject, onSelectBoard, onSelectNote, onModeChange, onNew, onRenameConversation, onMoveConversation, onArchiveConversation, onPinConversation, onDeleteConversation, onCreateProject, onChooseProjectWorkspace, onSetProjectWorkspace, onRenameProject, onDeleteProject, onCreateBoard, onRenameBoard, onDeleteBoard, onReorderBoard, onMoveTaskToBoard, onSettings, onToggle }: {
+export function Sidebar({ conversations, projects, boards, activeId, activeProjectId, activeBoardId, activeNoteId, notesBridge, notesRevision, onNotesChanged, mode, settingsOpen, collapsed, appVersion, onSearch, onSelect, onSelectProject, onSelectBoard, onSelectNote, onModeChange, onNew, onRenameConversation, onMoveConversation, onArchiveConversation, onPinConversation, onDeleteConversation, onCreateProject, onChooseProjectWorkspace, onSetProjectWorkspace, onRenameProject, onDeleteProject, onCreateBoard, onRenameBoard, onDeleteBoard, onReorderBoard, onMoveTaskToBoard, onSettings, onToggle }: {
   conversations: Conversation[];
   projects: ConversationProject[];
   boards: TaskBoard[];
-  providers: ProviderConfig[];
-  newProviderId: string;
-  onNewProviderChange: (providerId: string) => void;
   activeId: string;
   activeProjectId: string;
   activeBoardId: string;
@@ -63,7 +59,7 @@ export function Sidebar({ conversations, projects, boards, providers, newProvide
   onSelectBoard: (id: string) => void;
   onSelectNote: (id: string | null) => void;
   onModeChange: (mode: WorkspaceMode) => void;
-  onNew: (projectId?: string, providerId?: string) => void;
+  onNew: (projectId?: string) => void;
   onRenameConversation: (id: string, title: string) => Promise<void>;
   onMoveConversation: (id: string, projectId: string) => Promise<void>;
   onArchiveConversation: (id: string, archived: boolean) => Promise<void>;
@@ -127,7 +123,6 @@ export function Sidebar({ conversations, projects, boards, providers, newProvide
   const [sidebarOrganization, setSidebarOrganization] = useState<SidebarOrganization>(() => localStorage.getItem('yuheng-sidebar-organization') === 'list' ? 'list' : 'projects');
   const [draggedConversationId, setDraggedConversationId] = useState<string | null>(null);
   const [dragOverProjectId, setDragOverProjectId] = useState<string | null>(null);
-  const [newProviderMenuOpen, setNewProviderMenuOpenState] = useState(false);
   const [sidebarMenuClosing, setSidebarMenuClosing] = useState(false);
   const sidebarMenuCloseTimer = useRef<number | null>(null);
   const delayedMenuSetter = <T,>(current: T | null, setter: (value: T | null) => void, next: SetStateAction<T | null>) => {
@@ -142,14 +137,6 @@ export function Sidebar({ conversations, projects, boards, providers, newProvide
   const setProjectMenuId = (next: SetStateAction<string | null>) => delayedMenuSetter(projectMenuId, setProjectMenuIdState, next);
   const setOpenConversationMenu = (next: SetStateAction<OpenConversationMenu | null>) => delayedMenuSetter(openConversationMenu, setOpenConversationMenuState, next);
   const setBoardMenuId = (next: SetStateAction<string | null>) => delayedMenuSetter(boardMenuId, setBoardMenuIdState, next);
-  const setNewProviderMenuOpen = (next: SetStateAction<boolean>) => {
-    const value = typeof next === 'function' ? (next as (value: boolean) => boolean)(newProviderMenuOpen) : next;
-    if (sidebarMenuCloseTimer.current !== null) window.clearTimeout(sidebarMenuCloseTimer.current);
-    if (value) { setSidebarMenuClosing(false); setNewProviderMenuOpenState(true); return; }
-    if (!newProviderMenuOpen) return;
-    setSidebarMenuClosing(true);
-    sidebarMenuCloseTimer.current = window.setTimeout(() => { setNewProviderMenuOpenState(false); setSidebarMenuClosing(false); sidebarMenuCloseTimer.current = null; }, 125);
-  };
 
   useEffect(() => { localStorage.setItem('yuheng-expanded-projects', JSON.stringify(expandedProjects)); }, [expandedProjects]);
   useEffect(() => { localStorage.setItem('yuheng-collapsed-sections', JSON.stringify(collapsedSections)); }, [collapsedSections]);
@@ -162,17 +149,16 @@ export function Sidebar({ conversations, projects, boards, providers, newProvide
   }, []);
   useEffect(() => {
     const closeMenus = (event: MouseEvent) => {
-      if ((event.target as Element | null)?.closest('.sidebar-section-menu, .sidebar-section-action, .project-menu, .project-menu-button, .conversation-menu, .conversation-menu-button, .project-create-row, .task-board-menu, .task-board-nav-rename, .sidebar-provider-picker')) return;
+      if ((event.target as Element | null)?.closest('.sidebar-section-menu, .sidebar-section-action, .project-menu, .project-menu-button, .conversation-menu, .conversation-menu-button, .project-create-row, .project-create-modal, .task-board-menu, .task-board-nav-rename')) return;
       setSectionMenu(null);
       setProjectMenuId(null);
       setOpenConversationMenu(null);
       setCreatingProject(false);
       setBoardMenuId(null);
-      setNewProviderMenuOpen(false);
     };
     window.addEventListener('click', closeMenus);
     return () => window.removeEventListener('click', closeMenus);
-  }, [sectionMenu, projectMenuId, openConversationMenu, boardMenuId, newProviderMenuOpen]);
+  }, [sectionMenu, projectMenuId, openConversationMenu, boardMenuId]);
   useEffect(() => {
     if (!activeProjectId || !projects.some((project) => project.id === activeProjectId)) return;
     setExpandedProjects((current) => current[activeProjectId] ? current : { ...current, [activeProjectId]: true });
@@ -400,11 +386,11 @@ export function Sidebar({ conversations, projects, boards, providers, newProvide
             return <section className={`sidebar-section sidebar-section-${section} ${isCollapsed ? 'is-collapsed' : ''} ${openConversationMenu?.section === section ? 'has-open-menu' : ''}`} key={section}>
               <div className="sidebar-section-heading">
                 <button type="button" className="sidebar-section-toggle" onClick={() => toggleSection(section)} aria-expanded={!isCollapsed} title={`${isCollapsed ? '展开' : '收起'}${label}`}><span>{label}</span><ChevronDown size={14} /></button>
-                {!collapsed && <div className="sidebar-section-actions"><button type="button" className="sidebar-section-action" onClick={(event) => { event.stopPropagation(); setSectionMenu((current) => current === section ? null : section); }} aria-expanded={sectionMenu === section} aria-label={`整理${label}`} title={`整理${label}`}><MoreHorizontal size={16} /></button>{section === 'projects' && <button type="button" className="sidebar-section-action" onClick={(event) => { event.stopPropagation(); setSectionMenu(null); setCreatingProject(true); setCollapsedSections((current) => ({ ...current, projects: false })); }} aria-label="新建项目" title="新建项目"><Plus size={16} /></button>}</div>}
+                {!collapsed && <div className="sidebar-section-actions"><button type="button" className="sidebar-section-action" onClick={(event) => { event.stopPropagation(); setSectionMenu((current) => current === section ? null : section); }} aria-expanded={sectionMenu === section} aria-label={`整理${label}`} title={`整理${label}`}><MoreHorizontal size={16} /></button>{section === 'projects' && <button type="button" className="sidebar-section-action" onClick={(event) => { event.stopPropagation(); setSectionMenu(null); setNewProjectName(''); setNewProjectWorkspace(null); setProjectError(null); setCreatingProject(true); setCollapsedSections((current) => ({ ...current, projects: false })); }} aria-label="新建项目" title="新建项目"><Plus size={16} /></button>}</div>}
                 {sectionMenu === section && !collapsed && <div className="sidebar-section-menu"><div className="sidebar-section-menu-label">整理侧边栏</div>{(['projects', 'list'] as SidebarOrganization[]).map((organization) => <button type="button" key={organization} onClick={() => { setSidebarOrganization(organization); setSectionMenu(null); }}><span>{sidebarOrganization === organization ? <Check size={14} /> : <span className="sidebar-menu-placeholder" />}</span>{organization === 'projects' ? '按项目' : '在一个列表中'}</button>)}<div className="sidebar-section-menu-label">聊天排序方式</div>{(['priority', 'recent', 'manual'] as SidebarSort[]).map((sort) => <button type="button" key={sort} onClick={() => { setSidebarSort(sort); setSectionMenu(null); }}><span>{sidebarSort === sort ? <Check size={14} /> : <span className="sidebar-menu-placeholder" />}</span>{sort === 'priority' ? '优先级' : sort === 'recent' ? '最近更新' : '手动排序'}</button>)}<div className="sidebar-section-menu-separator" /><button type="button" onClick={() => { setShowArchived((current) => !current); setSectionMenu(null); }}><span>{showArchived ? <ArchiveRestore size={14} /> : <Archive size={14} />}</span>{showArchived ? '返回进行中' : '查看已归档'}</button></div>}
               </div>
               {(!isCollapsed || closingSections[section]) && <div className={`sidebar-section-content ${isCollapsed ? 'is-closing' : ''}`}>
-                {section === 'projects' ? <>{creatingProject && !collapsed && <div className="project-create-row"><Folder size={15} /><input autoFocus value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} onBlur={() => { if (!newProjectName.trim()) setCreatingProject(false); }} onKeyDown={(event) => submitOnEnter(event, createProject)} placeholder="项目名称" aria-label="新项目名称" /><button type="button" className="project-workspace-button" onClick={() => void chooseNewProjectWorkspace()} aria-label="选择项目工作目录" title={newProjectWorkspace ?? '选择工作目录'}><FolderOpen size={14} /></button><button type="button" onClick={() => void createProject()} disabled={!newProjectName.trim()}>添加</button></div>}{projects.map(renderProject)}{!projects.length && <div className="conversation-list-empty">暂无项目</div>}</> : sectionConversations.length ? sectionConversations.map((conversation) => renderConversation(conversation, `section:${section}`, section)) : <div className="conversation-list-empty">{showArchived ? '暂无已归档会话' : '暂无最近会话'}</div>}
+                {section === 'projects' ? <>{projects.map(renderProject)}{!projects.length && <div className="conversation-list-empty">暂无项目</div>}</> : sectionConversations.length ? sectionConversations.map((conversation) => renderConversation(conversation, `section:${section}`, section)) : <div className="conversation-list-empty">{showArchived ? '暂无已归档会话' : '暂无最近会话'}</div>}
               </div>}
             </section>;
           })}
@@ -435,7 +421,6 @@ export function Sidebar({ conversations, projects, boards, providers, newProvide
 
       <div className="sidebar-bottom">
         {mode === 'conversation' && <div className="sidebar-new-chat">
-          {!collapsed && providers.length > 0 && <div className="sidebar-provider-picker"><span>新会话使用</span><span className="sidebar-provider-control"><button type="button" className="sidebar-provider-trigger" aria-haspopup="listbox" aria-expanded={newProviderMenuOpen} aria-label={`新会话使用的 Provider：${providers.find((provider) => provider.id === newProviderId)?.displayName ?? '未选择'}`} onClick={() => setNewProviderMenuOpen((current) => !current)}><span>{providers.find((provider) => provider.id === newProviderId)?.displayName ?? '未选择'}</span><ChevronDown size={13} aria-hidden="true" /></button>{newProviderMenuOpen && <span className="sidebar-provider-menu" role="listbox" aria-label="选择新会话 Provider">{providers.map((provider) => <button type="button" role="option" aria-selected={provider.id === newProviderId} className={`${provider.id === newProviderId ? 'is-selected' : ''} ${provider.hasApiKey ? '' : 'is-disabled'}`} key={provider.id} disabled={!provider.hasApiKey} onClick={() => { setNewProviderMenuOpen(false); onNewProviderChange(provider.id); }}><span>{provider.displayName}</span>{provider.id === newProviderId && <span aria-hidden="true">✓</span>}</button>)}</span>}</span></div>}
           <button type="button" className="primary-action" onClick={() => onNew(activeProjectId)} aria-label="新会话" title="新会话">
             <MessageSquarePlus size={17} aria-hidden="true" />
             {!collapsed && <span>新会话</span>}
@@ -453,6 +438,18 @@ export function Sidebar({ conversations, projects, boards, providers, newProvide
           <label>迁移到<select value={replacementBoardId} onChange={(event) => setReplacementBoardId(event.target.value)}><option value="">不迁移（仅限空看板）</option>{boards.filter((board) => board.id !== deleteBoardTarget.id).map((board) => <option value={board.id} key={board.id}>{board.name}</option>)}</select></label>
           <p className="task-board-delete-help">任务类型会按名称匹配；没有同名类型时进入目标看板第一列。源看板有任务时必须选择迁移目标。</p>
           <div className="provider-modal-actions"><button type="button" onClick={() => setDeleteBoardTarget(null)}>取消</button><button type="button" className="is-destructive" onClick={() => void confirmDeleteBoard()}>{replacementBoardId ? '删除并迁移' : '删除看板'}</button></div>
+        </section>
+      </div>, document.body)}
+      {creatingProject && createPortal(<div className="provider-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setCreatingProject(false); }}>
+        <section className="provider-modal project-create-modal" role="dialog" aria-modal="true" aria-labelledby="project-create-title">
+          <div className="provider-modal-header"><div><h2 id="project-create-title">新建项目</h2><p>为项目命名，并选择 Agent 可以自由读取的运行目录。</p></div><button type="button" className="icon-button" onClick={() => setCreatingProject(false)} aria-label="取消新建项目"><X size={16} /></button></div>
+          <form onSubmit={(event) => { event.preventDefault(); void createProject(); }}>
+            <label>项目名称<input autoFocus value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} onKeyDown={(event) => submitOnEnter(event, createProject)} placeholder="例如：产品发布" aria-label="新项目名称" /></label>
+            <label>运行目录<div className="project-workspace-picker"><div className="project-workspace-value"><FolderOpen size={16} /><span title={newProjectWorkspace ?? '未选择，将使用默认目录'}>{newProjectWorkspace ?? '未选择，将使用默认目录'}</span></div><button type="button" className="secondary-action" onClick={() => void chooseNewProjectWorkspace()}><FolderOpen size={14} />选择文件夹</button></div></label>
+            <p className="project-create-help">未选择时使用 `workspace/projects/&lt;projectId&gt;/`。选择后，Agent 将以该文件夹作为项目工作区。</p>
+            {projectError && <p className="sidebar-board-error" role="alert">{projectError}</p>}
+            <div className="provider-modal-actions"><button type="button" onClick={() => setCreatingProject(false)}>取消</button><button type="submit" className="primary-action" disabled={!newProjectName.trim()}>创建项目</button></div>
+          </form>
         </section>
       </div>, document.body)}
     </aside>

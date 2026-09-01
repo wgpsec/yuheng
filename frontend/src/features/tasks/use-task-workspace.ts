@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CreateTaskInput, DesktopBridge, Task, TaskAsset, TaskBoard, TaskEvent, TaskType, UpdateTaskInput } from '../../contracts/desktop-bridge';
+import { mergeTaskChange } from './task-list-state';
 
 export type TaskOpenRequest = { boardId: string; taskId?: string; action?: 'today' | 'quick_record' };
 
@@ -50,7 +51,7 @@ export function useTaskWorkspace(bridge: DesktopBridge | undefined, onOpenReques
     const handle = (event: TaskEvent) => {
       if (disposed) return;
       if (event.type === 'changed') {
-        if (event.task.boardId === boardRef.current) setTasks((current) => [event.task, ...current.filter((task) => task.id !== event.task.id)]);
+        setTasks((current) => mergeTaskChange(current, event.task, boardRef.current));
       } else if (event.type === 'types_changed') {
         if (event.boardId === boardRef.current) void bridge.tasks.types.list(event.boardId).then((next) => { if (!disposed && boardRef.current === event.boardId) setTypes(next); }).catch((reason) => fail(reason, '加载任务类型失败。'));
       } else if (event.type === 'boards_changed') {
@@ -68,11 +69,11 @@ export function useTaskWorkspace(bridge: DesktopBridge | undefined, onOpenReques
 
   const create = useCallback(async (input: CreateTaskInput) => {
     if (!bridge || !boardRef.current) throw new Error('任务服务不可用。');
-    const created = await bridge.tasks.create(boardRef.current, input); setTasks((current) => [created, ...current]); return created;
+    const created = await bridge.tasks.create(boardRef.current, input); setTasks((current) => mergeTaskChange(current, created, boardRef.current)); return created;
   }, [bridge]);
   const update = useCallback(async (id: string, patch: UpdateTaskInput) => {
     if (!bridge) throw new Error('任务服务不可用。');
-    const updated = await bridge.tasks.update(id, patch); setTasks((current) => current.map((task) => task.id === id ? updated : task)); return updated;
+    const updated = await bridge.tasks.update(id, patch); setTasks((current) => mergeTaskChange(current, updated, boardRef.current)); return updated;
   }, [bridge]);
   const remove = useCallback(async (id: string) => { if (!bridge) return; await bridge.tasks.delete(id); setTasks((current) => current.filter((task) => task.id !== id)); }, [bridge]);
   const reorder = useCallback(async (id: string, targetId: string) => { if (!bridge) return; setTasks(await bridge.tasks.reorder(id, targetId)); }, [bridge]);
