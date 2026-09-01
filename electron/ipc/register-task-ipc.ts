@@ -121,7 +121,10 @@ export function registerTaskIpc(dependencies: TaskIpcDependencies): void {
   registrar.main('tasks:boards:reorder', (_event, boardId: unknown, targetBoardId: unknown): TaskBoard[] => {
     const boards = store.reorderTaskBoards(assertText(boardId, 'boardId'), assertText(targetBoardId, 'targetBoardId')); dependencies.taskBoardsChanged(); return boards;
   });
-  registrar.main('tasks:boards:delete', (_event, boardId: unknown) => { store.deleteTaskBoard(assertText(boardId, 'boardId')); dependencies.taskBoardsChanged(); });
+  registrar.main('tasks:boards:delete', (_event, boardId: unknown, replacementBoardId: unknown) => {
+    store.deleteTaskBoard(assertText(boardId, 'boardId'), typeof replacementBoardId === 'string' ? replacementBoardId.trim() : '');
+    dependencies.taskBoardsChanged();
+  });
   registrar.main('tasks:list', (_event, boardId: unknown) => store.listTasks(assertText(boardId, 'boardId')));
   registrar.main('tasks:open-request:take', () => dependencies.takePendingOpen());
   registrar.main('tasks:types:list', (_event, boardId: unknown): TaskType[] => store.listTaskTypes(assertText(boardId, 'boardId')));

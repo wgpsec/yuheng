@@ -6,6 +6,34 @@ SCRIPT_DIR="${0:A:h}"
 PROJECT_ROOT="${SCRIPT_DIR:h}"
 cd "$PROJECT_ROOT"
 
+data_profile="${YUHENG_DATA_PROFILE:-development}"
+while (( $# > 0 )); do
+  case "$1" in
+    --production-data)
+      data_profile="production"
+      ;;
+    --development-data)
+      data_profile="development"
+      ;;
+    --help|-h)
+      print "用法：./start-mac.command [--development-data|--production-data]"
+      print "默认使用独立开发数据；--production-data 显式连接正式玉衡数据。"
+      exit 0
+      ;;
+    *)
+      print -u2 "未知参数：$1"
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+if [[ "$data_profile" != "development" && "$data_profile" != "production" ]]; then
+  print -u2 "YUHENG_DATA_PROFILE 必须是 development 或 production。"
+  exit 2
+fi
+export YUHENG_DATA_PROFILE="$data_profile"
+
 if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
   print -u2 "玉衡 0.1 仅支持 macOS Apple Silicon（arm64）。"
   exit 1
@@ -56,6 +84,12 @@ if [[ -z "${VITE_PORT:-}" ]]; then
     (( VITE_PORT++ ))
   done
   export VITE_PORT
+fi
+
+if [[ "$data_profile" == "production" ]]; then
+  print "数据目录：~/Library/Application Support/yuheng（正式数据）"
+else
+  print "数据目录：~/Library/Application Support/yuheng-dev（开发数据）"
 fi
 
 exec npm run dev

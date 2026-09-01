@@ -644,6 +644,10 @@ html[data-window-fullscreen="true"] .sidebar-is-collapsed .workspace-tabs { padd
 .provider-modal input, .provider-modal select { width: 100%; min-height: 33px; padding: 7px 9px; border: 1px solid var(--stroke-default); border-radius: 6px; outline: 0; color: var(--text-primary); background: #141719; font-size: 13px; }
 .provider-modal input:focus, .provider-modal select:focus { border-color: #71868e; box-shadow: 0 0 0 2px #8caebc22; }
 .provider-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 5px; }
+.task-board-delete-modal { width: min(460px, 100%); }
+.task-board-delete-modal label { display: grid; gap: 6px; color: var(--text-secondary); font-size: 13px; }
+.task-board-delete-modal select { width: 100%; min-height: 33px; padding: 7px 9px; border: 1px solid var(--stroke-default); border-radius: 6px; outline: 0; color: var(--text-primary); background: var(--surface-root); font-size: 13px; }
+.task-board-delete-help { margin: 12px 0 0; color: var(--text-tertiary); font-size: 12px; line-height: 1.5; }
 
 .global-search-backdrop { position: fixed; z-index: 60; inset: 0; display: flex; align-items: flex-start; justify-content: center; padding: 74px 24px 24px; background: #080a0bb8; animation: global-search-backdrop-in 160ms ease-out both; -webkit-app-region: no-drag; }
 .global-search-backdrop.is-closing { pointer-events: none; animation: global-search-backdrop-out 150ms ease-in both; }

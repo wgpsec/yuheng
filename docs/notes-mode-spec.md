@@ -158,7 +158,7 @@ CREATE INDEX IF NOT EXISTS notes_parent_position_idx
 - 旧备份缺少 `data/notes.json` 时按空数组恢复，不影响已有会话和任务。
 - 导入笔记生成新的笔记 ID，同时重映射 `parent_id`，不能覆盖现有页面。
 - 如果引入笔记附件，再增加受控 `note-assets/` 目录；第一阶段可暂时复用现有受控资产管线，但不得把任意路径写入 Markdown。
-- 备份中不包含 Provider 密钥、Keychain 内容、临时文件或未受控 workspace 文件。
+- 笔记备份中不包含 Provider 密钥、SecretStore 内容、临时文件或未受控 workspace 文件。
 - 只有当数据格式语义发生不兼容变化时才升级备份格式版本；新增可选数据集保持向后兼容。
 
 ## 6. Electron IPC 与前端合同
@@ -407,7 +407,7 @@ type BlockEditorProps = {
 
 - 笔记增删改归档后索引同步；中文、英文和短查询可用。
 - 新旧备份互导、ID 重映射、父子关系恢复、损坏包拒绝。
-- 备份不包含 API Key、Keychain、临时文件或未授权路径。
+- 笔记备份不包含 API Key、SecretStore、临时文件或未授权路径。
 
 ### UI 回归
 

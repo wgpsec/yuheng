@@ -24,7 +24,7 @@
 | UI | React 19 + TypeScript | 与参考项目保持一致，便于复用其交互设计、组件组织和 Electron 渲染器边界；生态和桌面端案例成熟。 |
 | 构建 | Vite | 开发反馈快，生产资源可使用相对路径打包进 `app.asar`。 |
 | 本地数据库 | SQLite，优先使用 Electron 所带 Node 的 `node:sqlite` | 不引入额外数据库服务；主进程独占写入，便于备份和迁移。若目标 Electron 版本不提供稳定 `node:sqlite`，再评估 `better-sqlite3`，不得在首轮同时引入两套驱动。 |
-| 密钥 | Electron `safeStorage` + 主进程文件 | Renderer 不接触明文密钥；密钥文件由主进程权限和系统用户边界保护。 |
+| 密钥 | 主进程管理的可移植 `secrets.json` | Provider API Key 不进入 Renderer、SQLite 或日志；文件仅依赖用户目录权限保护，便于数据目录迁移。 |
 | MCP | `@modelcontextprotocol/sdk`，主进程统一管理 stdio/HTTP 连接 | 复用成熟协议实现；工具发现、调用、超时、取消和审批集中在可信边界。 |
 | 测试 | Vitest、Playwright、Node 原生测试 | UI 用公开行为测试；主进程和协议用单元/合同测试；关键流程再用 Playwright。 |
 | 首发平台 | macOS 13+ arm64 | 0.1 只发布 Apple Silicon 构建；Windows、Linux、macOS x64、Universal Binary 均不在本版范围。 |
@@ -86,7 +86,7 @@ Electron Preload
   v
 Electron Main
   |-- SQLite store（会话、待办、设置、用量）
-  |-- Secret store（safeStorage 加密后的 provider/MCP 凭据）
+  |-- Secret store（主进程管理的 provider/MCP 凭据）
   |-- Pi Agent SDK runtime（Provider 适配、Agent loop、工具执行和流式输出）
   |-- MCP supervisor（Browser Use 可选 sidecar；默认关闭、按需启动）
   |-- Pi extensions（Computer Use；默认关闭、与 Browser Use 互斥）
@@ -186,7 +186,7 @@ Computer Use 通过 `@injaneity/pi-computer-use` 作为显式 Pi extension 加�
 - `usage_events`：请求、输入/输出 token、Provider 和时间；
 - `app_settings`：主题、布局、默认 Provider 和通知偏好。
 
-密钥、OAuth refresh token 和 MCP 环境变量不进入上述普通表的 JSON 字段，统一存放在主进程拥有的加密 secret store。所有表都使用迁移版本，启动时执行有界迁移和 SQLite quick check。
+密钥、OAuth refresh token 和 MCP 环境变量不进入上述普通表的 JSON 字段，统一存放在主进程拥有的 `secrets.json`。文件使用 `0600` 权限；该文件是可迁移的明文 JSON，不能视为密码库，用户应通过操作系统账户权限和磁盘加密保护数据。所有表都使用迁移版本，启动时执行有界迁移和 SQLite quick check。
 
 ## 8. 运行事件合同
 
@@ -219,7 +219,7 @@ Computer Use 通过 `@injaneity/pi-computer-use` 作为显式 Pi extension 加�
 - 发布包使用 Apple Developer ID 签名并 notarize；开发阶段允许未签名运行；
 - 0.1 使用 Electron Hardened Runtime，但暂不启用完整 App Sandbox，以保留用户配置的本地 stdio MCP 子进程能力；
 - MCP 命令只能由主进程按用户明确配置启动，Renderer 不得启动任意进程；
-- 凭据使用 macOS Keychain-backed `safeStorage`，应用数据位于用户的 Application Support 目录；
+- Provider 凭据使用应用数据目录中的可移植 `secrets.json`（`0600`），应用数据位于用户的 Application Support 目录；
 - 暂不实现自动更新，先完成手动安装、升级和卸载验证。
 
 ## 11. 非目标与风险

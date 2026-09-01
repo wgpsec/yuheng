@@ -7,13 +7,14 @@ test('provides stable built-in note covers and avoids immediately repeating one'
   assert.equal(builtInNoteCover('missing'), null);
   assert.notEqual(randomNoteCover('aurora', () => 0).id, 'aurora');
   assert.ok(BUILT_IN_NOTE_COVERS.some((cover) => cover.id === randomNoteCover(undefined, () => 0.99).id));
+  const coverImages = BUILT_IN_NOTE_COVERS.flatMap((cover) => cover.image ? [cover.image] : []);
+  assert.equal(new Set(coverImages).size, coverImages.length);
 });
 
-test('builds non-repeating cover styles for built-in and custom images', () => {
+test('builds cover styles without mixing background shorthand and longhand properties', () => {
   const builtIn = BUILT_IN_NOTE_COVERS[0];
   assert.deepEqual(noteCoverBackgroundStyle(builtIn.background, builtIn.image), {
-    background: builtIn.background,
-    backgroundImage: `url(${builtIn.image})`,
+    backgroundImage: `url(${builtIn.image}), ${builtIn.background}`,
     backgroundPosition: 'center',
     backgroundSize: 'cover',
     backgroundRepeat: 'no-repeat',

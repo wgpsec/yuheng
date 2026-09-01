@@ -1,6 +1,7 @@
 import { app, BrowserWindow, protocol } from 'electron';
 import path from 'node:path';
 import type { AppContext } from './app/app-context';
+import { resolveApplicationDataDirectory } from './app/application-data-directory';
 import {
   applicationVersionValue,
   configureRendererSecurity,
@@ -16,6 +17,12 @@ import { BROWSER_ARTIFACT_SCHEME } from './browser-artifacts';
 import { NOTE_COVER_SCHEME } from './note-covers';
 import { TASK_ASSET_SCHEME } from './task-assets';
 import { RecoveryWindowLifecycle } from './windows/recovery-window';
+
+app.setPath('userData', resolveApplicationDataDirectory(
+  app.getPath('appData'),
+  app.isPackaged,
+  process.env.YUHENG_DATA_PROFILE,
+));
 
 protocol.registerSchemesAsPrivileged([
   { scheme: TASK_ASSET_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },

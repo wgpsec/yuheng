@@ -84,7 +84,7 @@ CSC_NAME="Developer ID Application: <Team Name> (<TEAM_ID>)" \
 
 - Browser Use 仍通过 `uvx` 启动 `browser-use==0.13.8` Python sidecar；当前安装包不会替同事提供 `uv`。要实现完全自包含的 Browser Use 安装包，需要另行集成固定的 Python 3.12、依赖和启动器。
 - Computer Use 的 native helper 已被 electron-builder 放入应用包，但 macOS 14+ 需要用户授予 Accessibility 和 Screen Recording 权限。
-- 应用数据、密钥、附件、截图和运行记录继续写入 `app.getPath('userData')`，不会因为打包改为写入应用包目录。
+- 应用在初始化最早阶段将 `app.getPath('userData')` 显式固定为 `~/Library/Application Support/yuheng`，密钥、附件、截图和运行记录不会写入应用包目录。源码开发默认使用隔离的 `~/Library/Application Support/yuheng-dev`；仅 `./start-mac.command --production-data` 会让开发客户端连接正式目录。
 
 ## 发布检查清单
 

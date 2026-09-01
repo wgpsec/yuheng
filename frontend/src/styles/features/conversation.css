@@ -182,7 +182,7 @@
 
 .inline-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px max(6%, 30px) 0; padding: 8px 11px; border: 1px solid #6c4a3d; border-radius: 7px; color: #e7c2b1; background: #2d211e; font-size: 13px; }
 .inline-error button { padding: 0 3px; border: 0; color: inherit; background: transparent; font-size: 16px; line-height: 1; }
-.provider-modal-backdrop { position: fixed; z-index: 10; inset: 0; display: grid; place-items: center; padding: 24px; background: #080a0bcc; }
+.provider-modal-backdrop { position: fixed; z-index: 10; inset: 0; display: grid; place-items: center; padding: 24px; background: color-mix(in srgb, #080a0b 72%, transparent); -webkit-app-region: no-drag; }
 .provider-modal { width: min(430px, 100%); padding: 22px; border: 1px solid var(--stroke-default); border-radius: 11px; background: #1a1e21; box-shadow: 0 22px 70px #00000066; }
 .provider-modal-header { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
 .provider-modal-header h2 { margin: 0; color: var(--text-primary); font-size: 16px; font-weight: 600; }
@@ -192,6 +192,23 @@
 .provider-modal input, .provider-modal select { width: 100%; min-height: 33px; padding: 7px 9px; border: 1px solid var(--stroke-default); border-radius: 6px; outline: 0; color: var(--text-primary); background: #141719; font-size: 13px; }
 .provider-modal input:focus, .provider-modal select:focus { border-color: #71868e; box-shadow: 0 0 0 2px #8caebc22; }
 .provider-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 5px; }
+.task-board-delete-modal { width: min(460px, 100%); padding: 24px; color: var(--text-primary); background: var(--surface-raised); }
+.task-board-delete-modal .provider-modal-header { align-items: flex-start; margin-bottom: 22px; }
+.task-board-delete-modal .provider-modal-header h2 { font-size: 17px; line-height: 1.35; }
+.task-board-delete-modal .provider-modal-header p { max-width: 360px; margin-top: 7px; line-height: 1.55; }
+.task-board-delete-modal .provider-modal-header .icon-button { display: grid; flex: 0 0 auto; place-items: center; width: 28px; height: 28px; margin: -3px -4px 0 0; padding: 0; border: 1px solid transparent; border-radius: 6px; color: var(--text-tertiary); background: transparent; }
+.task-board-delete-modal .provider-modal-header .icon-button:hover { border-color: var(--stroke-subtle); color: var(--text-primary); background: var(--surface-hover); }
+.task-board-delete-modal label { display: grid; gap: 8px; color: var(--text-secondary); font-size: 13px; font-weight: 500; }
+.task-board-delete-modal select { width: 100%; min-height: 38px; padding: 8px 11px; border: 1px solid var(--stroke-default); border-radius: 7px; outline: 0; color: var(--text-primary); background: var(--surface-root); font-size: 13px; transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease; }
+.task-board-delete-modal select:hover { border-color: color-mix(in srgb, var(--stroke-default) 70%, var(--text-secondary)); background: var(--surface-hover); }
+.task-board-delete-modal select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+.task-board-delete-help { margin: 12px 0 0; color: var(--text-tertiary); font-size: 12px; line-height: 1.55; }
+.task-board-delete-modal .provider-modal-actions { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--stroke-subtle); }
+.task-board-delete-modal .provider-modal-actions button { min-height: 34px; padding: 7px 13px; border: 1px solid var(--stroke-default); border-radius: 7px; color: var(--text-secondary); background: transparent; font-size: 13px; transition: border-color 120ms ease, color 120ms ease, background 120ms ease, opacity 120ms ease; }
+.task-board-delete-modal .provider-modal-actions button:hover:not(:disabled) { border-color: var(--stroke-default); color: var(--text-primary); background: var(--surface-hover); }
+.task-board-delete-modal .provider-modal-actions button.is-destructive { border-color: color-mix(in srgb, #c98272 55%, var(--stroke-default)); color: #d99a8b; background: color-mix(in srgb, #8c4436 18%, transparent); }
+.task-board-delete-modal .provider-modal-actions button.is-destructive:hover:not(:disabled) { border-color: #d99a8b; color: #f0c0b5; background: color-mix(in srgb, #8c4436 34%, transparent); }
+.task-board-delete-modal .provider-modal-actions button:disabled { cursor: not-allowed; opacity: .42; }
 
 .global-search-backdrop { position: fixed; z-index: 60; inset: 0; display: flex; align-items: flex-start; justify-content: center; padding: 74px 24px 24px; background: #080a0bb8; animation: global-search-backdrop-in 160ms ease-out both; -webkit-app-region: no-drag; }
 .global-search-backdrop.is-closing { pointer-events: none; animation: global-search-backdrop-out 150ms ease-in both; }

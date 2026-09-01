@@ -596,9 +596,15 @@ describe('AppStore tasks', () => {
       const personalBoard = store.createTaskBoard('个人');
       assert.deepEqual(store.listTaskBoards().map((board) => board.id), [defaultBoard.id, workBoard.id, personalBoard.id]);
       assert.deepEqual(store.reorderTaskBoards(personalBoard.id, defaultBoard.id).map((board) => board.id), [personalBoard.id, defaultBoard.id, workBoard.id]);
-      store.deleteTaskBoard(workBoard.id);
+      const reviewType = store.createTaskType('审核中', workBoard.id);
+      const migratedTask = store.createTask({ title: '迁移任务', description: '保留正文', status: reviewType.id, priority: 'high' }, workBoard.id);
+      const personalType = store.createTaskType('审核中', personalBoard.id);
+      store.deleteTaskBoard(workBoard.id, personalBoard.id);
       assert.deepEqual(store.listTaskBoards().map((board) => board.id), [personalBoard.id, defaultBoard.id]);
-      assert.throws(() => store.deleteTaskBoard(defaultBoard.id), /默认看板不能删除/);
+      const migrated = store.getTask(migratedTask.id);
+      assert.equal(migrated.boardId, personalBoard.id);
+      assert.equal(migrated.status, personalType.id);
+      assert.equal(migrated.description, '保留正文');
     } finally {
       store.close();
       fs.rmSync(dataDir, { recursive: true, force: true });
@@ -621,6 +627,89 @@ describe('AppStore tasks', () => {
       assert.equal(moved.status, targetType.id);
       assert.deepEqual(store.listTasks(sourceBoard.id), []);
       assert.deepEqual(store.listTasks(targetBoard.id).map((item) => item.id), [task.id]);
+    } finally {
+      store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('allows deleting the default board only with an explicit replacement and persists the new default', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
+    let store = new AppStore(dataDir);
+    try {
+      const [defaultBoard] = store.listTaskBoards();
+      const replacement = store.createTaskBoard('新默认');
+      const other = store.createTaskBoard('其他');
+      store.reorderTaskBoards(other.id, defaultBoard.id);
+      const task = store.createTask({ title: '默认任务' }, defaultBoard.id);
+
+      store.deleteTaskBoard(defaultBoard.id, replacement.id);
+
+      assert.equal(store.getDefaultTaskBoardId(), replacement.id);
+      assert.equal(store.listTasks()[0]?.id, task.id);
+      assert.throws(() => store.deleteTaskBoard(replacement.id, replacement.id), /不同的替代看板/);
+      store.close();
+      store = new AppStore(dataDir);
+      assert.equal(store.getDefaultTaskBoardId(), replacement.id);
+      assert.equal(store.createTask({ title: '继续使用新默认' }).boardId, replacement.id);
+    } finally {
+      store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('deletes an empty board without migration and selects a remaining default when needed', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
+    const store = new AppStore(dataDir);
+    try {
+      const [defaultBoard] = store.listTaskBoards();
+      const emptyBoard = store.createTaskBoard('空看板');
+
+      store.deleteTaskBoard(emptyBoard.id, '');
+      assert.deepEqual(store.listTaskBoards().map((board) => board.id), [defaultBoard.id]);
+      assert.equal(store.getDefaultTaskBoardId(), defaultBoard.id);
+
+      const replacement = store.createTaskBoard('新默认');
+      store.deleteTaskBoard(defaultBoard.id, '');
+      assert.deepEqual(store.listTaskBoards().map((board) => board.id), [replacement.id]);
+      assert.equal(store.getDefaultTaskBoardId(), replacement.id);
+    } finally {
+      store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('maps unmatched task types to the target first column without disturbing existing order', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
+    const store = new AppStore(dataDir);
+    try {
+      const [source] = store.listTaskBoards();
+      const target = store.createTaskBoard('目标');
+      const sourceType = store.createTaskType('仅源列', source.id);
+      const targetType = store.listTaskTypes(target.id)[0];
+      const existing = store.createTask({ title: '已有任务', status: targetType.id }, target.id);
+      const migrating = store.createTask({ title: '无匹配任务', status: sourceType.id }, source.id);
+
+      store.deleteTaskBoard(source.id, target.id);
+
+      assert.equal(store.getTask(migrating.id).status, targetType.id);
+      assert.deepEqual(store.listTasks(target.id).map((task) => task.id), [existing.id, migrating.id]);
+    } finally {
+      store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects missing replacements and deleting the final board without changing data', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
+    const store = new AppStore(dataDir);
+    try {
+      const [onlyBoard] = store.listTaskBoards();
+      const task = store.createTask({ title: '不可丢失' }, onlyBoard.id);
+      assert.throws(() => store.deleteTaskBoard(onlyBoard.id, 'missing'), /Replacement task board not found/);
+      assert.throws(() => store.deleteTaskBoard(onlyBoard.id, onlyBoard.id), /不同的替代看板/);
+      assert.deepEqual(store.listTaskBoards().map((board) => board.id), [onlyBoard.id]);
+      assert.equal(store.getTask(task.id).title, '不可丢失');
     } finally {
       store.close();
       fs.rmSync(dataDir, { recursive: true, force: true });

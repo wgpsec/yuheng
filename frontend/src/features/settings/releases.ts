@@ -6,6 +6,15 @@ export type ReleaseNote = {
 
 export const releaseNotes: readonly ReleaseNote[] = [
   {
+    version: '0.3.4',
+    title: '看板删除与启动修复',
+    changes: [
+      '空任务看板可以直接删除；看板有任务时仍需选择迁移目标，删除默认空看板会自动保留有效默认入口。',
+      '删除看板确认弹窗适配深色、浅色和 Notion 主题，统一迁移选择框与操作按钮样式。',
+      '恢复 macOS 开发启动脚本及 Electron 构建配置，修复 npm run dev 缺失导致的启动失败。',
+    ],
+  },
+  {
     version: '0.3.3',
     title: '安全迁移与启动恢复',
     changes: [

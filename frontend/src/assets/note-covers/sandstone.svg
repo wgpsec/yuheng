@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="500" viewBox="0 0 1600 500">
+  <defs>
+    <linearGradient id="sandstone-sky" x2="0" y2="1">
+      <stop stop-color="#d9a06e"/>
+      <stop offset=".6" stop-color="#e8c390"/>
+      <stop offset="1" stop-color="#cf9165"/>
+    </linearGradient>
+    <linearGradient id="sandstone-rock" x2=".8" y2="1">
+      <stop stop-color="#a85239"/>
+      <stop offset="1" stop-color="#67352f"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="500" fill="url(#sandstone-sky)"/>
+  <circle cx="1268" cy="108" r="73" fill="#f4d6a1" opacity=".86"/>
+  <path d="M0 0h258l-31 108-54 58 47 85-79 87 36 162H0Zm1600 0h-274l32 92 65 63-45 94 72 80-29 171h179Z" fill="url(#sandstone-rock)"/>
+  <path d="M258 0h102l-34 87 17 82-57 72 17 119-81 68-45-90 79-87-47-85 54-58Zm1068 0h-104l37 91-20 86 59 68-19 121 78 62 50-99-72-80 45-94-65-63Z" fill="#c3704c" opacity=".88"/>
+  <path d="M0 393c191-73 373-68 535 12 174 85 339 82 509-7 196-103 383-91 556-8v110H0Z" fill="#b56543"/>
+  <path d="M0 448c214-52 399-35 566 22 161 55 335 33 489-21 193-67 370-57 545-3v54H0Z" fill="#7d4437"/>
+  <path d="M204 355c65-20 119-21 178-2m770 10c70-26 129-28 198-8" fill="none" stroke="#efc18b" stroke-width="9" stroke-linecap="round" opacity=".48"/>
+</svg>

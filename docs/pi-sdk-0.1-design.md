@@ -42,7 +42,7 @@ Pi AgentSession
 
 - Electron 窗口、preload 白名单和 React UI；
 - SQLite 中的会话、消息和运行投影；
-- API Key 的 `safeStorage` 管理；
+- API Key 的主进程 `secrets.json` 管理；
 - 附件选择、大小校验、主进程内存生命周期；
 - 将 Pi 事件转换为现有 `run:event` 合同；
 - 运行取消、错误展示和应用重启后的本地状态恢复。

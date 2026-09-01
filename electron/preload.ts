@@ -167,7 +167,7 @@ contextBridge.exposeInMainWorld('desktopBridge', {
       create: (name: string) => ipcRenderer.invoke('tasks:boards:create', name),
       rename: (id: string, name: string) => ipcRenderer.invoke('tasks:boards:rename', id, name),
       reorder: (id: string, targetId: string) => ipcRenderer.invoke('tasks:boards:reorder', id, targetId),
-      delete: (id: string) => ipcRenderer.invoke('tasks:boards:delete', id),
+      delete: (id: string, replacementBoardId: string) => ipcRenderer.invoke('tasks:boards:delete', id, replacementBoardId),
     },
     list: (boardId: string) => ipcRenderer.invoke('tasks:list', boardId),
     takeOpenRequest: () => ipcRenderer.invoke('tasks:open-request:take'),

@@ -344,19 +344,23 @@ export class AppStore {
     return this.repositories.tasks.reorderBoards(id, targetId);
   }
 
-  deleteTaskBoard(id: string): void {
-    this.repositories.tasks.deleteBoard(id);
+  deleteTaskBoard(id: string, replacementBoardId: string): void {
+    this.repositories.tasks.deleteBoard(id, replacementBoardId);
   }
 
-  listTasks(boardId = DEFAULT_TASK_BOARD_ID): Task[] {
+  getDefaultTaskBoardId(): string {
+    return this.repositories.tasks.getDefaultBoardId();
+  }
+
+  listTasks(boardId?: string): Task[] {
     return this.repositories.tasks.list(boardId);
   }
 
-  listTaskTypes(boardId = DEFAULT_TASK_BOARD_ID): TaskType[] {
+  listTaskTypes(boardId?: string): TaskType[] {
     return this.repositories.tasks.listTypes(boardId);
   }
 
-  createTaskType(name: string, boardId = DEFAULT_TASK_BOARD_ID): TaskType {
+  createTaskType(name: string, boardId?: string): TaskType {
     return this.repositories.tasks.createType(name, boardId);
   }
 
@@ -368,7 +372,7 @@ export class AppStore {
     return this.repositories.tasks.deleteType(id);
   }
 
-  createTask(input: CreateTaskInput, boardId = DEFAULT_TASK_BOARD_ID): Task {
+  createTask(input: CreateTaskInput, boardId?: string): Task {
     return this.repositories.tasks.create(input, boardId);
   }
 

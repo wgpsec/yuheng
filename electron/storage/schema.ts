@@ -287,9 +287,12 @@ function validateCheckConstraints(db: DatabaseSync, violations: string[]): void 
 
 function validateSeeds(db: DatabaseSync, violations: string[]): void {
   if (!db.prepare("SELECT 1 FROM conversation_projects WHERE id = 'personal'").get()) violations.push('missing_seed:conversation_project');
-  if (!db.prepare("SELECT 1 FROM task_boards WHERE id = 'default'").get()) violations.push('missing_seed:task_board');
-  for (const id of ['todo', 'in_progress', 'done', 'archived']) {
-    if (!db.prepare("SELECT 1 FROM task_types WHERE id = ? AND board_id = 'default'").get(id)) violations.push(`missing_seed:task_type.${id}`);
+  const boards = db.prepare('SELECT id FROM task_boards').all() as Row[];
+  if (boards.length === 0) violations.push('missing_seed:task_board');
+  for (const board of boards) {
+    if (!db.prepare('SELECT 1 FROM task_types WHERE board_id = ? LIMIT 1').get(String(board.id))) {
+      violations.push(`missing_seed:task_type.${String(board.id)}`);
+    }
   }
 }
 

@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Check, ChevronDown, Folder, FolderOpen, LayoutDashboard, ListTodo, MessageSquare, MessageSquarePlus, MoreHorizontal, NotebookPen, PanelLeftClose, PanelLeftOpen, Pencil, Pin, PinOff, Plus, Search, Settings, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, ChevronDown, Folder, FolderOpen, LayoutDashboard, ListTodo, MessageSquare, MessageSquarePlus, MoreHorizontal, NotebookPen, PanelLeftClose, PanelLeftOpen, Pencil, Pin, PinOff, Plus, Search, Settings, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState, type KeyboardEvent, type SetStateAction } from 'react';
 import { createPortal } from 'react-dom';
 import type { AgentProfileId, ConversationProject, TaskBoard } from '../../../contracts/desktop-bridge';
@@ -74,7 +74,7 @@ export function Sidebar({ conversations, projects, boards, providers, newProvide
   onDeleteProject: (id: string) => Promise<void>;
   onCreateBoard: (name: string) => Promise<void>;
   onRenameBoard: (id: string, name: string) => Promise<void>;
-  onDeleteBoard: (id: string) => Promise<void>;
+  onDeleteBoard: (id: string, replacementBoardId: string) => Promise<void>;
   onReorderBoard: (id: string, targetId: string) => Promise<void>;
   onMoveTaskToBoard: (id: string, boardId: string) => Promise<void>;
   onSettings: () => void;
@@ -85,6 +85,8 @@ export function Sidebar({ conversations, projects, boards, providers, newProvide
   const [renamingBoardId, setRenamingBoardId] = useState<string | null>(null);
   const [renamingBoardName, setRenamingBoardName] = useState('');
   const [boardError, setBoardError] = useState<string | null>(null);
+  const [deleteBoardTarget, setDeleteBoardTarget] = useState<TaskBoard | null>(null);
+  const [replacementBoardId, setReplacementBoardId] = useState('');
   const [boardMenuId, setBoardMenuIdState] = useState<string | null>(null);
   const [draggedBoardId, setDraggedBoardId] = useState<string | null>(null);
   const [dragOverBoardId, setDragOverBoardId] = useState<string | null>(null);
@@ -198,9 +200,14 @@ export function Sidebar({ conversations, projects, boards, providers, newProvide
     }
   };
   const deleteBoard = async (board: TaskBoard) => {
-    if (board.id === 'default') { setBoardError('默认看板不能删除。'); setBoardMenuId(null); return; }
-    if (!window.confirm(`删除看板“${board.name}”？其中的任务也会被删除。此操作无法撤销。`)) return;
-    try { await onDeleteBoard(board.id); setBoardMenuId(null); setBoardError(null); }
+    if (boards.length <= 1) { setBoardError('至少保留一个任务看板。'); setBoardMenuId(null); return; }
+    setDeleteBoardTarget(board);
+    setReplacementBoardId('');
+    setBoardMenuId(null);
+  };
+  const confirmDeleteBoard = async () => {
+    if (!deleteBoardTarget) return;
+    try { await onDeleteBoard(deleteBoardTarget.id, replacementBoardId); setDeleteBoardTarget(null); setReplacementBoardId(''); setBoardError(null); }
     catch (reason) { setBoardError(reason instanceof Error ? reason.message : '删除任务看板失败。'); }
   };
   const reorderBoard = async (sourceId: string, targetId: string) => {
@@ -429,6 +436,14 @@ export function Sidebar({ conversations, projects, boards, providers, newProvide
           </button>
         </div>
       </div>
+      {deleteBoardTarget && createPortal(<div className="provider-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDeleteBoardTarget(null); }}>
+        <section className="provider-modal task-board-delete-modal" role="dialog" aria-modal="true" aria-labelledby="task-board-delete-title">
+          <div className="provider-modal-header"><div><h2 id="task-board-delete-title">删除看板</h2><p>有任务时会迁移到你选择的看板；空看板可以直接删除。</p></div><button type="button" className="icon-button" onClick={() => setDeleteBoardTarget(null)} aria-label="取消删除"><X size={16} /></button></div>
+          <label>迁移到<select value={replacementBoardId} onChange={(event) => setReplacementBoardId(event.target.value)}><option value="">不迁移（仅限空看板）</option>{boards.filter((board) => board.id !== deleteBoardTarget.id).map((board) => <option value={board.id} key={board.id}>{board.name}</option>)}</select></label>
+          <p className="task-board-delete-help">任务类型会按名称匹配；没有同名类型时进入目标看板第一列。源看板有任务时必须选择迁移目标。</p>
+          <div className="provider-modal-actions"><button type="button" onClick={() => setDeleteBoardTarget(null)}>取消</button><button type="button" className="is-destructive" onClick={() => void confirmDeleteBoard()}>{replacementBoardId ? '删除并迁移' : '删除看板'}</button></div>
+        </section>
+      </div>, document.body)}
     </aside>
   );
 }

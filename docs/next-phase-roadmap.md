@@ -67,7 +67,7 @@
 ### P0 Slice 3：完整备份密钥与恢复校验
 
 - 完整 `.yuheng` 备份可包含由用户明确授权导出的 Provider API Key；会话备份、日志和运行事件仍不包含密钥。
-- 恢复解析 `data/provider-keys.json`，过滤非法身份和超长值，成功导入后通过现有 SecretStore 写回本机加密存储。
+- 恢复解析 `data/provider-keys.json`，过滤非法身份和超长值，成功导入后通过现有 SecretStore 写回本机可移植存储。
 - 继续使用现有 manifest 哈希、路径和大小校验；不新增数据库实体或 Worker 协议。
 - Pi session 恢复使用临时文件写入后原子重命名；SQLite 记录当前 schema `user_version`，为后续迁移提供单一版本标记。
 - 恢复受控附件和运行截图时同步重映射托管 URL；导出期间持有进程内运行准入门禁，避免快照与文件跨时点不一致。

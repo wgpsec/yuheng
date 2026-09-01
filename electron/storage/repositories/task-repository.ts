@@ -54,19 +54,61 @@ export class TaskRepository extends RepositoryBase {
     return this.listBoards();
   }
 
-  deleteBoard(id: string): void {
-    if (id === DEFAULT_BOARD_ID) throw new Error('默认看板不能删除。');
-    const row = this.db.prepare('SELECT position FROM task_boards WHERE id = ?').get(id) as Row | undefined;
-    if (!row) throw new Error('Task board not found.');
-    const position = Number(row.position);
+  deleteBoard(id: string, replacementBoardId: string): void {
+    if (!id) throw new Error('Task board id is required.');
+    const replacementId = replacementBoardId.trim();
     this.transaction(() => {
+      const source = this.db.prepare('SELECT position FROM task_boards WHERE id = ?').get(id) as Row | undefined;
+      if (!source) throw new Error('Task board not found.');
+      if (replacementId === id) throw new Error('请选择不同的替代看板。');
+      if (replacementId && !this.db.prepare('SELECT 1 FROM task_boards WHERE id = ?').get(replacementId)) throw new Error('Replacement task board not found.');
+      const wasDefault = this.getDefaultBoardId() === id;
+      const boardCount = Number((this.db.prepare('SELECT COUNT(*) AS count FROM task_boards').get() as Row).count);
+      if (boardCount <= 1) throw new Error('At least one task board is required.');
+
+      const tasks = this.db.prepare(`SELECT tasks.id, tasks.status, task_types.name AS typeName
+        FROM tasks LEFT JOIN task_types ON task_types.id = tasks.status
+        WHERE tasks.board_id = ? ORDER BY task_types.position ASC, tasks.position ASC, tasks.updated_at DESC, tasks.id ASC`).all(id) as Row[];
+      if (tasks.length > 0 && !replacementId) throw new Error('看板中仍有任务，请选择替代看板。');
+
+      let defaultReplacementId = replacementId;
+      if (wasDefault && !defaultReplacementId) {
+        const fallback = this.db.prepare('SELECT id FROM task_boards WHERE id != ? ORDER BY position ASC, id ASC LIMIT 1').get(id) as Row | undefined;
+        if (!fallback) throw new Error('At least one task board is required.');
+        defaultReplacementId = String(fallback.id);
+      }
+
+      if (tasks.length > 0) {
+        const targetTypes = this.db.prepare('SELECT id, name, position FROM task_types WHERE board_id = ? ORDER BY position ASC, id ASC').all(replacementId) as Row[];
+        if (targetTypes.length === 0) throw new Error('Target task board has no task types.');
+        const targetByName = new Map<string, Row>();
+        for (const type of targetTypes) if (!targetByName.has(String(type.name))) targetByName.set(String(type.name), type);
+        const nextPosition = new Map<string, number>();
+        for (const type of targetTypes) {
+          nextPosition.set(String(type.id), Number((this.db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM tasks WHERE board_id = ? AND status = ?').get(replacementId, String(type.id)) as Row).position));
+        }
+        const fallbackType = targetTypes[0];
+        const updateTask = this.db.prepare('UPDATE tasks SET board_id = ?, status = ?, position = ?, updated_at = ? WHERE id = ?');
+        const now = new Date().toISOString();
+        for (const task of tasks) {
+          const targetType = (task.typeName == null ? undefined : targetByName.get(String(task.typeName))) ?? fallbackType;
+          const targetTypeId = String(targetType.id);
+          const position = nextPosition.get(targetTypeId) ?? 0;
+          updateTask.run(replacementId, targetTypeId, position, now, String(task.id));
+          nextPosition.set(targetTypeId, position + 1);
+        }
+      }
+
       const result = this.db.prepare('DELETE FROM task_boards WHERE id = ?').run(id);
       if (Number(result.changes) === 0) throw new Error('Task board not found.');
+      const position = Number(source.position);
       this.db.prepare('UPDATE task_boards SET position = position - 1 WHERE position > ?').run(position);
+      if (wasDefault) this.setDefaultBoardId(defaultReplacementId);
     });
   }
 
-  list(boardId = DEFAULT_BOARD_ID): Task[] {
+  list(boardId?: string): Task[] {
+    boardId ??= this.getDefaultBoardId();
     const rows = this.db.prepare(`SELECT id, board_id AS boardId, title, description, status, priority, due_at AS dueAt,
       remind_at AS remindAt, reminder_fired_at AS reminderFiredAt, source_conversation_id AS sourceConversationId,
       created_at AS createdAt, updated_at AS updatedAt FROM tasks WHERE board_id = ?
@@ -74,12 +116,14 @@ export class TaskRepository extends RepositoryBase {
     return rows.map((row) => this.mapTask(row));
   }
 
-  listTypes(boardId = DEFAULT_BOARD_ID): TaskType[] {
+  listTypes(boardId?: string): TaskType[] {
+    boardId ??= this.getDefaultBoardId();
     const rows = this.db.prepare('SELECT id, board_id AS boardId, name, position FROM task_types WHERE board_id = ? ORDER BY position ASC, id ASC').all(boardId) as Row[];
     return rows.map((row) => ({ id: String(row.id), boardId: String(row.boardId), name: String(row.name), position: Number(row.position) }));
   }
 
-  createType(name: string, boardId = DEFAULT_BOARD_ID): TaskType {
+  createType(name: string, boardId?: string): TaskType {
+    boardId ??= this.getDefaultBoardId();
     const normalized = name.trim();
     if (!normalized) throw new Error('Task type name is required.');
     const id = crypto.randomUUID();
@@ -109,7 +153,8 @@ export class TaskRepository extends RepositoryBase {
     return type;
   }
 
-  create(input: CreateTaskInput, boardId = DEFAULT_BOARD_ID): Task {
+  create(input: CreateTaskInput, boardId?: string): Task {
+    boardId ??= this.getDefaultBoardId();
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     const status = input.status ?? this.listTypes(boardId)[0]?.id;
@@ -208,6 +253,26 @@ export class TaskRepository extends RepositoryBase {
   markReminderFired(id: string, expectedRemindAt: string, firedAt = new Date().toISOString()): Task | null {
     const result = this.db.prepare('UPDATE tasks SET reminder_fired_at = ? WHERE id = ? AND remind_at = ? AND reminder_fired_at IS NULL').run(firedAt, id, expectedRemindAt);
     return Number(result.changes) === 0 ? null : this.get(id);
+  }
+
+  getDefaultBoardId(): string {
+    const row = this.db.prepare('SELECT value FROM app_settings WHERE key = ?').get('default_task_board_id') as Row | undefined;
+    if (row) {
+      try {
+        const configured = JSON.parse(String(row.value));
+        if (typeof configured === 'string' && this.db.prepare('SELECT 1 FROM task_boards WHERE id = ?').get(configured)) return configured;
+      } catch { /* Fall through to the legacy/default board. */ }
+    }
+    if (this.db.prepare('SELECT 1 FROM task_boards WHERE id = ?').get(DEFAULT_BOARD_ID)) return DEFAULT_BOARD_ID;
+    const first = this.db.prepare('SELECT id FROM task_boards ORDER BY position ASC, id ASC LIMIT 1').get() as Row | undefined;
+    if (!first) throw new Error('At least one task board is required.');
+    return String(first.id);
+  }
+
+  private setDefaultBoardId(boardId: string): void {
+    this.db.prepare(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+      .run('default_task_board_id', JSON.stringify(boardId), new Date().toISOString());
   }
 
   private getType(id: string): TaskType {

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="500" viewBox="0 0 1600 500">
+  <defs>
+    <linearGradient id="lavender-bg" x2="1" y2="1">
+      <stop stop-color="#2d2948"/>
+      <stop offset=".48" stop-color="#766495"/>
+      <stop offset="1" stop-color="#d3b6cf"/>
+    </linearGradient>
+    <linearGradient id="lavender-ribbon" x2="1">
+      <stop stop-color="#b9a7df" stop-opacity=".18"/>
+      <stop offset=".5" stop-color="#eed7ec" stop-opacity=".7"/>
+      <stop offset="1" stop-color="#a78ac8" stop-opacity=".16"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="500" fill="url(#lavender-bg)"/>
+  <circle cx="1235" cy="98" r="178" fill="#f2dceb" opacity=".2"/>
+  <circle cx="1360" cy="165" r="112" fill="#c5aadd" opacity=".22"/>
+  <path d="M-80 115c249-80 390-68 590 47 190 108 333 113 517 14 206-111 355-100 653 20v86c-259-111-427-133-636-23-211 111-387 112-579 1C283 155 137 151-80 235Z" fill="url(#lavender-ribbon)"/>
+  <path d="M-70 347c195-120 376-151 567-68 187 81 333 77 492-22 194-121 409-101 681 53v190H-70Z" fill="#4d426b" opacity=".67"/>
+  <path d="M-60 423c220-87 385-91 565-20 175 70 340 63 511-16 207-96 407-66 644 56v57H-60Z" fill="#302b4c" opacity=".88"/>
+  <g fill="#ead9ef" opacity=".55">
+    <circle cx="265" cy="118" r="5"/><circle cx="315" cy="88" r="2.5"/><circle cx="1055" cy="80" r="4"/><circle cx="1120" cy="132" r="2.5"/>
+  </g>
+</svg>

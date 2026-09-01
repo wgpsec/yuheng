@@ -227,7 +227,7 @@ export type DesktopBridge = {
       create: (name: string) => Promise<TaskBoard>;
       rename: (id: string, name: string) => Promise<TaskBoard>;
       reorder: (id: string, targetId: string) => Promise<TaskBoard[]>;
-      delete: (id: string) => Promise<void>;
+      delete: (id: string, replacementBoardId: string) => Promise<void>;
     };
     list: (boardId: string) => Promise<Task[]>;
     takeOpenRequest: () => Promise<{ boardId: string; taskId: string } | null>;
