@@ -44,7 +44,7 @@ export const DEFAULT_PROVIDER_CONTEXT_WINDOW = 200_000;
 export const MIN_PROVIDER_CONTEXT_WINDOW = 4_096;
 export const MAX_PROVIDER_CONTEXT_WINDOW = 10_000_000;
 export const CURRENT_SCHEMA_VERSION = 1;
-export type ConversationProject = { id: string; name: string; position: number };
+export type ConversationProject = { id: string; name: string; position: number; workspacePath?: string | null };
 export type Conversation = { id: string; projectId: string; title: string; updatedAt: string; archived: boolean; pinned: boolean; providerId?: string; profileId: AgentProfileId };
 export type Message = { id: string; role: 'user' | 'assistant'; content: string; createdAt: string };
 export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
@@ -106,7 +106,7 @@ export type SearchResult = {
 };
 
 export type FullBackupSnapshot = {
-  conversationProjects: Array<{ id: string; name: string; position: number; createdAt: string; updatedAt: string }>;
+  conversationProjects: Array<{ id: string; name: string; position: number; workspacePath?: string | null; createdAt: string; updatedAt: string }>;
   conversations: Array<{ id: string; projectId: string; title: string; description: string; archived: boolean; pinned: boolean; reasoningLevel: string; providerId: string | null; profileId: string; createdAt: string; updatedAt: string }>;
   messages: Array<{ id: string; conversationId: string; role: Message['role']; content: string; createdAt: string }>;
   runs: Array<{ id: string; conversationId: string; inputMessageId: string | null; status: RunStatus; error: string | null; startedAt: string; finishedAt: string | null; inputTokens: number | null; outputTokens: number | null; totalTokens: number | null; contextTokens: number | null; contextWindow: number | null; contextPercent: number | null }>;
@@ -160,8 +160,16 @@ export class AppStore {
     return this.repositories.conversations.listProjects();
   }
 
-  createConversationProject(name: string): ConversationProject {
-    return this.repositories.conversations.createProject(name);
+  createConversationProject(name: string, workspacePath?: string | null): ConversationProject {
+    return this.repositories.conversations.createProject(name, workspacePath);
+  }
+
+  getConversationProjectWorkspace(id: string): string | null {
+    return this.repositories.conversations.projectWorkspace(id);
+  }
+
+  setConversationProjectWorkspace(id: string, workspacePath: string | null): ConversationProject {
+    return this.repositories.conversations.setProjectWorkspace(id, workspacePath);
   }
 
   renameConversationProject(id: string, name: string): ConversationProject {
@@ -418,6 +426,10 @@ export class AppStore {
 
   defaultProviderId(): string | null {
     return this.repositories.providers.defaultId();
+  }
+
+  setDefaultProviderId(id: string): string {
+    return this.repositories.providers.setDefaultId(id);
   }
 
   getProvider(id?: string): ProviderConfig | null {

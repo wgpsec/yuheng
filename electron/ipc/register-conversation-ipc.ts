@@ -8,7 +8,7 @@ import { assertText } from './ipc-input';
 import type { DomainIpcRegistrar } from './secured-ipc-registrar';
 
 type ConversationStore = Pick<AppStore,
-  | 'listConversations' | 'listConversationProjects' | 'createConversationProject' | 'renameConversationProject'
+  | 'listConversations' | 'listConversationProjects' | 'createConversationProject' | 'setConversationProjectWorkspace' | 'renameConversationProject'
   | 'deleteConversationProject' | 'listMessages' | 'branchConversation' | 'createConversation'
   | 'setConversationProvider' | 'getConversation' | 'setConversationProfile' | 'renameConversation'
   | 'moveConversation' | 'setConversationArchived' | 'setConversationPinned' | 'deleteConversation'
@@ -25,7 +25,15 @@ export type ConversationIpcDependencies = {
 export function registerConversationIpc({ registrar, store, isConversationActive, onConversationDeleted }: ConversationIpcDependencies): void {
   registrar.main('conversations:list', (_event, includeArchived: unknown) => store.listConversations(includeArchived === true));
   registrar.main('conversation-projects:list', () => store.listConversationProjects());
-  registrar.main('conversation-projects:create', (_event, name: unknown): ConversationProject => store.createConversationProject(assertText(name, 'name')));
+  registrar.main('conversation-projects:choose-workspace', async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const result = owner
+      ? await dialog.showOpenDialog(owner, { properties: ['openDirectory', 'createDirectory'] })
+      : await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+  registrar.main('conversation-projects:create', (_event, name: unknown, workspacePath: unknown): ConversationProject => store.createConversationProject(assertText(name, 'name'), typeof workspacePath === 'string' && workspacePath.trim() ? workspacePath.trim() : null));
+  registrar.main('conversation-projects:set-workspace', (_event, projectId: unknown, workspacePath: unknown): ConversationProject => store.setConversationProjectWorkspace(assertText(projectId, 'projectId'), typeof workspacePath === 'string' && workspacePath.trim() ? workspacePath.trim() : null));
   registrar.main('conversation-projects:rename', (_event, projectId: unknown, name: unknown): ConversationProject => store.renameConversationProject(assertText(projectId, 'projectId'), assertText(name, 'name')));
   registrar.main('conversation-projects:delete', (_event, projectId: unknown) => store.deleteConversationProject(assertText(projectId, 'projectId')));
   registrar.main('conversations:messages', (_event, conversationId: unknown) => store.listMessages(assertText(conversationId, 'conversationId')));

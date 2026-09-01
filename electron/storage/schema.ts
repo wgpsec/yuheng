@@ -36,7 +36,7 @@ export const CANONICAL_INDEXES = [
 
 export const CANONICAL_BUSINESS_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   app_settings: ['key', 'value', 'updated_at'],
-  conversation_projects: ['id', 'name', 'position', 'created_at', 'updated_at'],
+  conversation_projects: ['id', 'name', 'position', 'workspace_path', 'created_at', 'updated_at'],
   conversations: ['id', 'project_id', 'title', 'description', 'archived', 'pinned', 'reasoning_level', 'provider_id', 'profile_id', 'created_at', 'updated_at'],
   messages: ['id', 'conversation_id', 'role', 'content', 'created_at'],
   note_versions: ['id', 'note_id', 'title', 'content', 'icon', 'cover', 'properties_json', 'created_at'],
@@ -55,7 +55,7 @@ const INITIAL_TABLES = ['conversations', 'messages', 'provider_profiles', 'runs'
 export function createCanonicalBusinessSchema(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS conversation_projects (
-      id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL,
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL, workspace_path TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS provider_profiles (

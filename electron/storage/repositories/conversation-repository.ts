@@ -28,18 +28,19 @@ export class ConversationRepository extends RepositoryBase {
 
 
   listProjects(): ConversationProject[] {
-    const rows = this.db.prepare('SELECT id, name, position FROM conversation_projects ORDER BY position ASC, created_at ASC').all() as Row[];
-    return rows.map((row) => ({ id: String(row.id), name: String(row.name), position: Number(row.position) }));
+    const rows = this.db.prepare('SELECT id, name, position, workspace_path AS workspacePath FROM conversation_projects ORDER BY position ASC, created_at ASC').all() as Row[];
+    return rows.map((row) => ({ id: String(row.id), name: String(row.name), position: Number(row.position), workspacePath: row.workspacePath == null ? null : String(row.workspacePath) }));
   }
 
-  createProject(name: string): ConversationProject {
+  createProject(name: string, workspacePath?: string | null): ConversationProject {
     const normalized = name.trim();
     if (!normalized) throw new Error('Project name is required.');
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     const position = Number((this.db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM conversation_projects').get() as Row).position);
-    this.db.prepare('INSERT INTO conversation_projects (id, name, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(id, normalized, position, now, now);
-    return { id, name: normalized, position };
+    const normalizedWorkspacePath = workspacePath?.trim() || null;
+    this.db.prepare('INSERT INTO conversation_projects (id, name, position, workspace_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, normalized, position, normalizedWorkspacePath, now, now);
+    return { id, name: normalized, position, workspacePath: normalizedWorkspacePath };
   }
 
   renameProject(id: string, name: string): ConversationProject {
@@ -48,6 +49,20 @@ export class ConversationRepository extends RepositoryBase {
     const result = this.db.prepare('UPDATE conversation_projects SET name = ?, updated_at = ? WHERE id = ?').run(normalized, new Date().toISOString(), id);
     if (Number(result.changes) === 0) throw new Error('Project not found.');
     return this.listProjects().find((project) => project.id === id)!;
+  }
+
+  setProjectWorkspace(id: string, workspacePath: string | null): ConversationProject {
+    const normalizedWorkspacePath = workspacePath?.trim() || null;
+    const result = this.db.prepare('UPDATE conversation_projects SET workspace_path = ?, updated_at = ? WHERE id = ?')
+      .run(normalizedWorkspacePath, new Date().toISOString(), id);
+    if (Number(result.changes) === 0) throw new Error('Project not found.');
+    return this.listProjects().find((project) => project.id === id)!;
+  }
+
+  projectWorkspace(id: string): string | null {
+    const row = this.db.prepare('SELECT workspace_path AS workspacePath FROM conversation_projects WHERE id = ?').get(id) as Row | undefined;
+    if (!row) throw new Error('Project not found.');
+    return row.workspacePath == null ? null : String(row.workspacePath);
   }
 
   deleteProject(id: string, defaultProjectId = 'personal'): void {
@@ -237,6 +252,15 @@ export class ConversationRepository extends RepositoryBase {
   }
 
   private defaultProviderId(): string | null {
+    const configured = this.db.prepare('SELECT value FROM app_settings WHERE key = ?').get('default_provider_id') as Row | undefined;
+    if (configured) {
+      try {
+        const id = JSON.parse(String(configured.value));
+        if (typeof id === 'string' && id.trim() && this.providerExists(id.trim())) return id.trim();
+      } catch {
+        // Ignore damaged settings and retain the legacy deterministic fallback.
+      }
+    }
     const row = this.db.prepare("SELECT id FROM provider_profiles ORDER BY CASE WHEN id = 'default' THEN 0 ELSE 1 END, updated_at ASC, id ASC LIMIT 1").get() as Row | undefined;
     return row ? String(row.id) : null;
   }

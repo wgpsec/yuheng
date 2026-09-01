@@ -53,8 +53,10 @@ contextBridge.exposeInMainWorld('desktopBridge', {
     list: (includeArchived?: boolean) => ipcRenderer.invoke('conversations:list', includeArchived),
     projects: {
       list: () => ipcRenderer.invoke('conversation-projects:list'),
-      create: (name: string) => ipcRenderer.invoke('conversation-projects:create', name),
+      chooseWorkspace: () => ipcRenderer.invoke('conversation-projects:choose-workspace'),
+      create: (name: string, workspacePath?: string | null) => ipcRenderer.invoke('conversation-projects:create', name, workspacePath),
       rename: (projectId: string, name: string) => ipcRenderer.invoke('conversation-projects:rename', projectId, name),
+      setWorkspace: (projectId: string, workspacePath: string | null) => ipcRenderer.invoke('conversation-projects:set-workspace', projectId, workspacePath),
       delete: (projectId: string) => ipcRenderer.invoke('conversation-projects:delete', projectId),
     },
     messages: (conversationId: string) => ipcRenderer.invoke('conversations:messages', conversationId),

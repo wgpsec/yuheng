@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, readFile, stat } from 'node:fs/promises';
+import { access, chmod, readFile, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -49,4 +49,27 @@ test('keeps projects isolated and resolves duplicate attachment names', async ()
 
   await first.cleanup();
   await second.cleanup();
+});
+
+test('uses a selected project directory without changing its permissions', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuheng-project-workspace-'));
+  const selected = await mkdtemp(path.join(tmpdir(), 'yuheng-selected-workspace-'));
+  await chmod(selected, 0o755);
+  const manager = new ProjectRunWorkspace(root);
+  const prepared = await manager.prepare('project-a', 'run-a', [], selected);
+
+  assert.equal(prepared.projectDirectory, path.resolve(selected));
+  assert.equal((await stat(selected)).mode & 0o777, 0o755);
+  assert.equal(prepared.attachments.length, 0);
+  await prepared.cleanup();
+  await access(selected, constants.F_OK);
+});
+
+test('rejects a configured project directory that is missing', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuheng-project-workspace-'));
+  const manager = new ProjectRunWorkspace(root);
+  await assert.rejects(
+    manager.prepare('project-a', 'run-a', [], path.join(root, 'missing-project-directory')),
+    /项目工作目录不存在或不是文件夹/u,
+  );
 });

@@ -77,10 +77,10 @@ export class RunExecutor {
     let runtime: ReturnType<typeof createPiRuntime> | undefined;
     let preparedWorkspace: PreparedRunWorkspace | undefined;
     try {
-      const projectId = store.getConversation(conversationId).projectId;
+      const project = store.getConversation(conversationId);
       const workspaceManager = this.options.projectRunWorkspace
         ?? new ProjectRunWorkspace(path.join(this.options.userDataDirectory, 'workspace'));
-      preparedWorkspace = await workspaceManager.prepare(projectId, runId, runAttachments);
+      preparedWorkspace = await workspaceManager.prepare(project.projectId, runId, runAttachments, store.getConversationProjectWorkspace(project.projectId));
       const toolSecurity = new ToolSecurityBroker({
         policy: new ToolSecurityPolicy(preparedWorkspace.projectDirectory, run.permissionMode),
         audit: this.options.securityAudit,

@@ -36,7 +36,7 @@ export function normalizeLegacyV1(db: DatabaseConnection): void {
 function createFoundations(db: DatabaseConnection): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS conversation_projects (
-      id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL,
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL, workspace_path TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS task_boards (
@@ -51,6 +51,7 @@ function createFoundations(db: DatabaseConnection): void {
 
 function addLegacyColumns(db: DatabaseConnection): void {
   addColumn(db, 'provider_profiles', 'context_window', 'INTEGER NOT NULL DEFAULT 200000');
+  addColumn(db, 'conversation_projects', 'workspace_path', 'TEXT');
   addColumn(db, 'conversations', 'project_id', "TEXT REFERENCES conversation_projects(id)");
   addColumn(db, 'conversations', 'description', "TEXT NOT NULL DEFAULT ''");
   addColumn(db, 'conversations', 'archived', 'INTEGER NOT NULL DEFAULT 0');

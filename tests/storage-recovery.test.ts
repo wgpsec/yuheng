@@ -21,7 +21,7 @@ describe('database integrity checks', () => {
     const owner = DatabaseOwner.open(path.join(dataDir, 'yuheng.sqlite'));
     try {
       new MigrationRunner(owner, migrations, { appVersion: '0.3.2' })
-        .migrate({ id: 'snapshot', status: 'verified', sourceVersion: 0, targetVersion: 2, sha256: 'fixture' });
+        .migrate({ id: 'snapshot', status: 'verified', sourceVersion: 0, targetVersion: migrations.length, sha256: 'fixture' });
       assert.deepEqual(checkDatabaseIntegrity(owner.database), { ok: true, quickCheck: ['ok'], foreignKeyViolations: [] });
 
       owner.database.exec('PRAGMA foreign_keys = OFF');
@@ -50,7 +50,7 @@ describe('migration snapshots', () => {
         now: () => new Date('2026-08-31T12:00:00.000Z'),
         id: () => 'fixture-id',
       });
-      const snapshot = await backups.createSnapshot(owner, { sourceVersion: 1, targetVersion: 2, appVersion: '0.3.2' });
+      const snapshot = await backups.createSnapshot(owner, { sourceVersion: 1, targetVersion: migrations.length, appVersion: '0.3.2' });
       assert.equal(snapshot.status, 'verified');
       assert.match(snapshot.sha256, /^[a-f0-9]{64}$/u);
       assert.deepEqual(backups.listSnapshots(), [snapshot]);
@@ -93,7 +93,7 @@ describe('migration snapshots', () => {
           onStage(stage) { if (stage === fixture.stage) throw new Error(`injected ${stage}`); },
         });
         await assert.rejects(
-          backups.createSnapshot(owner, { sourceVersion: 1, targetVersion: 2, appVersion: '0.3.2' }),
+          backups.createSnapshot(owner, { sourceVersion: 1, targetVersion: migrations.length, appVersion: '0.3.2' }),
           (error: unknown) => error instanceof Error && 'code' in error && error.code === fixture.expectedCode,
           fixture.stage,
         );
@@ -113,7 +113,7 @@ describe('migration attempt record', () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-attempt-'));
     try {
       const attempts = new MigrationAttemptStore(dataDir, { now: () => new Date('2026-08-31T12:00:00.000Z'), id: () => 'attempt-id' });
-      let attempt = attempts.begin({ appVersion: '0.3.2', sourceVersion: 1, targetVersion: 2 });
+      let attempt = attempts.begin({ appVersion: '0.3.2', sourceVersion: 1, targetVersion: migrations.length });
       attempt = attempts.update(attempt, {
         stage: 'migrating',
         currentMigrationVersion: 2,
@@ -140,9 +140,9 @@ describe('snapshot recovery', () => {
     const owner = DatabaseOwner.open(databasePath);
     let snapshot;
     try {
-      snapshot = await new MigrationBackupStore(dataDir, {
+        snapshot = await new MigrationBackupStore(dataDir, {
         now: () => new Date('2026-08-31T12:00:00.000Z'), id: () => 'snapshot-id',
-      }).createSnapshot(owner, { sourceVersion: 1, targetVersion: 2, appVersion: '0.3.2' });
+      }).createSnapshot(owner, { sourceVersion: 1, targetVersion: migrations.length, appVersion: '0.3.2' });
       owner.database.prepare('UPDATE conversations SET title = ? WHERE id = ?').run('失败迁移后的标题', 'fixture-conversation');
       owner.database.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
     } finally {
@@ -184,7 +184,7 @@ describe('snapshot recovery', () => {
     let snapshot;
     try {
       snapshot = await new MigrationBackupStore(dataDir, { id: () => 'snapshot-id' })
-        .createSnapshot(owner, { sourceVersion: 1, targetVersion: 2, appVersion: '0.3.2' });
+        .createSnapshot(owner, { sourceVersion: 1, targetVersion: migrations.length, appVersion: '0.3.2' });
     } finally { owner.close(); }
     const snapshotPath = path.join(dataDir, 'recovery', 'snapshots', snapshot!.fileName);
     fs.appendFileSync(snapshotPath, 'tampered');
@@ -207,7 +207,7 @@ describe('snapshot recovery', () => {
     let snapshot;
     try {
       snapshot = await new MigrationBackupStore(dataDir, { id: () => 'snapshot-id' })
-        .createSnapshot(owner, { sourceVersion: 1, targetVersion: 2, appVersion: '0.3.2' });
+        .createSnapshot(owner, { sourceVersion: 1, targetVersion: migrations.length, appVersion: '0.3.2' });
       owner.database.prepare('UPDATE conversations SET title = ? WHERE id = ?').run('live-data', 'fixture-conversation');
     } finally { owner.close(); }
     try {
@@ -260,7 +260,7 @@ describe('database preparation', () => {
       assert.equal(result.status, 'ready');
       if (result.status === 'ready') {
         assert.equal(result.sourceVersion, 0);
-        assert.equal(result.targetVersion, 2);
+        assert.equal(result.targetVersion, migrations.length);
         assert.equal(result.snapshot?.status, 'verified');
         result.owner.close();
       }
@@ -277,7 +277,7 @@ describe('database preparation', () => {
       assert.equal(result.status, 'recovery_required');
       if (result.status === 'recovery_required') {
         assert.equal(result.failure.code, 'database_corrupt');
-        assert.equal(result.failure.targetVersion, 2);
+        assert.equal(result.failure.targetVersion, migrations.length);
         assert.equal(result.failure.diagnosticId, 'corrupt-id');
       }
     } finally {
@@ -303,7 +303,7 @@ describe('database preparation', () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-preparation-interrupted-'));
     try {
       new MigrationAttemptStore(dataDir, { id: () => 'unfinished-id', now: () => new Date('2026-08-31T12:00:00.000Z') })
-        .begin({ appVersion: '0.3.2', sourceVersion: 1, targetVersion: 2 });
+        .begin({ appVersion: '0.3.2', sourceVersion: 1, targetVersion: migrations.length });
       const result = await prepareDatabase(dataDir, { appVersion: '0.3.2', diagnosticId: () => 'different-id' });
       assert.equal(result.status, 'recovery_required');
       if (result.status === 'recovery_required') {

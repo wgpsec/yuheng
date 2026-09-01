@@ -39,7 +39,7 @@ export function conversationMenuKey(conversationId: string, placement: string) {
   return `${placement}:${conversationId}`;
 }
 
-export function Sidebar({ conversations, projects, boards, providers, newProviderId, onNewProviderChange, activeId, activeProjectId, activeBoardId, activeNoteId, notesBridge, notesRevision, onNotesChanged, mode, settingsOpen, collapsed, appVersion, onSearch, onSelect, onSelectProject, onSelectBoard, onSelectNote, onModeChange, onNew, onRenameConversation, onMoveConversation, onArchiveConversation, onPinConversation, onDeleteConversation, onCreateProject, onRenameProject, onDeleteProject, onCreateBoard, onRenameBoard, onDeleteBoard, onReorderBoard, onMoveTaskToBoard, onSettings, onToggle }: {
+export function Sidebar({ conversations, projects, boards, providers, newProviderId, onNewProviderChange, activeId, activeProjectId, activeBoardId, activeNoteId, notesBridge, notesRevision, onNotesChanged, mode, settingsOpen, collapsed, appVersion, onSearch, onSelect, onSelectProject, onSelectBoard, onSelectNote, onModeChange, onNew, onRenameConversation, onMoveConversation, onArchiveConversation, onPinConversation, onDeleteConversation, onCreateProject, onChooseProjectWorkspace, onSetProjectWorkspace, onRenameProject, onDeleteProject, onCreateBoard, onRenameBoard, onDeleteBoard, onReorderBoard, onMoveTaskToBoard, onSettings, onToggle }: {
   conversations: Conversation[];
   projects: ConversationProject[];
   boards: TaskBoard[];
@@ -69,7 +69,9 @@ export function Sidebar({ conversations, projects, boards, providers, newProvide
   onArchiveConversation: (id: string, archived: boolean) => Promise<void>;
   onPinConversation: (id: string, pinned: boolean) => Promise<void>;
   onDeleteConversation: (id: string) => Promise<void>;
-  onCreateProject: (name: string) => Promise<void>;
+  onCreateProject: (name: string, workspacePath?: string | null) => Promise<void>;
+  onChooseProjectWorkspace: () => Promise<string | null>;
+  onSetProjectWorkspace: (id: string, workspacePath: string | null) => Promise<void>;
   onRenameProject: (id: string, name: string) => Promise<void>;
   onDeleteProject: (id: string) => Promise<void>;
   onCreateBoard: (name: string) => Promise<void>;
@@ -102,6 +104,7 @@ export function Sidebar({ conversations, projects, boards, providers, newProvide
   const [projectConversationLimits, setProjectConversationLimits] = useState<Record<string, number>>({});
   const [creatingProject, setCreatingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectWorkspace, setNewProjectWorkspace] = useState<string | null>(null);
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
   const [renamingProjectName, setRenamingProjectName] = useState('');
   const [projectMenuId, setProjectMenuIdState] = useState<string | null>(null);
@@ -269,8 +272,16 @@ export function Sidebar({ conversations, projects, boards, providers, newProvide
   const createProject = async () => {
     const name = newProjectName.trim();
     if (!name) return;
-    try { await onCreateProject(name); setNewProjectName(''); setCreatingProject(false); setProjectError(null); }
+    try { await onCreateProject(name, newProjectWorkspace); setNewProjectName(''); setNewProjectWorkspace(null); setCreatingProject(false); setProjectError(null); }
     catch (reason) { setProjectError(reason instanceof Error ? reason.message : '新建项目失败。'); }
+  };
+  const chooseNewProjectWorkspace = async () => {
+    try { const selected = await onChooseProjectWorkspace(); if (selected) setNewProjectWorkspace(selected); }
+    catch (reason) { setProjectError(reason instanceof Error ? reason.message : '选择工作目录失败。'); }
+  };
+  const chooseProjectWorkspace = async (project: ConversationProject) => {
+    try { const selected = await onChooseProjectWorkspace(); if (selected) await onSetProjectWorkspace(project.id, selected); setProjectError(null); }
+    catch (reason) { setProjectError(reason instanceof Error ? reason.message : '设置工作目录失败。'); }
   };
   const renameProject = async () => {
     const id = renamingProjectId;
@@ -348,9 +359,9 @@ export function Sidebar({ conversations, projects, boards, providers, newProvide
     return <div className={`project-group ${project.id === activeProjectId && !settingsOpen ? 'is-active' : ''} ${dragOverProjectId === project.id ? 'is-drop-target' : ''} ${openConversationMenu?.section === 'projects' && projectConversations.some((item) => conversationMenuKey(item.id, `project:${project.id}`) === openConversationMenu.key) ? 'has-open-menu' : ''}`} key={project.id} onDragOver={(event) => { if (!draggedConversationId) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDragOverProjectId(project.id); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragOverProjectId(null); }} onDrop={(event) => { event.preventDefault(); const conversationId = event.dataTransfer.getData('text/yuheng-conversation'); const conversation = conversations.find((item) => item.id === conversationId); setDragOverProjectId(null); setDraggedConversationId(null); if (conversation) void moveConversation(conversation, project.id); }}>
       <div className="project-row" title={draggedConversationId ? `移至${project.name}` : undefined}>
         {renamingProjectId === project.id && !collapsed ? <input className="project-rename-input" autoFocus value={renamingProjectName} onChange={(event) => setRenamingProjectName(event.target.value)} onBlur={() => void renameProject()} onKeyDown={(event) => submitOnEnter(event, renameProject)} aria-label="项目名称" /> : <>
-          <button type="button" className="project-select" onClick={toggleProject} title={project.name} aria-expanded={isExpanded}>{isExpanded ? <FolderOpen size={15} /> : <Folder size={15} />} {!collapsed && <span>{project.name}</span>}</button>
+          <button type="button" className="project-select" onClick={toggleProject} title={project.workspacePath ? `${project.name}\n工作目录：${project.workspacePath}` : project.name} aria-expanded={isExpanded}>{isExpanded ? <FolderOpen size={15} /> : <Folder size={15} />} {!collapsed && <span>{project.name}</span>}</button>
           {!collapsed && <button type="button" className="project-menu-button" onClick={() => setProjectMenuId((current) => current === project.id ? null : project.id)} aria-expanded={projectMenuId === project.id} aria-label={`管理${project.name}`} title="管理项目"><MoreHorizontal size={15} /></button>}
-          {projectMenuId === project.id && !collapsed && <div className="project-menu"><button type="button" onClick={() => { setRenamingProjectId(project.id); setRenamingProjectName(project.name); setProjectMenuId(null); }}><Pencil size={13} />重命名</button>{project.id !== 'personal' && <button type="button" className="is-destructive" onClick={() => void deleteProject(project)}><Trash2 size={13} />删除项目</button>}</div>}
+          {projectMenuId === project.id && !collapsed && <div className="project-menu"><button type="button" onClick={() => { setRenamingProjectId(project.id); setRenamingProjectName(project.name); setProjectMenuId(null); }}><Pencil size={13} />重命名</button><button type="button" onClick={() => { setProjectMenuId(null); void chooseProjectWorkspace(project); }}><FolderOpen size={13} />设置工作目录</button>{project.workspacePath && <button type="button" onClick={() => { setProjectMenuId(null); void onSetProjectWorkspace(project.id, null); }}>使用默认工作目录</button>}{project.id !== 'personal' && <button type="button" className="is-destructive" onClick={() => void deleteProject(project)}><Trash2 size={13} />删除项目</button>}</div>}
         </>}
       </div>
       {isExpanded && !collapsed && <div className="project-conversations">{projectPage.visible.map((conversation) => renderConversation(conversation, `project:${project.id}`, 'projects'))}{!projectConversations.length && <div className="project-empty">暂无会话</div>}{projectPage.hasMore && <button type="button" className="project-show-more" onClick={() => setProjectConversationLimits((current) => ({ ...current, [project.id]: projectPage.nextVisibleCount }))}>展开显示</button>}</div>}
@@ -393,7 +404,7 @@ export function Sidebar({ conversations, projects, boards, providers, newProvide
                 {sectionMenu === section && !collapsed && <div className="sidebar-section-menu"><div className="sidebar-section-menu-label">整理侧边栏</div>{(['projects', 'list'] as SidebarOrganization[]).map((organization) => <button type="button" key={organization} onClick={() => { setSidebarOrganization(organization); setSectionMenu(null); }}><span>{sidebarOrganization === organization ? <Check size={14} /> : <span className="sidebar-menu-placeholder" />}</span>{organization === 'projects' ? '按项目' : '在一个列表中'}</button>)}<div className="sidebar-section-menu-label">聊天排序方式</div>{(['priority', 'recent', 'manual'] as SidebarSort[]).map((sort) => <button type="button" key={sort} onClick={() => { setSidebarSort(sort); setSectionMenu(null); }}><span>{sidebarSort === sort ? <Check size={14} /> : <span className="sidebar-menu-placeholder" />}</span>{sort === 'priority' ? '优先级' : sort === 'recent' ? '最近更新' : '手动排序'}</button>)}<div className="sidebar-section-menu-separator" /><button type="button" onClick={() => { setShowArchived((current) => !current); setSectionMenu(null); }}><span>{showArchived ? <ArchiveRestore size={14} /> : <Archive size={14} />}</span>{showArchived ? '返回进行中' : '查看已归档'}</button></div>}
               </div>
               {(!isCollapsed || closingSections[section]) && <div className={`sidebar-section-content ${isCollapsed ? 'is-closing' : ''}`}>
-                {section === 'projects' ? <>{creatingProject && !collapsed && <div className="project-create-row"><Folder size={15} /><input autoFocus value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} onBlur={() => { if (!newProjectName.trim()) setCreatingProject(false); }} onKeyDown={(event) => submitOnEnter(event, createProject)} placeholder="项目名称" aria-label="新项目名称" /><button type="button" onClick={() => void createProject()} disabled={!newProjectName.trim()}>添加</button></div>}{projects.map(renderProject)}{!projects.length && <div className="conversation-list-empty">暂无项目</div>}</> : sectionConversations.length ? sectionConversations.map((conversation) => renderConversation(conversation, `section:${section}`, section)) : <div className="conversation-list-empty">{showArchived ? '暂无已归档会话' : '暂无最近会话'}</div>}
+                {section === 'projects' ? <>{creatingProject && !collapsed && <div className="project-create-row"><Folder size={15} /><input autoFocus value={newProjectName} onChange={(event) => setNewProjectName(event.target.value)} onBlur={() => { if (!newProjectName.trim()) setCreatingProject(false); }} onKeyDown={(event) => submitOnEnter(event, createProject)} placeholder="项目名称" aria-label="新项目名称" /><button type="button" className="project-workspace-button" onClick={() => void chooseNewProjectWorkspace()} aria-label="选择项目工作目录" title={newProjectWorkspace ?? '选择工作目录'}><FolderOpen size={14} /></button><button type="button" onClick={() => void createProject()} disabled={!newProjectName.trim()}>添加</button></div>}{projects.map(renderProject)}{!projects.length && <div className="conversation-list-empty">暂无项目</div>}</> : sectionConversations.length ? sectionConversations.map((conversation) => renderConversation(conversation, `section:${section}`, section)) : <div className="conversation-list-empty">{showArchived ? '暂无已归档会话' : '暂无最近会话'}</div>}
               </div>}
             </section>;
           })}

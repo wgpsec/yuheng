@@ -30,7 +30,7 @@ export type CodexPetValidationIssue = { code: 'dimensions' | 'blank_frames' | 'f
 export type CodexPetStateReport = { state: PetState; row: number; frameCount: number; frameDurationMs: number; source: 'manifest' | 'default'; fallback: boolean };
 export type CodexPetCompatibilityReport = { status: 'compatible' | 'warning' | 'invalid'; expected: { width: number; height: number }; actual: { width: number; height: number }; states: CodexPetStateReport[]; issues: CodexPetValidationIssue[] };
 export type CodexPetCatalogEntry = { id: string; displayName: string; description?: string; source: 'codex' | 'yuheng'; manifest?: CodexPetManifest; report: CodexPetCompatibilityReport };
-export type ConversationProject = { id: string; name: string; position: number };
+export type ConversationProject = { id: string; name: string; position: number; workspacePath?: string | null };
 export type Conversation = { id: string; projectId: string; title: string; updatedAt: string; archived: boolean; pinned: boolean; providerId?: string; profileId: AgentProfileId };
 export type Message = { id: string; role: 'user' | 'assistant'; content: string; createdAt: string };
 export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
@@ -156,8 +156,10 @@ export type DesktopBridge = {
     list: (includeArchived?: boolean) => Promise<Conversation[]>;
     projects: {
       list: () => Promise<ConversationProject[]>;
-      create: (name: string) => Promise<ConversationProject>;
+      chooseWorkspace: () => Promise<string | null>;
+      create: (name: string, workspacePath?: string | null) => Promise<ConversationProject>;
       rename: (projectId: string, name: string) => Promise<ConversationProject>;
+      setWorkspace: (projectId: string, workspacePath: string | null) => Promise<ConversationProject>;
       delete: (projectId: string) => Promise<void>;
     };
     messages: (conversationId: string) => Promise<Message[]>;

@@ -52,16 +52,22 @@ function uniqueAttachmentName(name: string, used: Set<string>): string {
 export class ProjectRunWorkspace {
   constructor(private readonly workspaceRoot: string) {}
 
-  projectDirectory(projectId: string): string {
+  projectDirectory(projectId: string, workspacePath?: string | null): string {
+    if (workspacePath?.trim()) return path.resolve(workspacePath);
     return path.join(this.workspaceRoot, 'projects', safeSegment(projectId, 'project id'));
   }
 
-  async prepare(projectId: string, runId: string, attachments: WorkspaceAttachment[]): Promise<PreparedRunWorkspace> {
-    const projectDirectory = this.projectDirectory(projectId);
+  async prepare(projectId: string, runId: string, attachments: WorkspaceAttachment[], workspacePath?: string | null): Promise<PreparedRunWorkspace> {
+    const customWorkspace = Boolean(workspacePath?.trim());
+    const projectDirectory = this.projectDirectory(projectId, workspacePath);
+    if (customWorkspace) {
+      const existing = await fs.stat(projectDirectory).catch(() => null);
+      if (!existing?.isDirectory()) throw new Error('项目工作目录不存在或不是文件夹。');
+    }
     const runDirectory = path.join(projectDirectory, '.yuheng', 'runs', safeSegment(runId, 'run id'));
     const attachmentDirectory = path.join(runDirectory, 'attachments');
     await fs.mkdir(attachmentDirectory, { recursive: true, mode: 0o700 });
-    await fs.chmod(projectDirectory, 0o700);
+    if (!customWorkspace) await fs.chmod(projectDirectory, 0o700);
     await fs.chmod(runDirectory, 0o700);
     // Keep the staging directory writable while files are copied, then lock it
     // before handing the workspace to the agent.

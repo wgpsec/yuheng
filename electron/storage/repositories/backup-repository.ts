@@ -29,7 +29,7 @@ export class BackupRepository extends RepositoryBase {
   private exportSnapshot(): FullBackupSnapshot {
     const rows = (sql: string): Row[] => this.db.prepare(sql).all() as Row[];
     return {
-      conversationProjects: rows('SELECT id, name, position, created_at AS createdAt, updated_at AS updatedAt FROM conversation_projects').map((r) => ({ id: String(r.id), name: String(r.name), position: Number(r.position), createdAt: String(r.createdAt), updatedAt: String(r.updatedAt) })),
+      conversationProjects: rows('SELECT id, name, position, workspace_path AS workspacePath, created_at AS createdAt, updated_at AS updatedAt FROM conversation_projects').map((r) => ({ id: String(r.id), name: String(r.name), position: Number(r.position), workspacePath: r.workspacePath == null ? null : String(r.workspacePath), createdAt: String(r.createdAt), updatedAt: String(r.updatedAt) })),
       conversations: rows('SELECT id, project_id AS projectId, title, description, archived, pinned, reasoning_level AS reasoningLevel, provider_id AS providerId, profile_id AS profileId, created_at AS createdAt, updated_at AS updatedAt FROM conversations').map((r) => ({ id: String(r.id), projectId: String(r.projectId), title: String(r.title), description: String(r.description ?? ''), archived: Number(r.archived) === 1, pinned: Number(r.pinned) === 1, reasoningLevel: String(r.reasoningLevel ?? 'default'), providerId: r.providerId == null ? null : String(r.providerId), profileId: String(r.profileId), createdAt: String(r.createdAt), updatedAt: String(r.updatedAt) })),
       messages: rows('SELECT id, conversation_id AS conversationId, role, content, created_at AS createdAt FROM messages').map((r) => ({ id: String(r.id), conversationId: String(r.conversationId), role: r.role as 'user' | 'assistant', content: String(r.content), createdAt: String(r.createdAt) })),
       runs: rows('SELECT id, conversation_id AS conversationId, input_message_id AS inputMessageId, status, error, started_at AS startedAt, finished_at AS finishedAt, input_tokens AS inputTokens, output_tokens AS outputTokens, total_tokens AS totalTokens, context_tokens AS contextTokens, context_window AS contextWindow, context_percent AS contextPercent FROM runs').map((r) => ({ id: String(r.id), conversationId: String(r.conversationId), inputMessageId: r.inputMessageId == null ? null : String(r.inputMessageId), status: r.status as RunStatus, error: r.error == null ? null : String(r.error), startedAt: String(r.startedAt), finishedAt: r.finishedAt == null ? null : String(r.finishedAt), inputTokens: r.inputTokens == null ? null : Number(r.inputTokens), outputTokens: r.outputTokens == null ? null : Number(r.outputTokens), totalTokens: r.totalTokens == null ? null : Number(r.totalTokens), contextTokens: r.contextTokens == null ? null : Number(r.contextTokens), contextWindow: r.contextWindow == null ? null : Number(r.contextWindow), contextPercent: r.contextPercent == null ? null : Number(r.contextPercent) })),
@@ -60,11 +60,11 @@ export class BackupRepository extends RepositoryBase {
     const now = new Date().toISOString();
 
     this.transaction(() => {
-      const insertProject = this.db.prepare('INSERT INTO conversation_projects (id, name, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?)');
+      const insertProject = this.db.prepare('INSERT INTO conversation_projects (id, name, position, workspace_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)');
       for (const item of snapshot.conversationProjects) {
         const id = crypto.randomUUID();
         projectMap.set(item.id, id);
-        insertProject.run(id, item.name, item.position, item.createdAt || now, item.updatedAt || now);
+        insertProject.run(id, item.name, item.position, item.workspacePath ?? null, item.createdAt || now, item.updatedAt || now);
       }
       if (!projectMap.has('personal')) projectMap.set('personal', 'personal');
 
@@ -191,6 +191,15 @@ export class BackupRepository extends RepositoryBase {
   }
 
   private defaultProviderId(): string | null {
+    const configured = this.db.prepare('SELECT value FROM app_settings WHERE key = ?').get('default_provider_id') as Row | undefined;
+    if (configured) {
+      try {
+        const id = JSON.parse(String(configured.value));
+        if (typeof id === 'string' && id.trim() && this.db.prepare('SELECT 1 FROM provider_profiles WHERE id = ?').get(id.trim())) return id.trim();
+      } catch {
+        // Ignore damaged settings and retain the legacy deterministic fallback.
+      }
+    }
     const row = this.db.prepare("SELECT id FROM provider_profiles ORDER BY CASE WHEN id = 'default' THEN 0 ELSE 1 END, updated_at ASC, id ASC LIMIT 1").get() as Row | undefined;
     return row ? String(row.id) : null;
   }

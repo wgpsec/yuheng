@@ -11,6 +11,8 @@ import { validateCanonicalBusinessSchema, validateCanonicalSchema } from '../ele
 import { createLegacyV1Fixture } from './fixtures/storage-v1';
 
 describe('MigrationRunner', () => {
+  const targetVersion = migrations.length;
+
   it('migrates an empty database through the continuous registry', () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-migration-empty-'));
     const databasePath = path.join(dataDir, 'yuheng.sqlite');
@@ -21,14 +23,14 @@ describe('MigrationRunner', () => {
         id: 'verified-empty-snapshot',
         status: 'verified',
         sourceVersion: 0,
-        targetVersion: 2,
+        targetVersion,
         sha256: 'fixture',
       });
 
-      assert.deepEqual(result, { sourceVersion: 0, targetVersion: 2, appliedVersions: [1, 2], adoptedVersions: [] });
+      assert.deepEqual(result, { sourceVersion: 0, targetVersion, appliedVersions: [1, 2, 3], adoptedVersions: [] });
       const state = runner.inspect();
-      assert.equal(state.userVersion, 2);
-      assert.deepEqual(state.ledger.map(({ version, source }) => [version, source]), [[1, 'applied'], [2, 'applied']]);
+      assert.equal(state.userVersion, targetVersion);
+      assert.deepEqual(state.ledger.map(({ version, source }) => [version, source]), [[1, 'applied'], [2, 'applied'], [3, 'applied']]);
       assert.equal(validateCanonicalBusinessSchema(owner.database).ok, true);
       assert.deepEqual(validateCanonicalSchema(owner.database, migrations), { ok: true, violations: [] });
     } finally {
@@ -45,9 +47,9 @@ describe('MigrationRunner', () => {
       const owner = DatabaseOwner.open(databasePath);
       try {
         const runner = new MigrationRunner(owner, migrations, { appVersion: '0.3.2' });
-        const result = runner.migrate({ id: `snapshot-${variant}`, status: 'verified', sourceVersion: 1, targetVersion: 2, sha256: 'fixture' });
+        const result = runner.migrate({ id: `snapshot-${variant}`, status: 'verified', sourceVersion: 1, targetVersion, sha256: 'fixture' });
         assert.deepEqual(result.adoptedVersions, [1], variant);
-        assert.deepEqual(result.appliedVersions, [2], variant);
+        assert.deepEqual(result.appliedVersions, [2, 3], variant);
         assert.equal(validateCanonicalBusinessSchema(owner.database).ok, true, variant);
         assert.equal(owner.database.prepare('SELECT title FROM conversations WHERE id = ?').get('fixture-conversation')?.title, '脱敏会话');
         assert.equal(owner.database.prepare('SELECT model FROM provider_profiles').get()?.model, 'fixture-model');
@@ -72,13 +74,13 @@ describe('MigrationRunner', () => {
     const owner = DatabaseOwner.open(path.join(dataDir, 'yuheng.sqlite'));
     try {
       const runner = new MigrationRunner(owner, migrations, { appVersion: '0.3.2' });
-      runner.migrate({ id: 'snapshot', status: 'verified', sourceVersion: 0, targetVersion: 2, sha256: 'fixture' });
+      runner.migrate({ id: 'snapshot', status: 'verified', sourceVersion: 0, targetVersion, sha256: 'fixture' });
       const before = owner.database.prepare("SELECT group_concat(type || ':' || name || ':' || COALESCE(sql, ''), '|') AS schema FROM sqlite_master ORDER BY type, name").get()?.schema;
-      const repeated = runner.migrate({ id: 'unused', status: 'verified', sourceVersion: 2, targetVersion: 2, sha256: 'unused' });
+      const repeated = runner.migrate({ id: 'unused', status: 'verified', sourceVersion: targetVersion, targetVersion, sha256: 'unused' });
       const after = owner.database.prepare("SELECT group_concat(type || ':' || name || ':' || COALESCE(sql, ''), '|') AS schema FROM sqlite_master ORDER BY type, name").get()?.schema;
-      assert.deepEqual(repeated, { sourceVersion: 2, targetVersion: 2, appliedVersions: [], adoptedVersions: [] });
+      assert.deepEqual(repeated, { sourceVersion: targetVersion, targetVersion, appliedVersions: [], adoptedVersions: [] });
       assert.equal(after, before);
-      assert.equal(runner.inspect().ledger.length, 2);
+      assert.equal(runner.inspect().ledger.length, targetVersion);
     } finally {
       owner.close();
       fs.rmSync(dataDir, { recursive: true, force: true });
@@ -100,7 +102,7 @@ describe('MigrationRunner', () => {
     try {
       const runner = new MigrationRunner(owner, failingRegistry, { appVersion: '0.3.2' });
       assert.throws(
-        () => runner.migrate({ id: 'snapshot', status: 'verified', sourceVersion: 0, targetVersion: 2, sha256: 'fixture' }),
+        () => runner.migrate({ id: 'snapshot', status: 'verified', sourceVersion: 0, targetVersion: failingRegistry.length, sha256: 'fixture' }),
         /fixture migration failure/,
       );
       assert.equal(owner.database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'migration_should_rollback'").get(), undefined);
@@ -117,10 +119,10 @@ describe('MigrationRunner', () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-migration-newer-'));
     const owner = DatabaseOwner.open(path.join(dataDir, 'yuheng.sqlite'));
     try {
-      owner.database.exec('CREATE TABLE future_data (id TEXT PRIMARY KEY); PRAGMA user_version = 3;');
+      owner.database.exec('CREATE TABLE future_data (id TEXT PRIMARY KEY); PRAGMA user_version = 4;');
       const runner = new MigrationRunner(owner, migrations, { appVersion: '0.3.2' });
       assert.throws(
-        () => runner.migrate({ id: 'snapshot', status: 'verified', sourceVersion: 3, targetVersion: 2, sha256: 'fixture' }),
+        () => runner.migrate({ id: 'snapshot', status: 'verified', sourceVersion: 4, targetVersion, sha256: 'fixture' }),
         (error: unknown) => error instanceof Error && 'code' in error && error.code === 'schema_too_new',
       );
       assert.equal(owner.database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get(), undefined);
@@ -152,7 +154,7 @@ describe('MigrationRunner', () => {
           .run(fixture.version, fixture.migrationName, fixture.checksum, '0.3.2', 'applied', '2026-08-31T00:00:00.000Z');
         const runner = new MigrationRunner(owner, migrations, { appVersion: '0.3.2' });
         assert.throws(
-          () => runner.migrate({ id: 'snapshot', status: 'verified', sourceVersion: fixture.version, targetVersion: 2, sha256: 'fixture' }),
+          () => runner.migrate({ id: 'snapshot', status: 'verified', sourceVersion: fixture.version, targetVersion, sha256: 'fixture' }),
           (error: unknown) => error instanceof Error && 'code' in error && error.code === fixture.code,
           fixture.name,
         );

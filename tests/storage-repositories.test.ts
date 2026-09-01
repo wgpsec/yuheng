@@ -190,6 +190,27 @@ describe('storage repository domain behavior', () => {
       closeRepositoryHarness(target);
     }
   });
+
+  it('persists project workspaces and carries them through logical backups', () => {
+    const source = createRepositoryHarness();
+    const target = createRepositoryHarness();
+    try {
+      const project = source.repositories.conversations.createProject('外部工作区', '/Users/example/project');
+      assert.equal(source.repositories.conversations.projectWorkspace(project.id), '/Users/example/project');
+      assert.equal(source.repositories.conversations.setProjectWorkspace(project.id, null).workspacePath, null);
+      source.repositories.conversations.setProjectWorkspace(project.id, '/Users/example/project');
+
+      const snapshot = source.repositories.backups.export();
+      const exported = snapshot.conversationProjects.find(({ id }) => id === project.id);
+      assert.equal(exported?.workspacePath, '/Users/example/project');
+      target.repositories.backups.import(snapshot);
+      const imported = target.repositories.conversations.listProjects().find(({ name }) => name === '外部工作区');
+      assert.equal(imported?.workspacePath, '/Users/example/project');
+    } finally {
+      closeRepositoryHarness(source);
+      closeRepositoryHarness(target);
+    }
+  });
 });
 
 describe('storage repository transaction boundaries', () => {
