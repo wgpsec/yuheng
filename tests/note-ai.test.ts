@@ -9,4 +9,6 @@ test('builds explicit prompts for note AI actions and scopes the note context', 
   assert.match(prompt, /决定下周发布/);
   assert.match(prompt, /仅基于这篇笔记/);
   assert.match(buildNoteAiPrompt({ title: '草稿', content: '内容' }, 'custom', '改成三条要点'), /改成三条要点/);
+  assert.match(buildNoteAiPrompt({ title: '草稿', content: '内容', knowledgeBaseName: '开发知识库', pagePath: 'API / 鉴权' }, 'summarize'), /知识库：开发知识库/);
+  assert.match(buildNoteAiPrompt({ title: '草稿', content: '内容', knowledgeBaseName: '开发知识库', pagePath: 'API / 鉴权' }, 'summarize'), /页面路径：API \/ 鉴权/);
 });

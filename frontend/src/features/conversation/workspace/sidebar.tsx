@@ -1,11 +1,11 @@
 import { Archive, ArchiveRestore, Check, ChevronDown, Folder, FolderOpen, LayoutDashboard, ListTodo, MessageSquare, MessageSquarePlus, MoreHorizontal, NotebookPen, PanelLeftClose, PanelLeftOpen, Pencil, Pin, PinOff, Plus, Search, Settings, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState, type KeyboardEvent, type SetStateAction } from 'react';
 import { createPortal } from 'react-dom';
-import type { AgentProfileId, ConversationProject, TaskBoard } from '../../../contracts/desktop-bridge';
+import type { AgentProfileId, ConversationProject, KnowledgeBase, TaskBoard } from '../../../contracts/desktop-bridge';
 import type { DesktopBridge } from '../../../contracts/desktop-bridge';
 import { NotesNavigation } from '../../notes/notes-navigation';
 
-export type Conversation = { id: string; projectId: string; title: string; providerId?: string; profileId?: AgentProfileId; updatedAt?: string; time?: string; archived?: boolean; pinned?: boolean };
+export type Conversation = { id: string; projectId: string; title: string; providerId?: string; profileId?: AgentProfileId; updatedAt?: string; time?: string; archived?: boolean; pinned?: boolean; workspacePath?: string | null };
 type WorkspaceMode = 'conversation' | 'tasks' | 'notes';
 type ConversationSection = 'pinned' | 'projects' | 'recent';
 type SidebarSort = 'priority' | 'recent' | 'manual';
@@ -38,7 +38,7 @@ export function conversationMenuKey(conversationId: string, placement: string) {
   return `${placement}:${conversationId}`;
 }
 
-export function Sidebar({ conversations, projects, boards, activeId, activeProjectId, activeBoardId, activeNoteId, notesBridge, notesRevision, onNotesChanged, mode, settingsOpen, collapsed, appVersion, onSearch, onSelect, onSelectProject, onSelectBoard, onSelectNote, onModeChange, onNew, onRenameConversation, onMoveConversation, onArchiveConversation, onPinConversation, onDeleteConversation, onCreateProject, onChooseProjectWorkspace, onSetProjectWorkspace, onRenameProject, onDeleteProject, onCreateBoard, onRenameBoard, onDeleteBoard, onReorderBoard, onMoveTaskToBoard, onSettings, onToggle }: {
+export function Sidebar({ conversations, projects, boards, activeId, activeProjectId, activeBoardId, activeNoteId, notesBridge, notesRevision, knowledgeBases, activeKnowledgeBaseId, onSelectKnowledgeBase, onNotesChanged, mode, settingsOpen, collapsed, appVersion, onSearch, onSelect, onSelectProject, onSelectBoard, onSelectNote, onModeChange, onNew, onRenameConversation, onMoveConversation, onArchiveConversation, onPinConversation, onDeleteConversation, onChooseConversationWorkspace, onSetConversationWorkspace, onCreateProject, onChooseProjectWorkspace, onSetProjectWorkspace, onRenameProject, onDeleteProject, onCreateBoard, onRenameBoard, onDeleteBoard, onReorderBoard, onMoveTaskToBoard, onSettings, onToggle }: {
   conversations: Conversation[];
   projects: ConversationProject[];
   boards: TaskBoard[];
@@ -48,6 +48,9 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
   activeNoteId: string | null;
   notesBridge?: DesktopBridge;
   notesRevision?: number;
+  knowledgeBases?: KnowledgeBase[];
+  activeKnowledgeBaseId?: string | null;
+  onSelectKnowledgeBase?: (id: string) => void;
   onNotesChanged?: () => void;
   mode: WorkspaceMode;
   settingsOpen: boolean;
@@ -65,6 +68,8 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
   onArchiveConversation: (id: string, archived: boolean) => Promise<void>;
   onPinConversation: (id: string, pinned: boolean) => Promise<void>;
   onDeleteConversation: (id: string) => Promise<void>;
+  onChooseConversationWorkspace: () => Promise<string | null>;
+  onSetConversationWorkspace: (id: string, workspacePath: string | null) => Promise<void>;
   onCreateProject: (name: string, workspacePath?: string | null) => Promise<void>;
   onChooseProjectWorkspace: () => Promise<string | null>;
   onSetProjectWorkspace: (id: string, workspacePath: string | null) => Promise<void>;
@@ -72,7 +77,7 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
   onDeleteProject: (id: string) => Promise<void>;
   onCreateBoard: (name: string) => Promise<void>;
   onRenameBoard: (id: string, name: string) => Promise<void>;
-  onDeleteBoard: (id: string, replacementBoardId: string) => Promise<void>;
+  onDeleteBoard: (id: string) => Promise<void>;
   onReorderBoard: (id: string, targetId: string) => Promise<void>;
   onMoveTaskToBoard: (id: string, boardId: string) => Promise<void>;
   onSettings: () => void;
@@ -84,7 +89,6 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
   const [renamingBoardName, setRenamingBoardName] = useState('');
   const [boardError, setBoardError] = useState<string | null>(null);
   const [deleteBoardTarget, setDeleteBoardTarget] = useState<TaskBoard | null>(null);
-  const [replacementBoardId, setReplacementBoardId] = useState('');
   const [boardMenuId, setBoardMenuIdState] = useState<string | null>(null);
   const [draggedBoardId, setDraggedBoardId] = useState<string | null>(null);
   const [dragOverBoardId, setDragOverBoardId] = useState<string | null>(null);
@@ -191,12 +195,11 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
   const deleteBoard = async (board: TaskBoard) => {
     if (boards.length <= 1) { setBoardError('至少保留一个任务看板。'); setBoardMenuId(null); return; }
     setDeleteBoardTarget(board);
-    setReplacementBoardId('');
     setBoardMenuId(null);
   };
   const confirmDeleteBoard = async () => {
     if (!deleteBoardTarget) return;
-    try { await onDeleteBoard(deleteBoardTarget.id, replacementBoardId); setDeleteBoardTarget(null); setReplacementBoardId(''); setBoardError(null); }
+    try { await onDeleteBoard(deleteBoardTarget.id); setDeleteBoardTarget(null); setBoardError(null); }
     catch (reason) { setBoardError(reason instanceof Error ? reason.message : '删除任务看板失败。'); }
   };
   const reorderBoard = async (sourceId: string, targetId: string) => {
@@ -250,6 +253,14 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
     try { await onMoveConversation(conversation.id, projectId); setExpandedProjects((current) => ({ ...current, [projectId]: true })); setOpenConversationMenu(null); setConversationError(null); }
     catch (reason) { setConversationError(reason instanceof Error ? reason.message : '移动会话失败。'); }
   };
+  const chooseConversationWorkspace = async (conversation: Conversation) => {
+    try {
+      const workspacePath = await onChooseConversationWorkspace();
+      if (workspacePath === null) return;
+      await onSetConversationWorkspace(conversation.id, workspacePath);
+      setConversationError(null);
+    } catch (reason) { setConversationError(reason instanceof Error ? reason.message : '设置运行目录失败。'); }
+  };
   const deleteConversation = async (conversation: Conversation) => {
     if (!window.confirm(`删除“${conversation.title}”及其所有消息和运行记录？此操作无法撤销。`)) return;
     try { await onDeleteConversation(conversation.id); setOpenConversationMenu(null); setConversationError(null); }
@@ -278,7 +289,7 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
     catch (reason) { setProjectError(reason instanceof Error ? reason.message : '修改项目名称失败。'); }
   };
   const deleteProject = async (project: ConversationProject) => {
-    if (!window.confirm(`删除项目“${project.name}”？其中的会话会移入“个人事务”。`)) return;
+    if (!window.confirm(`删除项目“${project.name}”？其中的会话会移入“默认”。`)) return;
     try { await onDeleteProject(project.id); setProjectMenuId(null); setProjectError(null); }
     catch (reason) { setProjectError(reason instanceof Error ? reason.message : '删除项目失败。'); }
   };
@@ -328,7 +339,7 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
     const menuKey = conversationMenuKey(conversation.id, placement);
     return (
     <div className={`conversation-row ${!settingsOpen && activeId === conversation.id ? 'is-selected' : ''} ${openConversationMenu?.key === menuKey ? 'has-open-menu' : ''} ${sidebarSort === 'manual' ? 'is-sortable' : ''} ${draggedConversationId === conversation.id ? 'is-dragging' : ''}`} key={conversation.id} draggable={!collapsed} onDragStart={(event) => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/yuheng-conversation', conversation.id); setDraggedConversationId(conversation.id); }} onDragEnd={() => { setDraggedConversationId(null); setDragOverProjectId(null); }} onDragOver={(event) => { if (sidebarSort === 'manual') { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }} onDrop={(event) => { event.preventDefault(); reorderConversation(event.dataTransfer.getData('text/yuheng-conversation'), conversation.id); setDraggedConversationId(null); setDragOverProjectId(null); }}>
-      {renamingConversation?.key === menuKey && !collapsed ? <input className="conversation-rename-input" autoFocus value={renamingConversationTitle} onChange={(event) => setRenamingConversationTitle(event.target.value)} onBlur={() => void renameConversation()} onKeyDown={(event) => submitOnEnter(event, renameConversation)} aria-label="会话名称" /> : <><button type="button" className="conversation-item" onClick={() => onSelect(conversation.id)} title={conversation.title}><span className="conversation-title">{collapsed ? conversation.title.slice(0, 1) : conversation.title}</span>{!collapsed && <time>{conversation.time ?? (conversation.updatedAt ? new Date(conversation.updatedAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) : '')}</time>}</button>{!collapsed && <button type="button" className="conversation-menu-button" onClick={() => setOpenConversationMenu((current) => current?.key === menuKey ? null : { key: menuKey, section })} aria-expanded={openConversationMenu?.key === menuKey} aria-label={`管理${conversation.title}`} title="管理会话"><MoreHorizontal size={15} /></button>}{openConversationMenu?.key === menuKey && !collapsed && <div className="conversation-menu"><button type="button" onClick={() => { setRenamingConversation({ id: conversation.id, key: menuKey }); setRenamingConversationTitle(conversation.title); setOpenConversationMenu(null); }}><Pencil size={13} />重命名</button><button type="button" onClick={() => void pinConversation(conversation)}>{conversation.pinned ? <PinOff size={13} /> : <Pin size={13} />}{conversation.pinned ? '取消置顶' : '置顶'}</button>{projects.filter((item) => item.id !== conversation.projectId).map((item) => <button type="button" key={item.id} onClick={() => void moveConversation(conversation, item.id)}><Folder size={13} />移至 {item.name}</button>)}<button type="button" onClick={() => void archiveConversation(conversation)}>{conversation.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}{conversation.archived ? '恢复归档' : '归档'}</button><button type="button" className="is-destructive" onClick={() => void deleteConversation(conversation)}><Trash2 size={13} />删除</button></div>}</>}
+      {renamingConversation?.key === menuKey && !collapsed ? <input className="conversation-rename-input" autoFocus value={renamingConversationTitle} onChange={(event) => setRenamingConversationTitle(event.target.value)} onBlur={() => void renameConversation()} onKeyDown={(event) => submitOnEnter(event, renameConversation)} aria-label="会话名称" /> : <><button type="button" className="conversation-item" onClick={() => onSelect(conversation.id)} title={conversation.title}><span className="conversation-title">{collapsed ? conversation.title.slice(0, 1) : conversation.title}</span>{!collapsed && <time>{conversation.time ?? (conversation.updatedAt ? new Date(conversation.updatedAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) : '')}</time>}</button>{!collapsed && <button type="button" className="conversation-menu-button" onClick={() => setOpenConversationMenu((current) => current?.key === menuKey ? null : { key: menuKey, section })} aria-expanded={openConversationMenu?.key === menuKey} aria-label={`管理${conversation.title}`} title="管理会话"><MoreHorizontal size={15} /></button>}{openConversationMenu?.key === menuKey && !collapsed && <div className="conversation-menu"><button type="button" onClick={() => { setRenamingConversation({ id: conversation.id, key: menuKey }); setRenamingConversationTitle(conversation.title); setOpenConversationMenu(null); }}><Pencil size={13} />重命名</button><button type="button" onClick={() => void pinConversation(conversation)}>{conversation.pinned ? <PinOff size={13} /> : <Pin size={13} />}{conversation.pinned ? '取消置顶' : '置顶'}</button><button type="button" onClick={() => { setOpenConversationMenu(null); void chooseConversationWorkspace(conversation); }}><FolderOpen size={13} />设置运行目录</button>{conversation.workspacePath && <button type="button" onClick={() => { setOpenConversationMenu(null); void onSetConversationWorkspace(conversation.id, null); }}>使用项目默认目录</button>}{projects.filter((item) => item.id !== conversation.projectId).map((item) => <button type="button" key={item.id} onClick={() => void moveConversation(conversation, item.id)}><Folder size={13} />移至 {item.name}</button>)}<button type="button" onClick={() => void archiveConversation(conversation)}>{conversation.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}{conversation.archived ? '恢复归档' : '归档'}</button><button type="button" className="is-destructive" onClick={() => void deleteConversation(conversation)}><Trash2 size={13} />删除</button></div>}</>}
     </div>
     );
   };
@@ -371,8 +382,8 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
         <button type="button" role="tab" aria-selected={mode === 'tasks'} className={mode === 'tasks' ? 'is-selected' : ''} onClick={() => onModeChange('tasks')} title="任务">
           <ListTodo size={15} aria-hidden="true" />{mode === 'tasks' && <span>任务</span>}
         </button>
-        <button type="button" role="tab" aria-selected={mode === 'notes'} className={mode === 'notes' ? 'is-selected' : ''} onClick={() => onModeChange('notes')} title="笔记">
-          <NotebookPen size={15} aria-hidden="true" />{mode === 'notes' && <span>笔记</span>}
+        <button type="button" role="tab" aria-selected={mode === 'notes'} className={mode === 'notes' ? 'is-selected' : ''} onClick={() => onModeChange('notes')} title="知识库">
+          <NotebookPen size={15} aria-hidden="true" />{mode === 'notes' && <span>知识库</span>}
         </button>
       </div>
 
@@ -416,7 +427,7 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
           {creatingBoard && !collapsed && <div className="task-board-create-row"><LayoutDashboard size={15} /><input autoFocus value={newBoardName} onChange={(event) => setNewBoardName(event.target.value)} onBlur={() => { if (!newBoardName.trim()) setCreatingBoard(false); }} onKeyDown={(event) => submitOnEnter(event, createBoard)} placeholder="看板名称" aria-label="新任务看板名称" /><button type="button" onClick={() => void createBoard()} disabled={!newBoardName.trim()}>添加</button></div>}
           {boardError && !collapsed && <p className="sidebar-board-error" role="alert">{boardError}</p>}
         </nav>
-      </> : <NotesNavigation bridge={notesBridge} activeNoteId={activeNoteId} refreshKey={notesRevision} onSelect={onSelectNote} onChanged={onNotesChanged} />}
+      </> : <NotesNavigation bridge={notesBridge} activeNoteId={activeNoteId} activeKnowledgeBaseId={activeKnowledgeBaseId} knowledgeBases={knowledgeBases} refreshKey={notesRevision} onSelect={onSelectNote} onSelectKnowledgeBase={onSelectKnowledgeBase} onChanged={onNotesChanged} />}
       </div>
 
       <div className="sidebar-bottom">
@@ -434,10 +445,8 @@ export function Sidebar({ conversations, projects, boards, activeId, activeProje
       </div>
       {deleteBoardTarget && createPortal(<div className="provider-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDeleteBoardTarget(null); }}>
         <section className="provider-modal task-board-delete-modal" role="dialog" aria-modal="true" aria-labelledby="task-board-delete-title">
-          <div className="provider-modal-header"><div><h2 id="task-board-delete-title">删除看板</h2><p>有任务时会迁移到你选择的看板；空看板可以直接删除。</p></div><button type="button" className="icon-button" onClick={() => setDeleteBoardTarget(null)} aria-label="取消删除"><X size={16} /></button></div>
-          <label>迁移到<select value={replacementBoardId} onChange={(event) => setReplacementBoardId(event.target.value)}><option value="">不迁移（仅限空看板）</option>{boards.filter((board) => board.id !== deleteBoardTarget.id).map((board) => <option value={board.id} key={board.id}>{board.name}</option>)}</select></label>
-          <p className="task-board-delete-help">任务类型会按名称匹配；没有同名类型时进入目标看板第一列。源看板有任务时必须选择迁移目标。</p>
-          <div className="provider-modal-actions"><button type="button" onClick={() => setDeleteBoardTarget(null)}>取消</button><button type="button" className="is-destructive" onClick={() => void confirmDeleteBoard()}>{replacementBoardId ? '删除并迁移' : '删除看板'}</button></div>
+          <div className="provider-modal-header"><div><h2 id="task-board-delete-title">删除看板</h2><p>看板及其中的全部任务、任务类型都会被永久删除，此操作不可撤销。</p></div><button type="button" className="icon-button" onClick={() => setDeleteBoardTarget(null)} aria-label="取消删除"><X size={16} /></button></div>
+          <div className="provider-modal-actions"><button type="button" onClick={() => setDeleteBoardTarget(null)}>取消</button><button type="button" className="is-destructive" onClick={() => void confirmDeleteBoard()}>删除看板</button></div>
         </section>
       </div>, document.body)}
       {creatingProject && createPortal(<div className="provider-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setCreatingProject(false); }}>

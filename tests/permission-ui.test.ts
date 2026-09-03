@@ -12,6 +12,6 @@ describe('conversation permission controls', () => {
     assert.match(composer, /value: 'full_session'/);
     assert.match(renderer, /if \(mode === 'full_session'\)[\s\S]*?setPermissionConfirmationOpen\(true\)/);
     assert.match(renderer, /savePermissionMode\('full_session'\)/);
-    assert.match(renderer, /此设置会在退出应用后失效/);
+    assert.match(renderer, /此设置会保存在当前会话中/);
   });
 });

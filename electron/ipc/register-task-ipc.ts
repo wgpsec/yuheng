@@ -122,7 +122,9 @@ export function registerTaskIpc(dependencies: TaskIpcDependencies): void {
     const boards = store.reorderTaskBoards(assertText(boardId, 'boardId'), assertText(targetBoardId, 'targetBoardId')); dependencies.taskBoardsChanged(); return boards;
   });
   registrar.main('tasks:boards:delete', (_event, boardId: unknown, replacementBoardId: unknown) => {
-    store.deleteTaskBoard(assertText(boardId, 'boardId'), typeof replacementBoardId === 'string' ? replacementBoardId.trim() : '');
+    // Keep accepting the legacy second argument for older renderer bundles;
+    // board deletion is destructive and never migrates tasks anymore.
+    store.deleteTaskBoard(assertText(boardId, 'boardId'), typeof replacementBoardId === 'string' ? replacementBoardId.trim() : undefined);
     dependencies.taskBoardsChanged();
   });
   registrar.main('tasks:list', (_event, boardId: unknown) => store.listTasks(assertText(boardId, 'boardId')));

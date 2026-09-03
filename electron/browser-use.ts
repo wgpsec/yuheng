@@ -1,9 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 export const BROWSER_USE_VERSION = '0.13.8';
+const execFileAsync = promisify(execFile);
 const BROWSER_USE_START_TIMEOUT_MS = 5 * 60_000;
 export const BROWSER_TOOL_NAMES = [
   'browser_navigate',
@@ -30,6 +34,43 @@ type BrowserUseSupervisorOptions = {
   dataDir: string;
   createClient?: (dataDir: string) => Promise<BrowserUseClient>;
 };
+
+export type BrowserUseEnvironment = {
+  status: 'ready' | 'unavailable';
+  command: string | null;
+  version: string | null;
+  installCommand: string;
+  message: string;
+};
+
+export function browserUseCommandCandidates(env: NodeJS.ProcessEnv = process.env, homeDir = os.homedir()): string[] {
+  const configured = env.YUHENG_BROWSER_USE_COMMAND?.trim();
+  return [...new Set([
+    configured,
+    path.join(homeDir, '.local', 'bin', 'uvx'),
+    '/opt/homebrew/bin/uvx',
+    '/usr/local/bin/uvx',
+    'uvx',
+  ].filter((value): value is string => Boolean(value)))];
+}
+
+export async function diagnoseBrowserUseEnvironment(options: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  exec?: (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>;
+} = {}): Promise<BrowserUseEnvironment> {
+  const run = options.exec ?? (async (command, args) => execFileAsync(command, args, { timeout: 4_000 }));
+  for (const command of browserUseCommandCandidates(options.env, options.homeDir)) {
+    try {
+      const result = await run(command, ['--version']);
+      const version = `${result.stdout}\n${result.stderr}`.trim().split(/\r?\n/)[0] || null;
+      return { status: 'ready', command, version, installCommand: 'curl -LsSf https://astral.sh/uv/install.sh | sh', message: 'uvx 已就绪；首次使用 Browser Use 仍会联网下载运行依赖。' };
+    } catch {
+      // Try the next known location. The final result is surfaced in Settings.
+    }
+  }
+  return { status: 'unavailable', command: null, version: null, installCommand: 'curl -LsSf https://astral.sh/uv/install.sh | sh', message: '未找到 uvx。请在终端执行安装命令后重新检查，或将 uvx 加入 PATH。' };
+}
 
 function writeIsolatedConfig(dataDir: string): void {
   const configDir = path.join(dataDir, 'config');
@@ -59,8 +100,10 @@ function writeIsolatedConfig(dataDir: string): void {
 async function createMcpClient(dataDir: string): Promise<BrowserUseClient> {
   writeIsolatedConfig(dataDir);
   const configDir = path.join(dataDir, 'config');
+  const environment = await diagnoseBrowserUseEnvironment();
+  if (environment.status !== 'ready' || !environment.command) throw new Error(environment.message);
   const transport = new StdioClientTransport({
-    command: process.env.YUHENG_BROWSER_USE_COMMAND || 'uvx',
+    command: environment.command,
     args: ['--from', `browser-use==${BROWSER_USE_VERSION}`, 'browser-use', '--mcp'],
     env: {
       ...getDefaultEnvironment(),

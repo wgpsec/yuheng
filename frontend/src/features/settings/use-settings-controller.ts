@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AppInfo, BrowserUseConfig, ComputerUseConfig, DesktopBridge, ProviderConfig } from '../../contracts/desktop-bridge';
+import type { AppInfo, BrowserUseConfig, BrowserUseEnvironment, ComputerUseConfig, ComputerUseEnvironment, DesktopBridge, ProviderConfig } from '../../contracts/desktop-bridge';
 import { normalizeSettingsSection, type SettingsSection } from '../../production/settings-section';
 
 export type ThemeName = 'dark' | 'light' | 'graphite' | 'notion';
@@ -11,6 +11,8 @@ export function useSettingsController(bridge: DesktopBridge | undefined) {
   const [defaultProviderId, setDefaultProviderId] = useState<string | null>(null);
   const [browserUse, setBrowserUse] = useState<BrowserUseConfig>({ enabled: false });
   const [computerUse, setComputerUse] = useState<ComputerUseConfig>({ enabled: false });
+  const [browserEnvironment, setBrowserEnvironment] = useState<BrowserUseEnvironment | null>(null);
+  const [computerEnvironment, setComputerEnvironment] = useState<ComputerUseEnvironment | null>(null);
   const [theme, setTheme] = useState<ThemeName>(() => {
     const saved = typeof localStorage !== 'undefined' ? localStorage.getItem('yuheng-theme') : null;
     return saved === 'light' || saved === 'graphite' || saved === 'notion' ? saved : 'dark';
@@ -59,5 +61,5 @@ export function useSettingsController(bridge: DesktopBridge | undefined) {
   }, [theme]);
   useEffect(() => () => { if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current); }, []);
 
-  return { appInfo, provider, setProvider, providers, setProviders, defaultProviderId, setDefaultProviderId, browserUse, setBrowserUse, computerUse, setComputerUse, theme, setTheme, mounted, closing, initialSection, open, close, error, clearError: () => setError(null) };
+  return { appInfo, provider, setProvider, providers, setProviders, defaultProviderId, setDefaultProviderId, browserUse, setBrowserUse, computerUse, setComputerUse, browserEnvironment, setBrowserEnvironment, computerEnvironment, setComputerEnvironment, theme, setTheme, mounted, closing, initialSection, open, close, error, clearError: () => setError(null) };
 }

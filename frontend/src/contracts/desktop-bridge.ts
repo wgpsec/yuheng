@@ -3,7 +3,7 @@ export type AppInfo = { name: string; version: string; platform: string; arch: s
 export type ReasoningLevel = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type ReasoningSelection = 'default' | ReasoningLevel;
 export type ToolPermissionMode = 'cautious' | 'smart' | 'full_session';
-export type ProviderConfig = { id: string; protocol: ProviderProtocol; baseUrl: string; model: string; displayName: string; contextWindow: number; hasApiKey: boolean };
+export type ProviderConfig = { id: string; protocol: ProviderProtocol; baseUrl: string; model: string; displayName: string; contextWindow: number; supportsImages?: boolean; hasApiKey: boolean };
 export type ProviderTestResult = { ok: boolean; status: number | null; latencyMs: number; error?: string };
 export type AgentProfileId = 'assistant' | 'analyst' | 'auditor';
 export type AgentProfile = { id: AgentProfileId; name: string; description: string; timeContext: 'full' | 'none' };
@@ -14,7 +14,21 @@ export const AGENT_PROFILES: readonly AgentProfile[] = [
 ];
 export const DEFAULT_AGENT_PROFILE_ID: AgentProfileId = 'assistant';
 export type BrowserUseConfig = { enabled: boolean };
+export type BrowserUseEnvironment = { status: 'ready' | 'unavailable'; command: string | null; version: string | null; installCommand: string; message: string };
 export type ComputerUseConfig = { enabled: boolean };
+export type AgentSkillCatalogEntry = {
+  id: string;
+  name: string;
+  description: string;
+  source: 'yuheng' | 'user';
+  requiredCapability?: 'computerUse';
+  path: string;
+  available: boolean;
+  enabled?: boolean;
+};
+export type ConversationCapabilityOverride = 'default' | 'enabled' | 'disabled';
+export type ConversationCapabilities = { browserUse: ConversationCapabilityOverride; computerUse: ConversationCapabilityOverride };
+export type ComputerUseEnvironment = { status: 'ready' | 'unavailable' | 'needs_permission'; platform: string; arch: string; macOS: string | null; helperPath: string | null; helperInstalled: boolean; permissions: 'granted' | 'required' | 'unknown'; accessibility: boolean | null; screenRecording: 'granted' | 'denied' | 'not-determined' | 'restricted' | 'unknown'; permissionTarget: string | null; message: string; installCommand: string };
 export type PetFeedbackMode = 'important' | 'all' | 'hidden';
 export type DesktopPetConfig = { enabled: boolean; petId?: string; scale?: number; locked?: boolean; opacity?: number; alwaysOnTop?: boolean; edgeSnap?: boolean; inertia?: boolean; boundaryBounce?: boolean; feedbackMode?: PetFeedbackMode; completionFeedback?: boolean; errorFeedback?: boolean; approvalFeedback?: boolean; soundEnabled?: boolean; mutedUntil?: number };
 export type PetState = 'idle' | 'thinking' | 'working' | 'attention' | 'error' | 'celebrate';
@@ -31,7 +45,7 @@ export type CodexPetStateReport = { state: PetState; row: number; frameCount: nu
 export type CodexPetCompatibilityReport = { status: 'compatible' | 'warning' | 'invalid'; expected: { width: number; height: number }; actual: { width: number; height: number }; states: CodexPetStateReport[]; issues: CodexPetValidationIssue[] };
 export type CodexPetCatalogEntry = { id: string; displayName: string; description?: string; source: 'codex' | 'yuheng'; manifest?: CodexPetManifest; report: CodexPetCompatibilityReport };
 export type ConversationProject = { id: string; name: string; position: number; workspacePath?: string | null };
-export type Conversation = { id: string; projectId: string; title: string; updatedAt: string; archived: boolean; pinned: boolean; providerId?: string; profileId: AgentProfileId };
+export type Conversation = { id: string; projectId: string; title: string; updatedAt: string; archived: boolean; pinned: boolean; providerId?: string; profileId: AgentProfileId; workspacePath?: string | null };
 export type Message = { id: string; role: 'user' | 'assistant'; content: string; createdAt: string };
 export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
 export type RunArtifact = { id: string; kind: 'browser_screenshot' | 'computer_screenshot'; mimeType: string; size: number; url: string };
@@ -45,14 +59,15 @@ export type TaskType = { id: string; boardId: string; name: string; position: nu
 export type TaskPriority = 'low' | 'medium' | 'high';
 export type Task = { id: string; boardId: string; title: string; description: string; status: TaskStatus; priority: TaskPriority; dueAt: string | null; remindAt: string | null; reminderFiredAt: string | null; sourceConversationId: string | null; createdAt: string; updatedAt: string };
 export type NoteProperties = { status: string | null; date: string | null; tags: string[] };
-export type Note = { id: string; parentId: string | null; title: string; content: string; icon: string | null; cover: string | null; properties: NoteProperties; position: number; archived: boolean; favorite: boolean; lastOpenedAt: string | null; createdAt: string; updatedAt: string };
+export type KnowledgeBase = { id: string; name: string; icon: string | null; color: string | null; position: number; archived: boolean; createdAt: string; updatedAt: string };
+export type Note = { id: string; knowledgeBaseId?: string; parentId: string | null; title: string; content: string; icon: string | null; cover: string | null; properties: NoteProperties; position: number; archived: boolean; favorite: boolean; lastOpenedAt: string | null; createdAt: string; updatedAt: string };
 export type NoteVersion = { id: string; noteId: string; title: string; content: string; icon: string | null; cover: string | null; properties: NoteProperties; createdAt: string };
 export type NoteCover = { id: string; mimeType: string; size: number; url: string };
 export type CreateNoteInput = { title?: string; parentId?: string | null; content?: string; icon?: string | null };
 export type CreateTaskInput = Pick<Task, 'title'> & Partial<Pick<Task, 'description' | 'status' | 'priority' | 'dueAt' | 'remindAt' | 'sourceConversationId'>>;
 export type UpdateTaskInput = Partial<Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'dueAt' | 'remindAt'>>;
 export type SearchResultKind = 'conversation' | 'message' | 'task' | 'board' | 'note';
-export type SearchResult = { kind: SearchResultKind; id: string; parentId: string | null; title: string; snippet: string; context: string; updatedAt: string; archived: boolean };
+export type SearchResult = { kind: SearchResultKind; id: string; parentId: string | null; title: string; snippet: string; context: string; updatedAt: string; archived: boolean; knowledgeBaseId?: string };
 export type TaskEvent =
   | { type: 'changed'; task: Task }
   | { type: 'types_changed'; boardId: string }
@@ -152,6 +167,13 @@ export type DesktopBridge = {
   search: {
     query: (text: string, limit?: number) => Promise<SearchResult[]>;
   };
+  skills: {
+    list: () => Promise<AgentSkillCatalogEntry[]>;
+    choose: () => Promise<string | null>;
+    import: (skillPath: string) => Promise<AgentSkillCatalogEntry[]>;
+    save: (skills: Array<{ id: string; enabled: boolean }>) => Promise<AgentSkillCatalogEntry[]>;
+    delete: (skillId: string) => Promise<AgentSkillCatalogEntry[]>;
+  };
   conversations: {
     list: (includeArchived?: boolean) => Promise<Conversation[]>;
     projects: {
@@ -167,8 +189,18 @@ export type DesktopBridge = {
     create: (title?: string, projectId?: string, providerId?: string, profileId?: AgentProfileId) => Promise<Conversation>;
     setProvider: (conversationId: string, providerId: string) => Promise<Conversation>;
     setProfile: (conversationId: string, profileId: AgentProfileId) => Promise<Conversation>;
+    capabilities: {
+      get: (conversationId: string) => Promise<ConversationCapabilities>;
+      save: (conversationId: string, capabilities: ConversationCapabilities) => Promise<ConversationCapabilities>;
+    };
+    skills: {
+      get: (conversationId: string) => Promise<string[]>;
+      save: (conversationId: string, skillIds: string[]) => Promise<string[]>;
+    };
     rename: (conversationId: string, title: string) => Promise<Conversation>;
     move: (conversationId: string, projectId: string) => Promise<Conversation>;
+    chooseWorkspace: () => Promise<string | null>;
+    setWorkspace: (conversationId: string, workspacePath: string | null) => Promise<Conversation>;
     archive: (conversationId: string, archived: boolean) => Promise<Conversation>;
     pin: (conversationId: string, pinned: boolean) => Promise<Conversation>;
     delete: (conversationId: string) => Promise<void>;
@@ -180,17 +212,21 @@ export type DesktopBridge = {
     list: () => Promise<ProviderConfig[]>;
     getDefault: () => Promise<string | null>;
     setDefault: (providerId: string) => Promise<string>;
-    save: (config: { id?: string; protocol: ProviderProtocol; baseUrl: string; model: string; displayName: string; contextWindow: number; apiKey: string }) => Promise<ProviderConfig>;
+    save: (config: { id?: string; protocol: ProviderProtocol; baseUrl: string; model: string; displayName: string; contextWindow: number; supportsImages?: boolean; apiKey: string }) => Promise<ProviderConfig>;
     delete: (providerId: string) => Promise<void>;
-    test: (config: { id?: string; protocol: ProviderProtocol; baseUrl: string; model: string; displayName?: string; contextWindow?: number; apiKey?: string }) => Promise<ProviderTestResult>;
+    test: (config: { id?: string; protocol: ProviderProtocol; baseUrl: string; model: string; displayName?: string; contextWindow?: number; supportsImages?: boolean; apiKey?: string }) => Promise<ProviderTestResult>;
   };
   browserUse: {
     get: () => Promise<BrowserUseConfig>;
     save: (config: BrowserUseConfig) => Promise<BrowserUseConfig>;
+    diagnose: () => Promise<BrowserUseEnvironment>;
   };
   computerUse: {
     get: () => Promise<ComputerUseConfig>;
     save: (config: ComputerUseConfig) => Promise<ComputerUseConfig>;
+    diagnose: () => Promise<ComputerUseEnvironment>;
+    openPermission: (kind: 'accessibility' | 'screenRecording') => Promise<void>;
+    install: () => Promise<ComputerUseEnvironment>;
   };
   pet: {
     get: () => Promise<DesktopPetConfig>;
@@ -231,7 +267,7 @@ export type DesktopBridge = {
       create: (name: string) => Promise<TaskBoard>;
       rename: (id: string, name: string) => Promise<TaskBoard>;
       reorder: (id: string, targetId: string) => Promise<TaskBoard[]>;
-      delete: (id: string, replacementBoardId: string) => Promise<void>;
+      delete: (id: string, replacementBoardId?: string) => Promise<void>;
     };
     list: (boardId: string) => Promise<Task[]>;
     takeOpenRequest: () => Promise<{ boardId: string; taskId: string } | null>;
@@ -256,6 +292,21 @@ export type DesktopBridge = {
   };
   notes: {
     list: (includeArchived?: boolean) => Promise<Note[]>;
+    knowledgeBases: {
+      list: (includeArchived?: boolean) => Promise<KnowledgeBase[]>;
+      get: (id: string) => Promise<KnowledgeBase | null>;
+      getDefault: () => Promise<KnowledgeBase>;
+      getActiveId: () => Promise<string | null>;
+      setActiveId: (id: string) => Promise<string>;
+      create: (input?: { name?: string; icon?: string | null; color?: string | null }) => Promise<KnowledgeBase>;
+      update: (id: string, patch: { name?: string; icon?: string | null; color?: string | null; archived?: boolean }) => Promise<KnowledgeBase>;
+      delete: (id: string) => Promise<void>;
+      reorder: (id: string, targetId: string) => Promise<KnowledgeBase[]>;
+    };
+    listInKnowledgeBase: (knowledgeBaseId: string, includeArchived?: boolean) => Promise<Note[]>;
+    createInKnowledgeBase: (knowledgeBaseId: string, input?: CreateNoteInput | string, parentId?: string | null) => Promise<Note>;
+    moveToKnowledgeBase: (id: string, knowledgeBaseId: string, parentId?: string | null, targetId?: string) => Promise<Note>;
+    copyToKnowledgeBase: (id: string, knowledgeBaseId: string, parentId?: string | null) => Promise<Note>;
     get: (id: string) => Promise<Note | null>;
     create: (input?: CreateNoteInput | string, parentId?: string | null) => Promise<Note>;
     update: (id: string, patch: { title?: string; content?: string; archived?: boolean; icon?: string | null; cover?: string | null; favorite?: boolean; properties?: NoteProperties }) => Promise<Note>;

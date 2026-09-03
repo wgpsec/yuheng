@@ -12,6 +12,7 @@ export class SearchRepository extends RepositoryBase {
   initialize(): void {
     try {
       this.transaction(() => {
+        for (const trigger of ['search_notes_insert', 'search_notes_update', 'search_notes_delete']) this.db.exec(`DROP TRIGGER IF EXISTS ${trigger}`);
         this.db.exec(`
         CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
           kind UNINDEXED, entity_id UNINDEXED, parent_id UNINDEXED, title, content,
@@ -71,12 +72,12 @@ export class SearchRepository extends RepositoryBase {
         END;
         CREATE TRIGGER IF NOT EXISTS search_notes_insert AFTER INSERT ON notes BEGIN
           INSERT INTO search_index(kind, entity_id, parent_id, title, content, context, updated_at, archived)
-          VALUES ('note', NEW.id, NEW.parent_id, NEW.title, NEW.content, '笔记', NEW.updated_at, NEW.archived);
+          SELECT 'note', NEW.id, NEW.parent_id, NEW.title, NEW.content, name, NEW.updated_at, NEW.archived FROM knowledge_bases WHERE id = NEW.knowledge_base_id;
         END;
         CREATE TRIGGER IF NOT EXISTS search_notes_update AFTER UPDATE ON notes BEGIN
           DELETE FROM search_index WHERE kind = 'note' AND entity_id = OLD.id;
           INSERT INTO search_index(kind, entity_id, parent_id, title, content, context, updated_at, archived)
-          VALUES ('note', NEW.id, NEW.parent_id, NEW.title, NEW.content, '笔记', NEW.updated_at, NEW.archived);
+          SELECT 'note', NEW.id, NEW.parent_id, NEW.title, NEW.content, name, NEW.updated_at, NEW.archived FROM knowledge_bases WHERE id = NEW.knowledge_base_id;
         END;
         CREATE TRIGGER IF NOT EXISTS search_notes_delete AFTER DELETE ON notes BEGIN
           DELETE FROM search_index WHERE kind = 'note' AND entity_id = OLD.id;
@@ -128,7 +129,7 @@ export class SearchRepository extends RepositoryBase {
       INSERT INTO search_index(kind, entity_id, parent_id, title, content, context, updated_at, archived)
         SELECT 'task', tasks.id, board_id, tasks.title, tasks.description, task_boards.name, tasks.updated_at, 0 FROM tasks JOIN task_boards ON task_boards.id = tasks.board_id;
       INSERT INTO search_index(kind, entity_id, parent_id, title, content, context, updated_at, archived)
-        SELECT 'note', id, parent_id, title, content, '笔记', updated_at, archived FROM notes;
+        SELECT 'note', notes.id, notes.parent_id, notes.title, notes.content, knowledge_bases.name, notes.updated_at, notes.archived FROM notes JOIN knowledge_bases ON knowledge_bases.id = notes.knowledge_base_id;
     `);
   }
 
@@ -136,7 +137,7 @@ export class SearchRepository extends RepositoryBase {
     const rows = this.db.prepare(`
       SELECT 'conversation' AS kind, id, NULL AS parentId, title, description AS content, '会话' AS context, updated_at AS updatedAt, archived, 0 AS sortPriority FROM conversations
       UNION ALL SELECT 'task', tasks.id, board_id, tasks.title, tasks.description, task_boards.name, tasks.updated_at, 0, 0 FROM tasks JOIN task_boards ON task_boards.id = tasks.board_id
-      UNION ALL SELECT 'note', id, parent_id, title, content, '笔记', COALESCE(last_opened_at, updated_at), archived, CASE WHEN favorite = 1 THEN 1 ELSE 0 END FROM notes
+      UNION ALL SELECT 'note', notes.id, notes.parent_id, notes.title, notes.content, knowledge_bases.name, COALESCE(notes.last_opened_at, notes.updated_at), notes.archived, CASE WHEN notes.favorite = 1 THEN 1 ELSE 0 END FROM notes JOIN knowledge_bases ON knowledge_bases.id = notes.knowledge_base_id
       ORDER BY sortPriority DESC, updatedAt DESC LIMIT ?`).all(limit) as Row[];
     return rows.map((row) => this.map(row, ''));
   }
@@ -148,7 +149,7 @@ export class SearchRepository extends RepositoryBase {
       UNION ALL SELECT 'message', messages.id, conversation_id, conversations.title, messages.content, CASE messages.role WHEN 'user' THEN '你' ELSE '玉衡' END, messages.created_at, conversations.archived FROM messages JOIN conversations ON conversations.id = messages.conversation_id WHERE messages.content LIKE ? ESCAPE '\\'
       UNION ALL SELECT 'task', tasks.id, board_id, tasks.title, tasks.description, task_boards.name, tasks.updated_at, 0 FROM tasks JOIN task_boards ON task_boards.id = tasks.board_id WHERE tasks.title LIKE ? ESCAPE '\\' OR tasks.description LIKE ? ESCAPE '\\'
       UNION ALL SELECT 'board', id, NULL, name, '', '任务看板', '', 0 FROM task_boards WHERE name LIKE ? ESCAPE '\\'
-      UNION ALL SELECT 'note', id, parent_id, title, content, '笔记', updated_at, archived FROM notes WHERE title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\'
+      UNION ALL SELECT 'note', notes.id, notes.parent_id, notes.title, notes.content, knowledge_bases.name, notes.updated_at, notes.archived FROM notes JOIN knowledge_bases ON knowledge_bases.id = notes.knowledge_base_id WHERE notes.title LIKE ? ESCAPE '\\' OR notes.content LIKE ? ESCAPE '\\'
       ORDER BY updatedAt DESC LIMIT ?`).all(pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, limit) as Row[];
     return rows.map((row) => this.map(row, query));
   }
@@ -156,7 +157,32 @@ export class SearchRepository extends RepositoryBase {
   private map(row: Row, query: string): SearchResult {
     const title = String(row.title ?? '');
     const content = String(row.content ?? row.snippet ?? '');
-    return { kind: row.kind as SearchResultKind, id: String(row.id), parentId: row.parentId == null ? null : String(row.parentId), title, snippet: snippet(content || title, query), context: String(row.context ?? ''), updatedAt: String(row.updatedAt ?? ''), archived: Boolean(row.archived) };
+    const kind = row.kind as SearchResultKind;
+    const id = String(row.id);
+    const knowledgeBaseId = kind === 'note' ? this.noteKnowledgeBaseId(id) : undefined;
+    return { kind, id, parentId: row.parentId == null ? null : String(row.parentId), title, snippet: snippet(content || title, query), context: kind === 'note' ? this.noteContext(id, String(row.context ?? '')) : String(row.context ?? ''), updatedAt: String(row.updatedAt ?? ''), archived: Boolean(row.archived), ...(knowledgeBaseId ? { knowledgeBaseId } : {}) };
+  }
+
+  private noteKnowledgeBaseId(id: string): string | undefined {
+    const row = this.db.prepare('SELECT knowledge_base_id AS knowledgeBaseId FROM notes WHERE id = ?').get(id) as Row | undefined;
+    return row?.knowledgeBaseId == null ? undefined : String(row.knowledgeBaseId);
+  }
+
+  private noteContext(id: string, fallback: string): string {
+    const first = this.db.prepare('SELECT knowledge_base_id AS knowledgeBaseId, parent_id AS parentId, title FROM notes WHERE id = ?').get(id) as Row | undefined;
+    if (!first) return fallback;
+    const base = this.db.prepare('SELECT name FROM knowledge_bases WHERE id = ?').get(String(first.knowledgeBaseId)) as Row | undefined;
+    const titles = [String(first.title)];
+    let parent = first.parentId == null ? null : String(first.parentId);
+    const seen = new Set<string>([id]);
+    while (parent && !seen.has(parent)) {
+      seen.add(parent);
+      const row = this.db.prepare('SELECT parent_id AS parentId, title FROM notes WHERE id = ?').get(parent) as Row | undefined;
+      if (!row) break;
+      titles.unshift(String(row.title));
+      parent = row.parentId == null ? null : String(row.parentId);
+    }
+    return `${String(base?.name ?? (fallback || '知识库'))} / ${titles.join(' / ')}`;
   }
 }
 

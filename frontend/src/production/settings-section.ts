@@ -1,6 +1,7 @@
 export type SettingsSection =
   | 'provider'
   | 'capabilities'
+  | 'skills'
   | 'appearance'
   | 'pet'
   | 'desktop'
@@ -10,6 +11,7 @@ export type SettingsSection =
 const settingsSections: readonly SettingsSection[] = [
   'provider',
   'capabilities',
+  'skills',
   'appearance',
   'pet',
   'desktop',

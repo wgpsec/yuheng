@@ -9,5 +9,6 @@ test('settings section input from a click event falls back to provider', () => {
 
 test('valid settings sections are preserved', () => {
   assert.equal(normalizeSettingsSection('pet'), 'pet');
+  assert.equal(normalizeSettingsSection('skills'), 'skills');
   assert.equal(normalizeSettingsSection('about'), 'about');
 });

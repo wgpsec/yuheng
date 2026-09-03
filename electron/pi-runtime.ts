@@ -4,6 +4,7 @@ import type { ProviderConfig } from './store';
 import { BROWSER_TOOL_NAMES, type BrowserToolName, type BrowserUseSupervisor } from './browser-use';
 import { executeTaskTool, TASK_TOOL_NAMES, type TaskToolName, type TaskToolService } from './task-agent-tools';
 import { COMPUTER_USE_TOOL_NAMES, computerUseExtensionPath, createComputerUseApprovalExtension, type ComputerUseApproval } from './computer-use';
+import { enabledSkillPaths, type UserSkillRegistration } from './skills';
 import { createSecurityToolExtension, type ToolAuthorizer } from './security-tools';
 
 export type PiImage = { type: 'image'; data: string; mimeType: string };
@@ -55,7 +56,39 @@ type BrowserUseRuntimeOptions = {
   requestApproval?: (toolCallId: string, toolName: BrowserToolName, args: Record<string, unknown>, signal?: AbortSignal) => Promise<boolean>;
 };
 type ComputerUseRuntimeOptions = { requestApproval?: ComputerUseApproval };
-type PiSessionFactoryOptions = { agentDir: string; yuhengSystemPrompt?: string; profilePrompt?: string; runtimeContext?: string; thinkingLevel?: ReasoningLevel; browserUse?: BrowserUseRuntimeOptions; computerUse?: ComputerUseRuntimeOptions; taskService?: TaskToolService; security?: { authorize: ToolAuthorizer } };
+type PiSessionFactoryOptions = { agentDir: string; applicationPath?: string; yuhengSystemPrompt?: string; profilePrompt?: string; runtimeContext?: string; thinkingLevel?: ReasoningLevel; browserUse?: BrowserUseRuntimeOptions; computerUse?: ComputerUseRuntimeOptions; skillPaths?: string[]; skillRegistrations?: UserSkillRegistration[]; selectedSkillIds?: string[]; taskService?: TaskToolService; security?: { authorize: ToolAuthorizer } };
+
+export function createToolCallIdResolver(): { start: (toolCallId: string | undefined, toolName: string) => string; end: (toolCallId: string | undefined, toolName: string) => string } {
+  let sequence = 0;
+  const pending = new Map<string, string[]>();
+  const nextId = () => `tool-${++sequence}`;
+  const removePending = (toolName: string, toolCallId: string): void => {
+    const queue = pending.get(toolName);
+    if (!queue) return;
+    const index = queue.indexOf(toolCallId);
+    if (index >= 0) queue.splice(index, 1);
+    if (queue.length === 0) pending.delete(toolName);
+  };
+  return {
+    start(toolCallId, toolName) {
+      const resolved = typeof toolCallId === 'string' && toolCallId.trim() ? toolCallId : nextId();
+      const queue = pending.get(toolName) ?? [];
+      queue.push(resolved);
+      pending.set(toolName, queue);
+      return resolved;
+    },
+    end(toolCallId, toolName) {
+      if (typeof toolCallId === 'string' && toolCallId.trim()) {
+        removePending(toolName, toolCallId);
+        return toolCallId;
+      }
+      const queue = pending.get(toolName);
+      const resolved = queue?.shift() ?? nextId();
+      if (queue?.length === 0) pending.delete(toolName);
+      return resolved;
+    },
+  };
+}
 
 const loadPiSdk = (): Promise<PiSdk> => {
   // Keep the CommonJS Electron bundle compatible with Pi's ESM package.
@@ -90,7 +123,6 @@ function messageText(content: unknown): string | null {
 
 /** Builds a Pi session using only the explicitly configured provider and tools. */
 export function createPiSessionFactory(config: ProviderConfig, apiKey: string, options: PiSessionFactoryOptions): PiSessionFactory {
-  if (options.browserUse && options.computerUse) throw new Error('Browser Use and Computer Use cannot be enabled together.');
   return async (input) => {
     const [sdk, typebox] = await Promise.all([loadPiSdk(), options.browserUse || options.taskService ? loadTypeBox() : Promise.resolve(undefined)]);
     const modelRuntime = await sdk.ModelRuntime.create({ allowModelNetwork: false, refreshOnCreate: false });
@@ -107,7 +139,7 @@ export function createPiSessionFactory(config: ProviderConfig, apiKey: string, o
         baseUrl: providerBaseUrl(config),
         reasoning: options.thinkingLevel !== undefined,
         thinkingLevelMap: options.thinkingLevel === undefined ? undefined : { xhigh: 'xhigh', max: 'max' },
-        input: ['text', 'image'],
+        input: config.supportsImages === true ? ['text', 'image'] : ['text'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: config.contextWindow,
         maxTokens: 4096,
@@ -116,12 +148,15 @@ export function createPiSessionFactory(config: ProviderConfig, apiKey: string, o
     const model = modelRuntime.getModel(providerId, config.model);
     if (!model) throw new Error(`无法加载模型配置：${config.model}`);
     const settingsManager = sdk.SettingsManager.inMemory({ compaction: { enabled: true } });
+    // Keep the provider capability as the final boundary before Pi serializes a request.
+    settingsManager.setBlockImages(config.supportsImages !== true);
     const resourceLoader = new sdk.DefaultResourceLoader({
       cwd: input.cwd,
       agentDir: path.join(options.agentDir, 'resources'),
       settingsManager,
       noExtensions: true,
       noSkills: true,
+      additionalSkillPaths: options.skillPaths ?? enabledSkillPaths(options.applicationPath, Boolean(options.computerUse), options.skillRegistrations ?? [], options.selectedSkillIds ?? []),
       noPromptTemplates: true,
       noThemes: true,
       noContextFiles: true,
@@ -317,10 +352,11 @@ export function createPiRuntime(options: { sessionFactory: PiSessionFactory }): 
           emitTerminal(input, { type: 'cancelled' });
           return;
         }
+        const toolCallIds = createToolCallIdResolver();
         unsubscribe = session.subscribe((event) => {
           if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') input.emit({ type: 'text_delta', delta: event.assistantMessageEvent.delta });
-          else if (event.type === 'tool_execution_start') input.emit({ type: 'tool_start', toolCallId: event.toolCallId ?? event.toolName, toolName: event.toolName, args: event.args });
-          else if (event.type === 'tool_execution_end') input.emit({ type: 'tool_end', toolCallId: event.toolCallId ?? event.toolName, toolName: event.toolName, isError: event.isError, result: event.result });
+          else if (event.type === 'tool_execution_start') input.emit({ type: 'tool_start', toolCallId: toolCallIds.start(event.toolCallId, event.toolName), toolName: event.toolName, args: event.args });
+          else if (event.type === 'tool_execution_end') input.emit({ type: 'tool_end', toolCallId: toolCallIds.end(event.toolCallId, event.toolName), toolName: event.toolName, isError: event.isError, result: event.result });
           else if (event.type === 'agent_end' && !event.willRetry) emitTerminal(input, completedEvent());
         });
         if (input.signal) {

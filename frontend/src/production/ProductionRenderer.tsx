@@ -1,13 +1,13 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, ArchiveRestore, ArrowLeft, Bell, BrainCircuit, Check, ChevronDown, Download, ExternalLink, FolderOpen, Info, KeyRound, ListTodo, MapPin, MessageSquare, NotebookPen, Palette, PanelLeftOpen, PawPrint, Play, RefreshCw, Trash2, Upload, X } from 'lucide-react';
+import { AlertTriangle, ArchiveRestore, ArrowLeft, Bell, BrainCircuit, Check, ChevronDown, Download, ExternalLink, FolderOpen, Info, KeyRound, ListTodo, MapPin, MessageSquare, NotebookPen, Palette, PanelLeftOpen, PawPrint, Play, RefreshCw, Sparkles, Trash2, Upload, X } from 'lucide-react';
 import { ThinkingOrb } from 'thinking-orbs';
 import { Composer } from '../features/conversation/workspace/composer';
 import { ConversationStart } from '../features/conversation/workspace/conversation-start';
 import { Sidebar, type Conversation as SidebarConversation } from '../features/conversation/workspace/sidebar';
 import { Transcript, type ToolActivity, type TranscriptMessage } from '../features/conversation/workspace/transcript';
 import { GlobalSearch } from '../features/search/global-search';
-import { AGENT_PROFILES, DEFAULT_AGENT_PROFILE_ID, type AgentProfileId, type AppInfo, type Attachment, type BrowserUseConfig, type ComputerUseConfig, type ConversationProject, type CreateTaskInput, type DesktopBridge, type DesktopPetConfig, type CodexPetCatalogEntry, type CodexPetManifest, type Message, type PetOpenTarget, type PetState, type ProviderConfig, type ProviderProtocol, type ProviderTestResult, type ReasoningLevel, type ReasoningSelection, type RunEvent, type RunSummary, type SearchResult, type Task, type TaskAsset, type TaskBoard, type TaskEvent, type TaskType, type ToolPermissionMode, type UpdateTaskInput } from '../contracts/desktop-bridge';
+import { AGENT_PROFILES, DEFAULT_AGENT_PROFILE_ID, type AgentProfileId, type AgentSkillCatalogEntry, type AppInfo, type Attachment, type BrowserUseConfig, type BrowserUseEnvironment, type ComputerUseConfig, type ComputerUseEnvironment, type ConversationCapabilities, type ConversationCapabilityOverride, type ConversationProject, type CreateTaskInput, type DesktopBridge, type DesktopPetConfig, type CodexPetCatalogEntry, type CodexPetManifest, type Message, type PetOpenTarget, type PetState, type ProviderConfig, type ProviderProtocol, type ProviderTestResult, type ReasoningLevel, type ReasoningSelection, type RunEvent, type RunSummary, type SearchResult, type Task, type TaskAsset, type TaskBoard, type TaskEvent, type TaskType, type ToolPermissionMode, type UpdateTaskInput } from '../contracts/desktop-bridge';
 import { releaseNotes } from '../features/settings/releases';
 import { taskDraftFromMessage } from '../features/tasks/task-from-message';
 import { buildNoteAiPrompt, type NoteAiAction } from '../features/notes/note-ai';
@@ -20,6 +20,7 @@ import { useTaskWorkspace } from '../features/tasks/use-task-workspace';
 import { useNoteWorkspace } from '../features/notes/use-note-workspace';
 import { useSettingsController, type ThemeName } from '../features/settings/use-settings-controller';
 import { useConversationWorkspace } from '../features/conversation/use-conversation-workspace';
+import { createRunCancellation } from './temporary-ai';
 const NotesWorkspace = lazy(() => import('../features/notes/notes-workspace').then((module) => ({ default: module.NotesWorkspace })));
 
 type WorkspaceTab = { id: string; type: 'conversation' | 'tasks' | 'notes'; resourceId: string };
@@ -41,7 +42,7 @@ const fallbackConversations: SidebarConversation[] = [
   { id: 'weekly-plan', projectId: 'personal', title: '本周计划', time: '昨天', pinned: false },
   { id: 'research', projectId: 'personal', title: '资料整理', time: '周一', pinned: false },
 ];
-const fallbackProjects: ConversationProject[] = [{ id: 'personal', name: '个人事务', position: 0 }];
+const fallbackProjects: ConversationProject[] = [{ id: 'personal', name: '默认', position: 0 }];
 const fallbackMessages: Record<string, TranscriptMessage[]> = {
   inbox: [],
   'weekly-plan': [{ id: 'weekly-1', role: 'user', content: '帮我整理一下本周最重要的三件事。', time: '昨天 18:42' }, { id: 'weekly-2', role: 'assistant', content: '可以。先从已经确认的事项开始：项目发布、供应商跟进和周五的复盘。', time: '昨天 18:43' }],
@@ -179,7 +180,9 @@ function PetManagementSettings({ config, pets, assets, loading, onRefresh, onSel
   </div>;
 }
 
-function SettingsWorkspace({ appInfo, current, providers, defaultProviderId, onDefaultProviderChange, browserUseConfig, computerUseConfig, desktopPetConfig: configuredDesktopPet, initialSection = 'provider', theme, onThemeChange, onClose, onSaved, onProvidersChange, onBrowserUseChange, onComputerUseChange, onDesktopPetChange }: { appInfo: AppInfo | null; current: ProviderConfig | null; providers: ProviderConfig[]; defaultProviderId: string | null; onDefaultProviderChange: (providerId: string) => void; browserUseConfig: BrowserUseConfig; computerUseConfig: ComputerUseConfig; desktopPetConfig?: DesktopPetConfig; initialSection?: SettingsSection; theme: ThemeName; onThemeChange: (theme: ThemeName) => void; onClose: () => void; onSaved: (provider: ProviderConfig) => void; onProvidersChange: (providers: ProviderConfig[]) => void; onBrowserUseChange: (config: BrowserUseConfig) => void; onComputerUseChange: (config: ComputerUseConfig) => void; onDesktopPetChange?: (config: DesktopPetConfig) => void }) {
+function SettingsWorkspace({ appInfo, current, providers, defaultProviderId, onDefaultProviderChange, browserUseConfig, computerUseConfig, browserEnvironment: initialBrowserEnvironment, computerEnvironment: initialComputerEnvironment, onBrowserEnvironmentChange, onComputerEnvironmentChange, desktopPetConfig: configuredDesktopPet, initialSection = 'provider', theme, onThemeChange, onClose, onSaved, onProvidersChange, onBrowserUseChange, onComputerUseChange, onDesktopPetChange }: { appInfo: AppInfo | null; current: ProviderConfig | null; providers: ProviderConfig[]; defaultProviderId: string | null; onDefaultProviderChange: (providerId: string) => void; browserUseConfig: BrowserUseConfig; computerUseConfig: ComputerUseConfig; browserEnvironment?: BrowserUseEnvironment | null; computerEnvironment?: ComputerUseEnvironment | null; onBrowserEnvironmentChange?: (environment: BrowserUseEnvironment) => void; onComputerEnvironmentChange?: (environment: ComputerUseEnvironment) => void; desktopPetConfig?: DesktopPetConfig; initialSection?: SettingsSection; theme: ThemeName; onThemeChange: (theme: ThemeName) => void; onClose: () => void; onSaved: (provider: ProviderConfig) => void; onProvidersChange: (providers: ProviderConfig[]) => void; onBrowserUseChange: (config: BrowserUseConfig) => void; onComputerUseChange: (config: ComputerUseConfig) => void; onDesktopPetChange?: (config: DesktopPetConfig) => void }) {
+  const [browserEnvironment, setBrowserEnvironment] = useState<BrowserUseEnvironment | null>(initialBrowserEnvironment ?? null);
+  const [computerEnvironment, setComputerEnvironment] = useState<ComputerUseEnvironment | null>(initialComputerEnvironment ?? null);
   const [localDesktopPet, setLocalDesktopPet] = useState<DesktopPetConfig>(configuredDesktopPet ?? { enabled: false });
   const [petOptions, setPetOptions] = useState<CodexPetCatalogEntry[]>([]);
   const [petAssets, setPetAssets] = useState<Record<string, { dataUrl: string; manifest: CodexPetManifest }>>({});
@@ -230,17 +233,38 @@ function SettingsWorkspace({ appInfo, current, providers, defaultProviderId, onD
   };
   const [activeSection, setActiveSection] = useState<SettingsSection>(() => normalizeSettingsSection(initialSection));
   useEffect(() => { setActiveSection(normalizeSettingsSection(initialSection)); }, [initialSection]);
+  useEffect(() => {
+    const activeBridge = getBridge();
+    if (!activeBridge || activeSection !== 'capabilities') return;
+    let disposed = false;
+    setBrowserChecking(true); setComputerChecking(true);
+    void Promise.all([activeBridge.browserUse.diagnose(), activeBridge.computerUse.diagnose()]).then(([browser, computer]) => {
+      if (disposed) return;
+      setBrowserEnvironment(browser); setComputerEnvironment(computer);
+    }).catch((reason) => {
+      if (disposed) return;
+      const message = reason instanceof Error ? reason.message : '能力环境检查失败，请重启玉衡后重试。';
+      setBrowserError(message); setComputerError(message);
+    }).finally(() => {
+      if (disposed) return;
+      setBrowserChecking(false); setComputerChecking(false);
+    });
+    return () => { disposed = true; };
+  }, [activeSection]);
   const [protocol, setProtocol] = useState<ProviderProtocol>(current?.protocol ?? 'openai');
   const [editingProviderId, setEditingProviderId] = useState(current?.id ?? '');
   const [baseUrl, setBaseUrl] = useState(current?.baseUrl ?? 'https://api.openai.com/v1');
   const [model, setModel] = useState(current?.model ?? 'gpt-4o-mini');
   const [displayName, setDisplayName] = useState(current?.displayName ?? '默认模型');
   const [contextWindow, setContextWindow] = useState(String(current?.contextWindow ?? 200_000));
+  const [supportsImages, setSupportsImages] = useState(current?.supportsImages === true);
   const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [browserSaving, setBrowserSaving] = useState(false);
   const [browserError, setBrowserError] = useState<string | null>(null);
   const [computerSaving, setComputerSaving] = useState(false);
+  const [browserChecking, setBrowserChecking] = useState(false);
+  const [computerChecking, setComputerChecking] = useState(false);
   const [computerError, setComputerError] = useState<string | null>(null);
   const [providerTesting, setProviderTesting] = useState(false);
   const [providerTestResult, setProviderTestResult] = useState<ProviderTestResult | null>(null);
@@ -250,20 +274,20 @@ function SettingsWorkspace({ appInfo, current, providers, defaultProviderId, onD
     if (!activeBridge) return;
     setError(null);
     try {
-      const saved = await activeBridge.provider.save({ id: editingProviderId || undefined, protocol, baseUrl, model, displayName, contextWindow: Number(contextWindow), apiKey });
+      const saved = await activeBridge.provider.save({ id: editingProviderId || undefined, protocol, baseUrl, model, displayName, contextWindow: Number(contextWindow), supportsImages, apiKey });
       setApiKey('');
       setEditingProviderId(saved.id);
       onSaved(saved);
       onProvidersChange(await activeBridge.provider.list());
     } catch (reason) { setError(reason instanceof Error ? reason.message : '保存失败。'); }
   };
-  const selectProvider = (provider: ProviderConfig) => { setEditingProviderId(provider.id); setProtocol(provider.protocol); setBaseUrl(provider.baseUrl); setModel(provider.model); setDisplayName(provider.displayName); setContextWindow(String(provider.contextWindow)); setApiKey(''); setError(null); setProviderTestResult(null); };
-  const addProvider = () => { setEditingProviderId(''); setProtocol('openai'); setBaseUrl('https://api.openai.com/v1'); setModel('gpt-4o-mini'); setDisplayName('新模型'); setContextWindow('200000'); setApiKey(''); setError(null); setProviderTestResult(null); };
+  const selectProvider = (provider: ProviderConfig) => { setEditingProviderId(provider.id); setProtocol(provider.protocol); setBaseUrl(provider.baseUrl); setModel(provider.model); setDisplayName(provider.displayName); setContextWindow(String(provider.contextWindow)); setSupportsImages(provider.supportsImages === true); setApiKey(''); setError(null); setProviderTestResult(null); };
+  const addProvider = () => { setEditingProviderId(''); setProtocol('openai'); setBaseUrl('https://api.openai.com/v1'); setModel('gpt-4o-mini'); setDisplayName('新模型'); setContextWindow('200000'); setSupportsImages(false); setApiKey(''); setError(null); setProviderTestResult(null); };
   const testConnection = async () => {
     const activeBridge = getBridge();
     if (!activeBridge || providerTesting) return;
     setProviderTesting(true); setProviderTestResult(null); setError(null);
-    try { setProviderTestResult(await activeBridge.provider.test({ id: editingProviderId || undefined, protocol, baseUrl, model, displayName, contextWindow: Number(contextWindow), apiKey })); }
+    try { setProviderTestResult(await activeBridge.provider.test({ id: editingProviderId || undefined, protocol, baseUrl, model, displayName, contextWindow: Number(contextWindow), supportsImages, apiKey })); }
     catch (reason) { setError(reason instanceof Error ? reason.message : '测试连接失败。'); }
     finally { setProviderTesting(false); }
   };
@@ -285,7 +309,7 @@ function SettingsWorkspace({ appInfo, current, providers, defaultProviderId, onD
     try {
       const saved = await activeBridge.browserUse.save({ enabled: !browserUseConfig.enabled });
       onBrowserUseChange(saved);
-      if (saved.enabled) onComputerUseChange({ enabled: false });
+      if (saved.enabled) void checkBrowserEnvironment();
     }
     catch (reason) { setBrowserError(reason instanceof Error ? reason.message : '更新 Browser Use 设置失败。'); }
     finally { setBrowserSaving(false); }
@@ -298,9 +322,48 @@ function SettingsWorkspace({ appInfo, current, providers, defaultProviderId, onD
     try {
       const saved = await activeBridge.computerUse.save({ enabled: !computerUseConfig.enabled });
       onComputerUseChange(saved);
-      if (saved.enabled) onBrowserUseChange({ enabled: false });
+      if (saved.enabled) void checkComputerEnvironment();
     } catch (reason) { setComputerError(reason instanceof Error ? reason.message : '更新 Computer Use 设置失败。'); }
     finally { setComputerSaving(false); }
+  };
+  const checkBrowserEnvironment = async () => {
+    const activeBridge = getBridge();
+    if (!activeBridge || browserChecking) return;
+    setBrowserChecking(true); setBrowserError(null);
+    try {
+      if (typeof activeBridge.browserUse?.diagnose !== 'function') throw new Error('当前窗口未加载最新能力检查模块，请完全退出并重新启动玉衡。');
+      const result = await activeBridge.browserUse.diagnose(); setBrowserEnvironment(result);
+    }
+    catch (reason) { setBrowserError(reason instanceof Error ? reason.message : '检查 Browser Use 环境失败。'); }
+    finally { setBrowserChecking(false); }
+  };
+  const checkComputerEnvironment = async () => {
+    const activeBridge = getBridge();
+    if (!activeBridge || computerChecking) return;
+    setComputerChecking(true); setComputerError(null);
+    try {
+      if (typeof activeBridge.computerUse?.diagnose !== 'function') throw new Error('当前窗口未加载最新能力检查模块，请完全退出并重新启动玉衡。');
+      const result = await activeBridge.computerUse.diagnose(); setComputerEnvironment(result);
+    }
+    catch (reason) { setComputerError(reason instanceof Error ? reason.message : '检查 Computer Use 环境失败。'); }
+    finally { setComputerChecking(false); }
+  };
+  const openComputerPermission = async (kind: 'accessibility' | 'screenRecording') => {
+    const activeBridge = getBridge();
+    if (!activeBridge || computerChecking) return;
+    setComputerError(null);
+    try {
+      if (typeof activeBridge.computerUse?.openPermission !== 'function') throw new Error('当前窗口未加载最新权限向导，请完全退出并重新启动玉衡。');
+      await activeBridge.computerUse.openPermission(kind);
+    } catch (reason) { setComputerError(reason instanceof Error ? reason.message : '打开 macOS 权限设置失败。'); }
+  };
+  const installComputerEnvironment = async () => {
+    const activeBridge = getBridge();
+    if (!activeBridge || computerChecking) return;
+    setComputerChecking(true); setComputerError(null);
+    try { const result = await activeBridge.computerUse.install(); setComputerEnvironment(result); }
+    catch (reason) { setComputerError(reason instanceof Error ? reason.message : '安装 Computer Use helper 失败。'); }
+    finally { setComputerChecking(false); }
   };
   const toggleDesktopPet = async () => {
     const activeBridge = getBridge();
@@ -343,6 +406,7 @@ function SettingsWorkspace({ appInfo, current, providers, defaultProviderId, onD
   const sectionCopy: Record<SettingsSection, { title: string; description: string }> = {
     provider: { title: '模型配置', description: '配置玉衡用于会话和任务处理的语言模型。' },
     capabilities: { title: 'Agent 能力', description: '管理需要额外运行环境或系统权限的可选能力。' },
+    skills: { title: 'Skills', description: '查看玉衡内置的可选操作规范及其加载条件。' },
     appearance: { title: '界面外观', description: '调整玉衡在这台设备上的显示方式。' },
     pet: { title: '宠物', description: '选择、管理和唤醒玉衡桌面宠物。' },
     desktop: { title: '通知与驻留', description: '控制任务提醒和 macOS 菜单栏驻留行为。' },
@@ -359,6 +423,7 @@ function SettingsWorkspace({ appInfo, current, providers, defaultProviderId, onD
         <span className="settings-navigation-label">配置</span>
         <button type="button" className={activeSection === 'provider' ? 'is-selected' : ''} aria-current={activeSection === 'provider' ? 'page' : undefined} onClick={() => setActiveSection('provider')}><KeyRound size={15} aria-hidden="true" /><span>模型配置</span></button>
         <button type="button" className={activeSection === 'capabilities' ? 'is-selected' : ''} aria-current={activeSection === 'capabilities' ? 'page' : undefined} onClick={() => setActiveSection('capabilities')}><BrainCircuit size={15} aria-hidden="true" /><span>Agent 能力</span></button>
+        <button type="button" className={activeSection === 'skills' ? 'is-selected' : ''} aria-current={activeSection === 'skills' ? 'page' : undefined} onClick={() => setActiveSection('skills')}><Sparkles size={15} aria-hidden="true" /><span>Skills</span></button>
         <span className="settings-navigation-label">应用</span>
         <button type="button" className={activeSection === 'appearance' ? 'is-selected' : ''} aria-current={activeSection === 'appearance' ? 'page' : undefined} onClick={() => setActiveSection('appearance')}><Palette size={15} aria-hidden="true" /><span>界面外观</span></button>
         <button type="button" className={activeSection === 'pet' ? 'is-selected' : ''} aria-current={activeSection === 'pet' ? 'page' : undefined} onClick={() => setActiveSection('pet')}><PawPrint size={15} aria-hidden="true" /><span>宠物</span></button>
@@ -392,6 +457,7 @@ function SettingsWorkspace({ appInfo, current, providers, defaultProviderId, onD
           <label>显示名称<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required /></label>
           <label>Base URL<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} required /></label>
           <label>模型<input value={model} onChange={(event) => setModel(event.target.value)} required /></label>
+          <div className="plugin-toggle-row provider-image-toggle"><div><strong>支持图片输入</strong><small>仅在当前模型确实支持多模态时开启；关闭时不会向模型发送图片内容。</small></div><button type="button" className={`switch-control ${supportsImages ? 'is-on' : ''}`} role="switch" aria-checked={supportsImages} aria-label={supportsImages ? '关闭图片输入' : '开启图片输入'} onClick={() => setSupportsImages((value) => !value)}><span /></button></div>
           <label>上下文窗口<div className="settings-input-stack"><input type="number" min="4096" max="10000000" step="1" value={contextWindow} onChange={(event) => setContextWindow(event.target.value)} required /><small>以 token 计；默认 200,000，新一轮会话开始时生效。</small></div></label>
           <label>API Key<input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={current?.hasApiKey ? '已配置，留空则保持不变' : '输入 API Key'} autoComplete="off" /></label>
           {error && <p className="form-error" role="alert">{error}</p>}
@@ -402,9 +468,11 @@ function SettingsWorkspace({ appInfo, current, providers, defaultProviderId, onD
       </div>}
 
       {activeSection === 'capabilities' && <>
-        <div className="settings-section settings-section-first"><div className="settings-section-heading"><div><h3>Browser Use</h3><p>允许模型按需使用隔离浏览器；点击、填写和关闭标签页仍需单次确认。</p></div><span className={`settings-state ${browserUseConfig.enabled ? 'is-ready' : ''}`}>{browserUseConfig.enabled ? '已启用' : '已关闭'}</span></div><div className="plugin-toggle-row"><div><strong>浏览器自动化</strong><small>与 Computer Use 二选一；关闭时不注入工具，也不启动 Python 或 Chrome。</small></div><button type="button" className={`switch-control ${browserUseConfig.enabled ? 'is-on' : ''}`} role="switch" aria-checked={browserUseConfig.enabled} aria-label={browserUseConfig.enabled ? '关闭 Browser Use' : '开启 Browser Use'} onClick={() => void toggleBrowserUse()} disabled={browserSaving}><span /></button></div>{browserError && <p className="form-error" role="alert">{browserError}</p>}</div>
-        <div className="settings-section"><div className="settings-section-heading"><div><h3>Computer Use</h3><p>让模型观察并操作桌面界面，也可使用受控浏览器。</p></div><span className={`settings-state ${computerUseConfig.enabled ? 'is-ready' : ''}`}>{computerUseConfig.enabled ? '已启用' : '已关闭'}</span></div><div className="plugin-toggle-row"><div><strong>桌面自动化</strong><small>与 Browser Use 二选一；桌面、浏览器和脚本操作会逐次请求确认。</small></div><button type="button" className={`switch-control ${computerUseConfig.enabled ? 'is-on' : ''}`} role="switch" aria-checked={computerUseConfig.enabled} aria-label={computerUseConfig.enabled ? '关闭 Computer Use' : '开启 Computer Use'} onClick={() => void toggleComputerUse()} disabled={computerSaving}><span /></button></div>{computerError && <p className="form-error" role="alert">{computerError}</p>}</div>
+        <div className="settings-section settings-section-first"><div className="settings-section-heading"><div><h3>Browser Use</h3><p>设置新会话默认是否提供隔离浏览器；点击、填写和关闭标签页仍需单次确认。</p></div><span className={`settings-state ${browserUseConfig.enabled && browserEnvironment?.status === 'ready' ? 'is-ready' : ''}`}>{!browserUseConfig.enabled ? '默认关闭' : browserEnvironment?.status === 'ready' ? '默认开启 · 可运行' : '默认开启 · 环境未就绪'}</span></div><div className="plugin-toggle-row"><div><strong>新会话默认使用浏览器</strong><small>会话输入区可单独覆盖此默认值；关闭时不注入浏览器工具。</small></div><button type="button" className={`switch-control ${browserUseConfig.enabled ? 'is-on' : ''}`} role="switch" aria-checked={browserUseConfig.enabled} aria-label={browserUseConfig.enabled ? '默认关闭 Browser Use' : '默认开启 Browser Use'} onClick={() => void toggleBrowserUse()} disabled={browserSaving}><span /></button></div><div className="capability-diagnostic"><span>{browserEnvironment?.message ?? '尚未检查运行环境。'}</span><button type="button" className="secondary-action" onClick={() => void checkBrowserEnvironment()} disabled={browserChecking}>{browserChecking ? '检查中…' : '检查环境'}</button>{browserEnvironment?.status === 'unavailable' && <code>{browserEnvironment.installCommand}</code>}</div>{browserError && <p className="form-error" role="alert">{browserError}</p>}</div>
+        <div className="settings-section"><div className="settings-section-heading"><div><h3>Computer Use</h3><p>设置新会话默认是否允许模型观察并操作桌面界面。</p></div><span className={`settings-state ${computerUseConfig.enabled && computerEnvironment?.status === 'ready' ? 'is-ready' : ''}`}>{!computerUseConfig.enabled ? '默认关闭' : computerEnvironment?.status === 'ready' ? '默认开启 · 可运行' : computerEnvironment?.status === 'needs_permission' ? '默认开启 · 需要权限' : '默认开启 · 环境未就绪'}</span></div><div className="plugin-toggle-row"><div><strong>新会话默认使用桌面</strong><small>会话输入区可单独覆盖此默认值；浏览器和桌面能力可以同时开启。</small></div><button type="button" className={`switch-control ${computerUseConfig.enabled ? 'is-on' : ''}`} role="switch" aria-checked={computerUseConfig.enabled} aria-label={computerUseConfig.enabled ? '默认关闭 Computer Use' : '默认开启 Computer Use'} onClick={() => void toggleComputerUse()} disabled={computerSaving}><span /></button></div><div className="capability-diagnostic"><span>{computerEnvironment?.message ?? '尚未检查运行环境。'}</span><button type="button" className="secondary-action" onClick={() => void checkComputerEnvironment()} disabled={computerChecking}>{computerChecking ? '检查中…' : '重新检查'}</button>{computerEnvironment?.status === 'unavailable' && <button type="button" className="secondary-action" onClick={() => void installComputerEnvironment()} disabled={computerChecking}>{computerChecking ? '处理中…' : '安装或修复'}</button>}</div>{computerEnvironment?.helperInstalled && computerEnvironment.platform === 'darwin' && <div className="computer-permission-list" aria-label="Computer Use macOS 权限"><div className={`computer-permission-row ${computerEnvironment.accessibility === true ? 'is-granted' : ''}`}><div><strong>辅助功能</strong><small>{computerEnvironment.accessibility === true ? '已授权，可发送键盘和鼠标操作。' : '允许 Computer Use 与桌面应用交互。'}</small></div><span>{computerEnvironment.accessibility === true ? '已授权' : '未授权'}</span>{computerEnvironment.accessibility !== true && <button type="button" className="secondary-action" onClick={() => void openComputerPermission('accessibility')} disabled={computerChecking}>授权</button>}</div><div className={`computer-permission-row ${computerEnvironment.screenRecording === 'granted' ? 'is-granted' : ''}`}><div><strong>屏幕录制</strong><small>{computerEnvironment.screenRecording === 'granted' ? '已授权，可读取窗口内容。' : '允许 Computer Use 观察窗口和屏幕。'}</small></div><span>{computerEnvironment.screenRecording === 'granted' ? '已授权' : '未授权'}</span>{computerEnvironment.screenRecording !== 'granted' && <button type="button" className="secondary-action" onClick={() => void openComputerPermission('screenRecording')} disabled={computerChecking}>授权</button>}</div><small className="computer-permission-target">授权对象：{computerEnvironment.permissionTarget ?? '当前运行的玉衡或终端'}</small></div>}{computerEnvironment?.permissions !== 'granted' && computerEnvironment?.helperInstalled && <p className="capability-hint">授权后点击“重新检查”。macOS 可能需要完全退出并重新启动玉衡，权限变更才会对 helper 生效。</p>}{computerError && <p className="form-error" role="alert">{computerError}</p>}</div>
       </>}
+
+      {activeSection === 'skills' && <SkillSettings computerUseEnabled={computerUseConfig.enabled} />}
 
       {activeSection === 'appearance' && <div className="settings-section settings-section-first appearance-section"><div className="settings-section-heading"><div><h3>主题</h3><p>选择玉衡工作区的基础配色。</p></div></div><div className="theme-options" role="radiogroup" aria-label="界面配色"><button type="button" className={`theme-option ${theme === 'dark' ? 'is-selected' : ''}`} onClick={() => onThemeChange('dark')} role="radio" aria-checked={theme === 'dark'}><span className="theme-swatch theme-swatch-dark" /><span><strong>深色</strong><small>适合长时间专注</small></span></button><button type="button" className={`theme-option ${theme === 'light' ? 'is-selected' : ''}`} onClick={() => onThemeChange('light')} role="radio" aria-checked={theme === 'light'}><span className="theme-swatch theme-swatch-light" /><span><strong>浅色</strong><small>明亮清晰</small></span></button><button type="button" className={`theme-option ${theme === 'graphite' ? 'is-selected' : ''}`} onClick={() => onThemeChange('graphite')} role="radio" aria-checked={theme === 'graphite'}><span className="theme-swatch theme-swatch-graphite" /><span><strong>石墨灰</strong><small>低对比度</small></span></button><button type="button" className={`theme-option ${theme === 'notion' ? 'is-selected' : ''}`} onClick={() => onThemeChange('notion')} role="radio" aria-checked={theme === 'notion'}><span className="theme-swatch theme-swatch-notion" /><span><strong>Notion</strong><small>温和中性</small></span></button></div></div>}
 
@@ -441,6 +509,52 @@ function DesktopPresenceSettings() {
   return <div className="settings-section settings-section-first desktop-presence-section"><div className="settings-section-heading"><div><h3>系统提醒</h3><p>任务到期时显示 macOS 通知中心横幅。需要在系统设置中允许玉衡发送通知。</p></div></div><div className="plugin-toggle-row"><div><strong>任务通知</strong><small>关闭后不会弹出系统通知，但任务提醒仍会保留在玉衡内。</small></div><button type="button" className={`switch-control ${config?.notificationsEnabled ? 'is-on' : ''}`} role="switch" aria-checked={config?.notificationsEnabled ?? false} aria-label={config?.notificationsEnabled ? '关闭任务通知' : '开启任务通知'} onClick={() => void toggle('notificationsEnabled')} disabled={!config || saving}><span /></button></div><div className="settings-section-heading desktop-presence-subheading"><div><h3>菜单栏驻留</h3><p>关闭主窗口后继续在后台运行，并从 macOS 菜单栏快速打开玉衡。</p></div></div><div className="plugin-toggle-row"><div><strong>显示菜单栏图标</strong><small>关闭后玉衡仍可通过通知运行，但不显示顶部菜单栏图标。</small></div><button type="button" className={`switch-control ${config?.menuBarEnabled ? 'is-on' : ''}`} role="switch" aria-checked={config?.menuBarEnabled ?? false} aria-label={config?.menuBarEnabled ? '隐藏菜单栏图标' : '显示菜单栏图标'} onClick={() => void toggle('menuBarEnabled')} disabled={!config || saving}><span /></button></div>{error && <p className="form-error" role="alert">{error}</p>}</div>;
 }
 
+function SkillSettings({ computerUseEnabled }: { computerUseEnabled: boolean }) {
+  const [skills, setSkills] = useState<AgentSkillCatalogEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const refresh = () => {
+    const bridge = getBridge();
+    if (!bridge) return;
+    setLoading(true);
+    setError(null);
+    void bridge.skills.list().then(setSkills).catch((reason) => setError(reason instanceof Error ? reason.message : '读取 Skills 失败。')).finally(() => setLoading(false));
+  };
+  useEffect(refresh, []);
+  const importSkill = async () => {
+    const bridge = getBridge(); if (!bridge) return;
+    try { const selected = await bridge.skills.choose(); if (selected) setSkills(await bridge.skills.import(selected)); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '导入 Skill 失败。'); }
+  };
+  const saveUserSkill = async (id: string, enabled: boolean) => {
+    const bridge = getBridge(); if (!bridge) return;
+    try { setSkills(await bridge.skills.save(skills.filter((skill) => skill.source === 'user').map((skill) => ({ id: skill.id, enabled: skill.id === id ? enabled : skill.enabled === true })))); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '保存 Skill 设置失败。'); }
+  };
+  const removeUserSkill = async (id: string) => {
+    const bridge = getBridge(); if (!bridge) return;
+    try { setSkills(await bridge.skills.delete(id)); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '删除 Skill 失败。'); }
+  };
+  const builtInSkills = skills.filter((skill) => skill.source === 'yuheng');
+  const userSkills = skills.filter((skill) => skill.source === 'user');
+  const renderSkillRow = (skill: AgentSkillCatalogEntry) => {
+    const builtinActive = skill.source === 'yuheng' && skill.available && skill.requiredCapability === 'computerUse' && computerUseEnabled;
+    return <div className="plugin-toggle-row skill-catalog-row" key={skill.id}>
+      <div><strong><Sparkles size={14} aria-hidden="true" />{skill.name}</strong><small>{skill.description}</small><small>来源：{skill.source === 'yuheng' ? '玉衡内置' : '本地导入'} · {skill.available ? skill.path : '文件缺失'}</small></div>
+      {skill.source === 'user' ? <div className="skill-row-actions"><button type="button" className={`switch-control ${skill.enabled ? 'is-on' : ''}`} role="switch" aria-checked={skill.enabled === true} aria-label={`${skill.name}${skill.enabled ? '禁用' : '启用'}`} onClick={() => void saveUserSkill(skill.id, skill.enabled !== true)}><span /></button><button type="button" className="icon-button" aria-label={`删除 ${skill.name}`} onClick={() => void removeUserSkill(skill.id)}>×</button></div> : <span className={`settings-state ${builtinActive ? 'is-ready' : ''}`}>{!skill.available ? '不可用' : builtinActive ? '桌面能力开启时加载' : '按需加载'}</span>}
+    </div>;
+  };
+  return <div className="settings-section settings-section-first">
+    <div className="settings-section-heading"><div><h3>Skills</h3><p>导入本地 Skill 后，在对话输入区按会话选择。玉衡不会自动扫描用户目录或项目中的外部 Skill。</p></div><div className="provider-modal-actions"><button type="button" className="secondary-action" onClick={() => void importSkill()}><Sparkles size={14} aria-hidden="true" />导入 Skill</button><button type="button" className="secondary-action" onClick={refresh} disabled={loading}><RefreshCw size={14} aria-hidden="true" />{loading ? '检查中…' : '重新检查'}</button></div></div>
+    {loading && skills.length === 0 ? <div className="capability-diagnostic"><span>正在检查 Skills…</span></div> : <>
+      <section className="skill-management-group" aria-labelledby="builtin-skills-title"><div className="skill-management-heading"><div><h4 id="builtin-skills-title">玉衡内置 Skills</h4><p>由玉衡提供和维护，不可删除。</p></div><span>{builtInSkills.length} 个</span></div>{builtInSkills.length ? <div className="skill-catalog" aria-label="玉衡内置 Skills">{builtInSkills.map(renderSkillRow)}</div> : <div className="capability-diagnostic"><span>暂无内置 Skills。</span></div>}</section>
+      <section className="skill-management-group" aria-labelledby="user-skills-title"><div className="skill-management-heading"><div><h4 id="user-skills-title">用户 Skills</h4><p>从本地导入的 Skill，启用后还需在具体对话中选择。</p></div><span>{userSkills.length} 个</span></div>{userSkills.length ? <div className="skill-catalog" aria-label="用户 Skills">{userSkills.map(renderSkillRow)}</div> : <div className="skill-empty-state"><Sparkles size={16} aria-hidden="true" /><span>还没有用户 Skill</span><small>点击右上角“导入 Skill”添加本地能力。</small></div>}</section>
+    </>}
+    {error && <p className="form-error" role="alert">{error}</p>}<p className="capability-hint">外部 Skill 默认关闭，启用后仍需在具体对话中选择；Computer Use Skill 只在当前会话开启“桌面”能力时加载。</p>
+  </div>;
+}
+
 function BackupSettings() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -456,7 +570,7 @@ function BackupSettings() {
   const importBackup = async () => {
     const bridge = getBridge(); if (!bridge || busy) return;
     setBusy(true); setStatus(null);
-    try { const report = await bridge.backup.import(); if (report) setStatus(`已导入 ${report.conversations} 个会话、${report.messages} 条消息、${report.tasks} 个任务和 ${report.notes} 个笔记${report.missingProviders ? `；${report.missingProviders} 个 Provider 需要重新配置` : ''}${report.contextUnavailable ? '；部分 Agent 上下文未恢复' : ''}。`); }
+    try { const report = await bridge.backup.import(); if (report) setStatus(`已导入 ${report.conversations} 个会话、${report.messages} 条消息、${report.tasks} 个任务和 ${report.notes} 个知识库页面${report.missingProviders ? `；${report.missingProviders} 个 Provider 需要重新配置` : ''}${report.contextUnavailable ? '；部分 Agent 上下文未恢复' : ''}。`); }
     catch (error) { setStatus(error instanceof Error ? error.message : '导入备份失败。'); }
     finally { setBusy(false); }
   };
@@ -528,7 +642,7 @@ export function ProductionRenderer() {
   });
   const { boards: taskBoards, activeBoardId: activeTaskBoardId, setActiveBoardId: setActiveTaskBoardId, tasks, types: taskTypes, loading: tasksLoading } = taskWorkspace;
   const noteWorkspace = useNoteWorkspace(activeBridge);
-  const { activeNoteId, setActiveNoteId, titles: noteTitles, revision: notesRevision, notifyChanged: notifyNotesChanged } = noteWorkspace;
+  const { activeNoteId, setActiveNoteId, titles: noteTitles, revision: notesRevision, notifyChanged: notifyNotesChanged, knowledgeBases, activeKnowledgeBaseId, setActiveKnowledgeBaseId } = noteWorkspace;
   const conversation = useConversationWorkspace(activeBridge, {
     providers,
     provider,
@@ -537,7 +651,7 @@ export function ProductionRenderer() {
     onApprovalRequired: (event) => { if (approvalCloseTimerRef.current !== null) window.clearTimeout(approvalCloseTimerRef.current); setApprovalClosing(false); setPendingApproval(event); },
     onApprovalResolved: (approvalId) => { if (pendingApproval?.approvalId === approvalId) setPendingApproval(null); },
   });
-  const { items: conversationItems, setItems: setConversationItems, projects: conversationProjects, setProjects: setConversationProjects, workspaceLoaded, activeId: activeConversation, setActiveId: setActiveConversation, activeProjectId: activeConversationProject, setActiveProjectId: setActiveConversationProject, activeProfileId, setActiveProfileId, messages, setMessages, runs: conversationRuns, setRuns: setConversationRuns, activities: toolActivities, setActivities: setToolActivities, activeRun, interruptedRun, setInterruptedRun, reasoningSelection, setReasoningSelection, permissionMode, setPermissionMode, activeMessages, activeActivities, isThinking, activeTitle, refresh: refreshConversationList } = conversation;
+  const { items: conversationItems, setItems: setConversationItems, projects: conversationProjects, setProjects: setConversationProjects, workspaceLoaded, activeId: activeConversation, setActiveId: setActiveConversation, activeProjectId: activeConversationProject, setActiveProjectId: setActiveConversationProject, activeProfileId, setActiveProfileId, messages, setMessages, runs: conversationRuns, setRuns: setConversationRuns, activities: toolActivities, setActivities: setToolActivities, activeRun, interruptedRun, setInterruptedRun, reasoningSelection, setReasoningSelection, permissionMode, setPermissionMode, conversationCapabilities, setConversationCapabilities, skillCatalog, conversationSkills, setConversationSkills, activeMessages, activeActivities, isThinking, activeTitle, refresh: refreshConversationList } = conversation;
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTab[]>(readStoredWorkspaceTabs);
   const [activeTabId, setActiveTabId] = useState(() => {
     const tabs = readStoredWorkspaceTabs();
@@ -666,7 +780,8 @@ export function ProductionRenderer() {
 
   const activeProfile = AGENT_PROFILES.find((profile) => profile.id === activeProfileId) ?? AGENT_PROFILES[0];
   const activeConversationProjectDetails = conversationProjects.find((project) => project.id === activeConversationProject);
-  const activeWorkspacePath = activeConversationProjectDetails?.workspacePath?.trim() || `workspace/projects/${activeConversationProject || 'personal'}/`;
+  const activeConversationDetails = conversationItems.find((item) => item.id === activeConversation);
+  const activeWorkspacePath = activeConversationDetails?.workspacePath?.trim() || activeConversationProjectDetails?.workspacePath?.trim() || `workspace/projects/${activeConversationProject || 'personal'}/`;
   const activeProviderId = conversationItems.find((conversation) => conversation.id === activeConversation)?.providerId ?? defaultProviderId ?? providers[0]?.id ?? '';
   const activeProvider = providers.find((item) => item.id === activeProviderId) ?? null;
   const latestCompletedRun = conversationRuns[activeConversation]?.find((run) => run.status === 'completed' && run.usage) ?? null;
@@ -775,31 +890,41 @@ export function ProductionRenderer() {
     let unsubscribe: (() => void) | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let abortHandler: (() => void) | undefined;
+    const cancellation = createRunCancellation((id) => activeBridge.runs.cancel(id));
+    let settled = false;
     try {
       const result = new Promise<string>((resolve, reject) => {
+        const resolveOnce = (value: string) => { if (!settled) { settled = true; resolve(value); } };
+        const rejectOnce = (reason: unknown) => { if (!settled) { settled = true; reject(reason); } };
         abortHandler = () => {
-          if (runId) void activeBridge.runs.cancel(runId);
-          reject(new Error('页面 AI 请求已停止。'));
+          void cancellation.request();
+          rejectOnce(new Error('页面 AI 请求已停止。'));
         };
         if (signal?.aborted) return abortHandler();
         signal?.addEventListener('abort', abortHandler, { once: true });
         unsubscribe = activeBridge.runs.onEvent((event) => {
           if (event.conversationId !== temporary.id || (runId && event.runId !== runId)) return;
-          if (event.type === 'failed') reject(new Error(event.error));
-          if (event.type === 'cancelled') reject(new Error('笔记 AI 操作已取消。'));
+          if (settled) return;
+          if (event.type === 'failed') rejectOnce(new Error(event.error));
+          if (event.type === 'cancelled') rejectOnce(new Error('知识库 AI 操作已取消。'));
           if (event.type === 'completed') {
             void activeBridge.conversations.messages(temporary.id).then((messages) => {
+              if (settled) return;
               const assistant = [...messages].reverse().find((message) => message.role === 'assistant');
-              if (assistant) resolve(assistant.content);
-              else reject(new Error('玉衡没有返回可预览的内容。'));
-            }).catch(reject);
+              if (assistant) resolveOnce(assistant.content);
+              else rejectOnce(new Error('玉衡没有返回可预览的内容。'));
+            }).catch(rejectOnce);
           }
         });
-        timer = setTimeout(() => reject(new Error('页面 AI 操作超时。')), 180_000);
+        timer = setTimeout(() => {
+          void cancellation.request();
+          rejectOnce(new Error('页面 AI 操作超时。'));
+        }, 180_000);
       });
       const started = await activeBridge.runs.start(temporary.id, prompt, [], reasoningSelection === 'default' ? undefined : reasoningSelection);
       runId = started.runId;
-      if (signal?.aborted) void activeBridge.runs.cancel(runId);
+      void cancellation.bind(runId);
+      if (signal?.aborted) void cancellation.request();
       const content = await result;
       await activeBridge.conversations.archive(temporary.id, true).catch(() => undefined);
       return content;
@@ -808,10 +933,30 @@ export function ProductionRenderer() {
       const cleanup = unsubscribe;
       if (cleanup) cleanup();
       if (signal && abortHandler) signal.removeEventListener('abort', abortHandler);
+      if (cancellation.requested()) await cancellation.request().catch(() => undefined);
       await activeBridge.conversations.archive(temporary.id, true).catch(() => undefined);
     }
   };
-  const runAiForNote = async (note: import('../contracts/desktop-bridge').Note, action: NoteAiAction, customInstruction?: string, signal?: AbortSignal): Promise<string> => runTemporaryAi(`笔记 AI：${note.title}`, buildNoteAiPrompt(note, action, customInstruction), signal);
+  const runAiForNote = async (note: import('../contracts/desktop-bridge').Note, action: NoteAiAction, customInstruction?: string, signal?: AbortSignal): Promise<string> => {
+    let knowledgeBaseName: string | undefined;
+    let pagePath: string | undefined;
+    if (activeBridge) {
+      const base = note.knowledgeBaseId ? await activeBridge.notes.knowledgeBases.get(note.knowledgeBaseId).catch(() => null) : null;
+      knowledgeBaseName = base?.name;
+      const titles = [note.title];
+      let parentId = note.parentId;
+      const seen = new Set<string>([note.id]);
+      while (parentId && !seen.has(parentId) && titles.length < 50) {
+        seen.add(parentId);
+        const parent = await activeBridge.notes.get(parentId).catch(() => null);
+        if (!parent) break;
+        titles.unshift(parent.title);
+        parentId = parent.parentId;
+      }
+      pagePath = titles.join(' / ');
+    }
+    return runTemporaryAi(`知识库 AI：${note.title}`, buildNoteAiPrompt({ ...note, knowledgeBaseName, pagePath }, action, customInstruction), signal);
+  };
   const runAiForBoard = async (boardName: string, tasks: import('../contracts/desktop-bridge').Task[], prompt: string, signal?: AbortSignal): Promise<string> => {
     const statusNames = new Map(taskTypes.map((type) => [type.id, type.name]));
     const context = buildBoardAiContext(boardName, tasks.map((task) => ({ title: task.title, status: statusNames.get(task.status) ?? task.status, priority: task.priority, dueAt: task.dueAt })));
@@ -844,6 +989,12 @@ export function ProductionRenderer() {
     const updated = await activeBridge.conversations.move(id, projectId);
     setConversationItems((items) => sortConversations(items.map((item) => item.id === id ? updated : item)));
     if (id === activeConversation) setActiveConversationProject(projectId);
+  };
+  const chooseConversationWorkspace = async (): Promise<string | null> => activeBridge?.conversations.chooseWorkspace() ?? null;
+  const setConversationWorkspace = async (id: string, workspacePath: string | null): Promise<void> => {
+    if (!activeBridge) return;
+    const updated = await activeBridge.conversations.setWorkspace(id, workspacePath);
+    setConversationItems((items) => items.map((item) => item.id === id ? updated : item));
   };
   const chooseProjectWorkspace = async (): Promise<string | null> => activeBridge?.conversations.projects.chooseWorkspace() ?? null;
   const createConversationProject = async (name: string, workspacePath?: string | null): Promise<void> => {
@@ -976,6 +1127,24 @@ export function ProductionRenderer() {
     }
     void savePermissionMode(mode);
   };
+  const saveConversationCapability = async (capability: keyof ConversationCapabilities, value: ConversationCapabilityOverride) => {
+    if (!activeBridge) return;
+    const conversationId = activeConversation;
+    try {
+      const saved = await activeBridge.conversations.capabilities.save(conversationId, { ...conversationCapabilities, [capability]: value });
+      if (activeConversation === conversationId) setConversationCapabilities(saved);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '保存会话能力设置失败。');
+    }
+  };
+  const saveConversationSkills = async (skillIds: string[]) => {
+    if (!activeBridge) return;
+    const conversationId = activeConversation;
+    try {
+      const saved = await activeBridge.conversations.skills.save(conversationId, skillIds);
+      if (activeConversation === conversationId) setConversationSkills(saved);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '保存会话 Skills 失败。'); }
+  };
   const resolveApproval = async (approved: boolean) => {
     const approval = pendingApproval;
     if (!approval || !activeBridge) return;
@@ -999,7 +1168,7 @@ export function ProductionRenderer() {
       taskWorkspace.setActiveBoardId(boardId);
       setRequestedOpenTaskId(task.id);
       setActiveView('tasks');
-    } catch (reason) { setError(reason instanceof Error ? reason.message : '从笔记创建任务失败。'); }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '从知识库创建任务失败。'); }
   };
   const createTaskFromMessage = async (message: TranscriptMessage) => {
     if (!activeTaskBoardId) { setError('请先创建一个任务看板。'); return; }
@@ -1043,6 +1212,7 @@ export function ProductionRenderer() {
       return;
     }
     if (result.kind === 'note') {
+      if (result.knowledgeBaseId) setActiveKnowledgeBaseId(result.knowledgeBaseId);
       openWorkspaceTab('notes', result.id);
       return;
     }
@@ -1098,23 +1268,23 @@ export function ProductionRenderer() {
   const collapsedSidebarControl = !settingsMounted && sidebarCollapsed && typeof document !== 'undefined' ? createPortal(<SidebarExpandControl onExpand={() => setSidebarCollapsed(false)} />, document.body) : null;
   useEffect(() => { document.documentElement.dataset.windowFullscreen = windowFullscreen ? 'true' : 'false'; return () => { delete document.documentElement.dataset.windowFullscreen; }; }, [windowFullscreen]);
   return <main className={`app-shell ${sidebarCollapsed ? 'sidebar-is-collapsed' : ''} ${sidebarResizing ? 'sidebar-is-resizing' : ''} ${activeView === 'tasks' || activeView === 'notes' ? 'tasks-is-active' : ''} ${activeView === 'notes' ? 'notes-is-active' : ''} ${settingsMounted ? 'settings-is-active' : ''} ${settingsClosing ? 'settings-is-closing' : ''} ${profileMenuClosing || providerMenuClosing ? 'header-menu-closing' : ''}`} style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
-    <Sidebar conversations={conversationItems} projects={conversationProjects} boards={taskBoards} activeId={activeConversation} activeProjectId={activeConversationProject} activeBoardId={activeTaskBoardId} activeNoteId={activeNoteId} notesBridge={activeBridge} notesRevision={notesRevision} onNotesChanged={notifyNotesChanged} mode={sidebarMode} settingsOpen={providerOpen} collapsed={sidebarCollapsed} appVersion={appInfo?.version} onSearch={() => setSearchOpen(true)} onSelect={(id) => { closeSettings(); selectConversation(id); }} onSelectProject={setActiveConversationProject} onSelectBoard={(id) => { closeSettings(); setRequestedOpenTaskId(null); openWorkspaceTab('tasks', id); }} onSelectNote={(id) => { closeSettings(); if (id) openWorkspaceTab('notes', id); }} onModeChange={(mode) => { setSidebarModeState(mode); closeSettings(); }} onNew={(projectId) => void createConversation(projectId)} onRenameConversation={renameConversation} onMoveConversation={moveConversation} onArchiveConversation={archiveConversation} onPinConversation={pinConversation} onDeleteConversation={deleteConversation} onCreateProject={createConversationProject} onChooseProjectWorkspace={chooseProjectWorkspace} onSetProjectWorkspace={setConversationProjectWorkspace} onRenameProject={renameConversationProject} onDeleteProject={deleteConversationProject} onCreateBoard={createTaskBoard} onRenameBoard={renameTaskBoard} onDeleteBoard={deleteTaskBoard} onReorderBoard={reorderTaskBoard} onMoveTaskToBoard={async (id, boardId) => { await moveTaskToBoard(id, boardId); }} onSettings={() => openSettings()} onToggle={() => setSidebarCollapsed((current) => !current)} />
+    <Sidebar conversations={conversationItems} projects={conversationProjects} boards={taskBoards} activeId={activeConversation} activeProjectId={activeConversationProject} activeBoardId={activeTaskBoardId} activeNoteId={activeNoteId} notesBridge={activeBridge} notesRevision={notesRevision} knowledgeBases={knowledgeBases} activeKnowledgeBaseId={activeKnowledgeBaseId} onSelectKnowledgeBase={setActiveKnowledgeBaseId} onNotesChanged={notifyNotesChanged} mode={sidebarMode} settingsOpen={providerOpen} collapsed={sidebarCollapsed} appVersion={appInfo?.version} onSearch={() => setSearchOpen(true)} onSelect={(id) => { closeSettings(); selectConversation(id); }} onSelectProject={setActiveConversationProject} onSelectBoard={(id) => { closeSettings(); setRequestedOpenTaskId(null); openWorkspaceTab('tasks', id); }} onSelectNote={(id) => { closeSettings(); if (id) openWorkspaceTab('notes', id); }} onModeChange={(mode) => { setSidebarModeState(mode); closeSettings(); }} onNew={(projectId) => void createConversation(projectId)} onRenameConversation={renameConversation} onMoveConversation={moveConversation} onArchiveConversation={archiveConversation} onPinConversation={pinConversation} onDeleteConversation={deleteConversation} onChooseConversationWorkspace={chooseConversationWorkspace} onSetConversationWorkspace={setConversationWorkspace} onCreateProject={createConversationProject} onChooseProjectWorkspace={chooseProjectWorkspace} onSetProjectWorkspace={setConversationProjectWorkspace} onRenameProject={renameConversationProject} onDeleteProject={deleteConversationProject} onCreateBoard={createTaskBoard} onRenameBoard={renameTaskBoard} onDeleteBoard={deleteTaskBoard} onReorderBoard={reorderTaskBoard} onMoveTaskToBoard={async (id, boardId) => { await moveTaskToBoard(id, boardId); }} onSettings={() => openSettings()} onToggle={() => setSidebarCollapsed((current) => !current)} />
     {!settingsMounted && !sidebarCollapsed && <div className="sidebar-resize-handle" role="separator" aria-label="调整侧栏宽度" aria-orientation="vertical" aria-valuemin={MIN_SIDEBAR_WIDTH} aria-valuemax={MAX_SIDEBAR_WIDTH} aria-valuenow={sidebarWidth} tabIndex={0} title="拖拽调整侧栏宽度，双击恢复默认宽度" onDoubleClick={() => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)} onPointerDown={(event) => { if (event.button !== 0) return; event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); setSidebarResizing(true); }} onPointerMove={resizeSidebar} onPointerUp={stopResizingSidebar} onPointerCancel={stopResizingSidebar} onKeyDown={resizeSidebarWithKeyboard} />}
     <section className="workspace" aria-label="会话工作区">
-      {!settingsMounted && <nav className="workspace-tabs" aria-label="已打开页面">{workspaceTabs.map((tab, index) => { const label = tab.type === 'conversation' ? (conversationItems.find((item) => item.id === tab.resourceId)?.title ?? '对话') : tab.type === 'tasks' ? (taskBoards.find((board) => board.id === tab.resourceId)?.name ?? '任务看板') : (noteTitles[tab.resourceId] ?? '笔记'); const menuOpen = tabContextMenu?.tabId === tab.id; return <div className={`workspace-tab ${tab.id === activeTabId ? 'is-active' : ''}`} key={tab.id} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setTabContextMenu({ tabId: tab.id, x: event.clientX, y: event.clientY }); }}><button type="button" className="workspace-tab-select" onClick={() => activateWorkspaceTab(tab)}>{tab.type === 'conversation' ? <MessageSquare size={14} /> : tab.type === 'tasks' ? <ListTodo size={14} /> : <NotebookPen size={14} />}<span>{label}</span></button>{workspaceTabs.length > 1 && <button type="button" className="workspace-tab-close" onClick={(event) => { event.stopPropagation(); closeWorkspaceTab(tab.id); }} aria-label={`关闭${label}`} title={`关闭${label}`}><X size={13} /></button>}{menuOpen && <div className="workspace-tab-menu" role="menu" style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onClick={(event) => event.stopPropagation()}><button type="button" role="menuitem" onClick={() => closeWorkspaceTab(tab.id)} disabled={workspaceTabs.length <= 1}>关闭标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.filter((item) => item.id !== tab.id).map((item) => item.id))} disabled={workspaceTabs.length <= 1}>关闭其他标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.slice(index + 1).map((item) => item.id))} disabled={index === workspaceTabs.length - 1}>关闭右侧标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.slice(0, index).map((item) => item.id))} disabled={index === 0}>关闭左侧标签页</button></div>}</div>; })}</nav>}
-      {settingsMounted ? <SettingsWorkspace initialSection={settingsInitialSection} appInfo={appInfo} current={provider} providers={providers} defaultProviderId={defaultProviderId} onDefaultProviderChange={setDefaultProviderId} browserUseConfig={browserUseConfig} computerUseConfig={computerUseConfig} theme={theme} onThemeChange={setTheme} onClose={closeSettings} onSaved={(saved) => { const boundProviderId = conversationItems.find((item) => item.id === activeConversation)?.providerId; if (!boundProviderId || boundProviderId === saved.id) setProvider(saved); }} onProvidersChange={setProviders} onBrowserUseChange={setBrowserUseConfig} onComputerUseChange={setComputerUseConfig} /> : activeView === 'tasks' ? <Suspense fallback={<div className="task-page-loading">正在打开任务看板...</div>}><TaskBoard boardId={activeTaskBoardId} boardName={taskBoards.find((board) => board.id === activeTaskBoardId)?.name ?? '任务'} boards={taskBoards} tasks={tasks} taskTypes={taskTypes} loading={tasksLoading} headerControl={sidebarCollapsed ? <SidebarExpandControl onExpand={() => setSidebarCollapsed(false)} /> : null} requestedOpenTaskId={requestedOpenTaskId} onOpenTaskHandled={() => setRequestedOpenTaskId(null)} taskActionRequest={taskActionRequest} onTaskActionHandled={() => setTaskActionRequest(null)} sourceConversations={conversationItems} onOpenConversation={selectConversation} onCreate={createTask} onUpdate={updateTask} onDelete={deleteTask} onReorder={reorderTask} onMoveToBoard={moveTaskToBoard} onCopyToBoard={copyTaskToBoard} onCreateType={createTaskType} onRenameType={renameTaskType} onDeleteType={deleteTaskType} onImportAsset={importTaskAsset} onPickAssets={pickTaskAssets} onOpenAsset={openTaskAsset} onRunAi={(prompt, signal) => runAiForBoard(taskBoards.find((board) => board.id === activeTaskBoardId)?.name ?? '任务', tasks, prompt, signal)} /></Suspense> : activeView === 'notes' ? <Suspense fallback={<div className="task-page-loading">正在打开笔记...</div>}><NotesWorkspace bridge={activeBridge} initialNoteId={activeNoteId} refreshKey={notesRevision} showNavigation={false} onNotesChanged={notifyNotesChanged} onActiveNoteChange={setActiveNoteId} onRunAi={(note, action, instruction, signal) => runAiForNote(note, action, instruction, signal)} onCreateTask={(note) => void createTaskFromNote(note)} onOpenTask={(boardId, taskId) => { closeSettings(); openWorkspaceTab('tasks', boardId); setRequestedOpenTaskId(taskId); }} onImportAsset={importTaskAsset} onPickAssets={pickTaskAssets} onOpenAsset={openTaskAsset} /></Suspense> : <>
+      {!settingsMounted && <nav className="workspace-tabs" aria-label="已打开页面">{workspaceTabs.map((tab, index) => { const label = tab.type === 'conversation' ? (conversationItems.find((item) => item.id === tab.resourceId)?.title ?? '对话') : tab.type === 'tasks' ? (taskBoards.find((board) => board.id === tab.resourceId)?.name ?? '任务看板') : (noteTitles[tab.resourceId] ?? '知识库'); const menuOpen = tabContextMenu?.tabId === tab.id; return <div className={`workspace-tab ${tab.id === activeTabId ? 'is-active' : ''}`} key={tab.id} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setTabContextMenu({ tabId: tab.id, x: event.clientX, y: event.clientY }); }}><button type="button" className="workspace-tab-select" onClick={() => activateWorkspaceTab(tab)}>{tab.type === 'conversation' ? <MessageSquare size={14} /> : tab.type === 'tasks' ? <ListTodo size={14} /> : <NotebookPen size={14} />}<span>{label}</span></button>{workspaceTabs.length > 1 && <button type="button" className="workspace-tab-close" onClick={(event) => { event.stopPropagation(); closeWorkspaceTab(tab.id); }} aria-label={`关闭${label}`} title={`关闭${label}`}><X size={13} /></button>}{menuOpen && <div className="workspace-tab-menu" role="menu" style={{ left: tabContextMenu.x, top: tabContextMenu.y }} onClick={(event) => event.stopPropagation()}><button type="button" role="menuitem" onClick={() => closeWorkspaceTab(tab.id)} disabled={workspaceTabs.length <= 1}>关闭标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.filter((item) => item.id !== tab.id).map((item) => item.id))} disabled={workspaceTabs.length <= 1}>关闭其他标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.slice(index + 1).map((item) => item.id))} disabled={index === workspaceTabs.length - 1}>关闭右侧标签页</button><button type="button" role="menuitem" onClick={() => closeWorkspaceTabs(workspaceTabs.slice(0, index).map((item) => item.id))} disabled={index === 0}>关闭左侧标签页</button></div>}</div>; })}</nav>}
+      {settingsMounted ? <SettingsWorkspace initialSection={settingsInitialSection} appInfo={appInfo} current={provider} providers={providers} defaultProviderId={defaultProviderId} onDefaultProviderChange={setDefaultProviderId} browserUseConfig={browserUseConfig} computerUseConfig={computerUseConfig} theme={theme} onThemeChange={setTheme} onClose={closeSettings} onSaved={(saved) => { const boundProviderId = conversationItems.find((item) => item.id === activeConversation)?.providerId; if (!boundProviderId || boundProviderId === saved.id) setProvider(saved); }} onProvidersChange={setProviders} onBrowserUseChange={setBrowserUseConfig} onComputerUseChange={setComputerUseConfig} /> : activeView === 'tasks' ? <Suspense fallback={<div className="task-page-loading">正在打开任务看板...</div>}><TaskBoard boardId={activeTaskBoardId} boardName={taskBoards.find((board) => board.id === activeTaskBoardId)?.name ?? '任务'} boards={taskBoards} tasks={tasks} taskTypes={taskTypes} loading={tasksLoading} headerControl={sidebarCollapsed ? <SidebarExpandControl onExpand={() => setSidebarCollapsed(false)} /> : null} requestedOpenTaskId={requestedOpenTaskId} onOpenTaskHandled={() => setRequestedOpenTaskId(null)} taskActionRequest={taskActionRequest} onTaskActionHandled={() => setTaskActionRequest(null)} sourceConversations={conversationItems} onOpenConversation={selectConversation} onCreate={createTask} onUpdate={updateTask} onDelete={deleteTask} onReorder={reorderTask} onMoveToBoard={moveTaskToBoard} onCopyToBoard={copyTaskToBoard} onCreateType={createTaskType} onRenameType={renameTaskType} onDeleteType={deleteTaskType} onImportAsset={importTaskAsset} onPickAssets={pickTaskAssets} onOpenAsset={openTaskAsset} onRunAi={(prompt, signal) => runAiForBoard(taskBoards.find((board) => board.id === activeTaskBoardId)?.name ?? '任务', tasks, prompt, signal)} /></Suspense> : activeView === 'notes' ? <Suspense fallback={<div className="task-page-loading">正在打开知识库...</div>}><NotesWorkspace bridge={activeBridge} knowledgeBaseId={activeKnowledgeBaseId} initialNoteId={activeNoteId} refreshKey={notesRevision} showNavigation={false} onNotesChanged={notifyNotesChanged} onActiveNoteChange={setActiveNoteId} onRunAi={(note, action, instruction, signal) => runAiForNote(note, action, instruction, signal)} onCreateTask={(note) => void createTaskFromNote(note)} onOpenTask={(boardId, taskId) => { closeSettings(); openWorkspaceTab('tasks', boardId); setRequestedOpenTaskId(taskId); }} onImportAsset={importTaskAsset} onPickAssets={pickTaskAssets} onOpenAsset={openTaskAsset} /></Suspense> : <>
       <header className="workspace-header">{sidebarCollapsed && <SidebarExpandControl onExpand={() => setSidebarCollapsed(false)} />}<div className="conversation-identity"><div className="identity-mark"><ThinkingOrb state={isThinking ? 'working' : 'breathing'} size={20} theme="dark" /></div><div><h1>{activeTitle}</h1><span className="identity-meta"><span className="conversation-workspace-path" title={`当前运行目录：${activeWorkspacePath}`}><FolderOpen size={12} aria-hidden="true" /><span>{activeWorkspacePath}</span></span><span className="meta-separator">·</span>会话 ID <button type="button" className="conversation-id-button" onClick={() => void copyConversationId()} title={`复制完整会话 ID：${activeConversation}`} aria-label={`复制会话 ID：${activeConversation}`}>{copiedConversationId ? '已复制' : shortId(activeConversation)}</button><span className="meta-separator">·</span><span className="conversation-profile-picker"><span>Profile</span><span className="profile-picker-control"><button type="button" className="profile-picker-trigger" aria-haspopup="listbox" aria-expanded={profileMenuOpen} aria-label={`当前会话 Profile：${activeProfile.name}`} title={activeProfile.description} onClick={() => setProfileMenuOpen((current) => !current)}><span>{activeProfile.name}</span><ChevronDown size={13} aria-hidden="true" /></button>{profileMenuOpen && <span className="profile-picker-menu" role="listbox" aria-label="选择会话 Profile">{AGENT_PROFILES.map((item) => <button type="button" role="option" aria-selected={item.id === activeProfileId} className={item.id === activeProfileId ? 'is-selected' : ''} key={item.id} onClick={() => { setProfileMenuOpen(false); void selectConversationProfile(item.id); }}><span><strong>{item.name}</strong><small>{item.description}</small></span>{item.id === activeProfileId && <span className="profile-picker-check" aria-hidden="true">✓</span>}</button>)}</span>}</span></span>{providers.length > 0 && <><span className="meta-separator">·</span><span className="conversation-provider-picker"><span>Provider</span><span className="provider-picker-control"><button type="button" className="provider-picker-trigger" aria-haspopup="listbox" aria-expanded={providerMenuOpen} aria-label={`当前会话 Provider：${activeProvider?.displayName ?? '未选择'}`} title={activeProvider ? `${activeProvider.displayName} · ${activeProvider.model}` : '选择 Provider'} onClick={() => setProviderMenuOpen((current) => !current)}><span>{(activeProvider?.displayName ?? activeProviderId) || '未选择'}</span><ChevronDown size={13} aria-hidden="true" /></button>{providerMenuOpen && <span className="provider-picker-menu" role="listbox" aria-label="选择会话 Provider">{providers.map((item) => <button type="button" role="option" aria-selected={item.id === activeProviderId} className={`${item.id === activeProviderId ? 'is-selected' : ''} ${item.hasApiKey ? '' : 'is-disabled'}`} key={item.id} disabled={!item.hasApiKey} onClick={() => { setProviderMenuOpen(false); void selectConversationProvider(item.id); }}><span><strong>{item.displayName}</strong><small>{item.protocol} · {item.model}{item.hasApiKey ? '' : ' · 未配置 Key'}</small></span>{item.id === activeProviderId && <span className="profile-picker-check" aria-hidden="true">✓</span>}</button>)}</span>}</span></span></>}</span></div></div><div className="header-actions"><button type="button" className="header-icon-button" onClick={() => void importConversation()} aria-label="导入会话" title="导入会话"><Upload size={15} /></button><button type="button" className="header-icon-button" onClick={() => void exportActiveConversation()} aria-label="导出会话"><Download size={15} /></button><ContextWindowStatus usage={latestCompletedRun?.usage ?? null} refreshing={Boolean(isThinking)} /><div className="header-status" aria-live="polite"><span className={`status-dot ${isThinking ? 'is-active' : ''}`} />{isThinking ? '处理中' : visibleError ? '需要处理' : '就绪'}</div></div></header>
       {visibleError && <div className="inline-error" role="alert">{visibleError}<button type="button" onClick={() => { setError(null); taskWorkspace.clearError(); settings.clearError(); }} aria-label="关闭错误提示">×</button></div>}
       <div className={`conversation-body ${conversationIsEmpty ? 'is-empty' : ''}`}>
-        {conversationIsEmpty ? <ConversationStart composer={<Composer variant="start" prefill={composerPrefill} busy={Boolean(isThinking)} attachments={attachments} reasoningSelection={reasoningSelection} onReasoningSelectionChange={(selection) => { setReasoningSelection(selection); void activeBridge?.reasoning.save(activeConversation, selection); }} permissionMode={permissionMode} onPermissionModeChange={selectPermissionMode} onAttach={pickAttachments} onRemoveAttachment={removeAttachment} onSubmit={submitMessage} onCancel={cancelRun} />} onSelectPrompt={(value) => setComposerPrefill((current) => ({ id: (current?.id ?? 0) + 1, value }))} /> : <>
+        {conversationIsEmpty ? <ConversationStart composer={<Composer variant="start" prefill={composerPrefill} busy={Boolean(isThinking)} attachments={attachments} reasoningSelection={reasoningSelection} onReasoningSelectionChange={(selection) => { setReasoningSelection(selection); void activeBridge?.reasoning.save(activeConversation, selection); }} permissionMode={permissionMode} onPermissionModeChange={selectPermissionMode} conversationCapabilities={conversationCapabilities} defaultCapabilities={{ browserUse: browserUseConfig.enabled, computerUse: computerUseConfig.enabled }} onCapabilityChange={(capability, value) => void saveConversationCapability(capability, value)} skillCatalog={skillCatalog} selectedSkillIds={conversationSkills} onSkillIdsChange={(ids) => void saveConversationSkills(ids)} onAttach={pickAttachments} onRemoveAttachment={removeAttachment} onSubmit={submitMessage} onCancel={cancelRun} />} onSelectPrompt={(value) => setComposerPrefill((current) => ({ id: (current?.id ?? 0) + 1, value }))} /> : <>
           <Transcript messages={activeMessages} isThinking={isThinking} activities={activeActivities} runs={conversationRuns[activeConversation] ?? []} latestUsage={latestUsage} recoveryNotice={interruptedRun ? { message: interruptedRun.error ?? '应用重启时运行被中断。', onRetry: interruptedMessage ? () => void retryLastTurn(false, interruptedRun.inputMessageId ?? undefined) : undefined, busy: retryingRun } : null} requestedMessageId={requestedMessageId} onRequestedMessageHandled={() => setRequestedMessageId(null)} requestedRunId={requestedRunId} onRequestedRunHandled={() => setRequestedRunId(null)} onCreateTask={(message) => void createTaskFromMessage(message)} onBranch={(message) => void branchConversation(message)} onEditLastUser={(message) => { setRetryDraft({ messageId: message.id, content: message.content }); setComposerPrefill((current) => ({ id: (current?.id ?? 0) + 1, value: message.content })); }} onRegenerate={() => void retryLastTurn()} onOpenTask={(boardId, taskId) => { closeSettings(); setActiveTaskBoardId(boardId); setActiveView('tasks'); setRequestedOpenTaskId(taskId); }} />
-          <Composer editing={Boolean(retryDraft)} prefill={composerPrefill} onCancelEdit={() => { setRetryDraft(null); setComposerPrefill(null); }} busy={Boolean(isThinking) || retryingRun} attachments={attachments} reasoningSelection={reasoningSelection} onReasoningSelectionChange={(selection) => { setReasoningSelection(selection); void activeBridge?.reasoning.save(activeConversation, selection); }} permissionMode={permissionMode} onPermissionModeChange={selectPermissionMode} onAttach={pickAttachments} onRemoveAttachment={removeAttachment} onSubmit={submitMessage} onCancel={cancelRun} />
+          <Composer editing={Boolean(retryDraft)} prefill={composerPrefill} onCancelEdit={() => { setRetryDraft(null); setComposerPrefill(null); }} busy={Boolean(isThinking) || retryingRun} attachments={attachments} reasoningSelection={reasoningSelection} onReasoningSelectionChange={(selection) => { setReasoningSelection(selection); void activeBridge?.reasoning.save(activeConversation, selection); }} permissionMode={permissionMode} onPermissionModeChange={selectPermissionMode} conversationCapabilities={conversationCapabilities} defaultCapabilities={{ browserUse: browserUseConfig.enabled, computerUse: computerUseConfig.enabled }} onCapabilityChange={(capability, value) => void saveConversationCapability(capability, value)} skillCatalog={skillCatalog} selectedSkillIds={conversationSkills} onSkillIdsChange={(ids) => void saveConversationSkills(ids)} onAttach={pickAttachments} onRemoveAttachment={removeAttachment} onSubmit={submitMessage} onCancel={cancelRun} />
         </>}
       </div>
       </>}
     </section>
     {searchOpen && <GlobalSearch onQuery={(query) => activeBridge?.search.query(query) ?? Promise.resolve([])} onOpen={openSearchResult} onClose={() => setSearchOpen(false)} onNewConversation={() => { closeSettings(); void createConversation(); }} onOpenTasks={() => { closeSettings(); setActiveView('tasks'); }} />}
-    {permissionConfirmationOpen && <div className="approval-backdrop permission-confirm-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget && !permissionSaving) setPermissionConfirmationOpen(false); }}><section className="approval-dialog permission-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="permission-confirm-title" aria-describedby="permission-confirm-description"><div className="approval-dialog-header"><span>完全访问</span><h2 id="permission-confirm-title">为当前会话启用完全访问？</h2><p id="permission-confirm-description">玉衡将不再询问文件、Shell 与外部操作；基础隔离、输入校验和安全审计仍保持启用。此设置会在退出应用后失效。</p></div><div className="approval-actions"><button type="button" className="secondary-action" onClick={() => setPermissionConfirmationOpen(false)} disabled={permissionSaving}>取消</button><button type="button" className="danger-action" autoFocus onClick={() => void savePermissionMode('full_session')} disabled={permissionSaving}>{permissionSaving ? '启用中…' : '为当前会话启用'}</button></div></section></div>}
+        {permissionConfirmationOpen && <div className="approval-backdrop permission-confirm-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget && !permissionSaving) setPermissionConfirmationOpen(false); }}><section className="approval-dialog permission-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="permission-confirm-title" aria-describedby="permission-confirm-description"><div className="approval-dialog-header"><span>完全访问</span><h2 id="permission-confirm-title">为当前会话启用完全访问？</h2><p id="permission-confirm-description">玉衡将不再询问文件、Shell 与外部操作；基础隔离、输入校验和安全审计仍保持启用。此设置会保存在当前会话中，直到你改回其他权限模式。</p></div><div className="approval-actions"><button type="button" className="secondary-action" onClick={() => setPermissionConfirmationOpen(false)} disabled={permissionSaving}>取消</button><button type="button" className="danger-action" autoFocus onClick={() => void savePermissionMode('full_session')} disabled={permissionSaving}>{permissionSaving ? '启用中…' : '为当前会话启用'}</button></div></section></div>}
     {pendingApproval && <div className={`approval-backdrop ${approvalClosing ? 'is-closing' : ''}`} role="presentation"><section className="approval-dialog" role="alertdialog" aria-modal="true" aria-labelledby="approval-title" aria-describedby="approval-description" data-approval-id={pendingApproval.approvalId} tabIndex={-1}><div className="approval-dialog-header"><span>Agent Runtime</span><h2 id="approval-title">允许这次工具操作？</h2><p id="approval-description">玉衡准备执行 <code>{pendingApproval.toolName}</code></p></div>{pendingApproval.input && <pre>{pendingApproval.input}</pre>}<div className="approval-actions"><button type="button" className="secondary-action" onClick={() => void resolveApproval(false)} disabled={approvalClosing}>拒绝</button><button type="button" className="send-button" autoFocus onClick={() => void resolveApproval(true)} disabled={approvalClosing}>允许一次</button></div></section></div>}
     {tabMenu}
     {collapsedSidebarControl}

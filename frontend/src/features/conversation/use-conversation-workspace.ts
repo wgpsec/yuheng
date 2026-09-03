@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DEFAULT_AGENT_PROFILE_ID, type AgentProfileId, type DesktopBridge, type Message, type ProviderConfig, type ReasoningSelection, type RunEvent, type RunSummary, type ToolPermissionMode } from '../../contracts/desktop-bridge';
+import { DEFAULT_AGENT_PROFILE_ID, type AgentProfileId, type AgentSkillCatalogEntry, type ConversationCapabilities, type DesktopBridge, type Message, type ProviderConfig, type ReasoningSelection, type RunEvent, type RunSummary, type ToolPermissionMode } from '../../contracts/desktop-bridge';
 import type { Conversation as SidebarConversation } from './workspace/sidebar';
 import type { ToolActivity, TranscriptMessage } from './workspace/transcript';
 
@@ -24,7 +24,10 @@ const displayMessage = (message: Message): TranscriptMessage => ({
 const sortConversations = (items: SidebarConversation[]): SidebarConversation[] => [...items].sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''));
 
 export const isCurrentConversationRequest = (requestedId: string, requestVersion: number, activeId: string, currentVersion: number): boolean => requestedId === activeId && requestVersion === currentVersion;
-export const acceptsRunEventScope = (activeRunId: string | undefined, eventRunId: string): boolean => !activeRunId || activeRunId === eventRunId;
+export const acceptsRunEventScope = (activeRunId: string | undefined, eventRunId: string, terminalRunId?: string): boolean => {
+  if (terminalRunId) return false;
+  return !activeRunId || activeRunId === eventRunId;
+};
 
 type Options = {
   initialConversation?: string;
@@ -38,7 +41,7 @@ type Options = {
 
 export function useConversationWorkspace(bridge: DesktopBridge | undefined, options: Options) {
   const [items, setItems] = useState<SidebarConversation[]>(fallbackItems);
-  const [projects, setProjects] = useState<ConversationProject[]>([{ id: 'personal', name: '个人事务', position: 0 }]);
+  const [projects, setProjects] = useState<ConversationProject[]>([{ id: 'personal', name: '默认', position: 0 }]);
   const [activeId, setActiveIdState] = useState(options.initialConversation ?? 'inbox');
   const [activeProjectId, setActiveProjectId] = useState('personal');
   const [activeProfileId, setActiveProfileId] = useState<AgentProfileId>(DEFAULT_AGENT_PROFILE_ID);
@@ -49,10 +52,14 @@ export function useConversationWorkspace(bridge: DesktopBridge | undefined, opti
   const [interruptedRun, setInterruptedRun] = useState<RunSummary | null>(null);
   const [reasoningSelection, setReasoningSelection] = useState<ReasoningSelection>('default');
   const [permissionMode, setPermissionMode] = useState<ToolPermissionMode>('smart');
+  const [conversationCapabilities, setConversationCapabilities] = useState<ConversationCapabilities>({ browserUse: 'default', computerUse: 'default' });
+  const [skillCatalog, setSkillCatalog] = useState<AgentSkillCatalogEntry[]>([]);
+  const [conversationSkills, setConversationSkills] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [workspaceLoaded, setWorkspaceLoaded] = useState(!bridge);
   const activeRef = useRef(activeId);
   const activeRunIdsRef = useRef<Record<string, string>>({});
+  const terminalRunIdsRef = useRef<Record<string, string>>({});
   const loadVersionRef = useRef(0);
   const optionsRef = useRef(options);
   activeRef.current = activeId;
@@ -92,6 +99,16 @@ export function useConversationWorkspace(bridge: DesktopBridge | undefined, opti
       if (!mounted || !isCurrentConversationRequest(conversationId, version, activeRef.current, loadVersionRef.current)) return;
       setMessages((current) => ({ ...current, [conversationId]: nextMessages.map(displayMessage) }));
       setRuns((current) => ({ ...current, [conversationId]: nextRuns }));
+      const running = nextRuns.find((run) => run.status === 'running');
+      if (running) {
+        const next = { ...activeRunIdsRef.current, [conversationId]: running.id };
+        activeRunIdsRef.current = next;
+        delete terminalRunIdsRef.current[conversationId];
+        setActiveRunIds(next);
+      } else {
+        const latest = nextRuns[0];
+        if (latest && latest.status !== 'running') terminalRunIdsRef.current[conversationId] = latest.id;
+      }
       const interrupted = nextRuns.find((run) => run.status === 'interrupted');
       setInterruptedRun(interrupted ?? null);
       setActivities((current) => ({ ...current, [conversationId]: nextRuns.flatMap((run) => run.activities).map((activity) => ({ id: activity.id, toolName: activity.toolName, status: activity.status, input: activity.input ?? undefined, output: activity.output ?? undefined, startedAt: activity.startedAt, finishedAt: activity.finishedAt, artifacts: activity.artifacts })) }));
@@ -100,17 +117,23 @@ export function useConversationWorkspace(bridge: DesktopBridge | undefined, opti
   }, [activeId, bridge, reportError]);
 
   useEffect(() => {
-    if (!bridge) return;
+      if (!bridge) return;
     return bridge.runs.onEvent((event: RunEvent) => {
-      if (event.type === 'approval_required') { optionsRef.current.onApprovalRequired?.(event); return; }
-      if (event.type === 'approval_resolved') { optionsRef.current.onApprovalResolved?.(event.approvalId); return; }
       if (event.type === 'accepted') {
         const next = { ...activeRunIdsRef.current, [event.conversationId]: event.runId };
         activeRunIdsRef.current = next;
+        delete terminalRunIdsRef.current[event.conversationId];
         setActiveRunIds(next);
         return;
       }
-      if (!acceptsRunEventScope(activeRunIdsRef.current[event.conversationId], event.runId)) return;
+      const activeRunId = activeRunIdsRef.current[event.conversationId];
+      if (event.type === 'approval_required' || event.type === 'approval_resolved') {
+        if (activeRunId !== event.runId) return;
+        if (event.type === 'approval_required') optionsRef.current.onApprovalRequired?.(event);
+        else optionsRef.current.onApprovalResolved?.(event.approvalId);
+        return;
+      }
+      if (!acceptsRunEventScope(activeRunIdsRef.current[event.conversationId], event.runId, terminalRunIdsRef.current[event.conversationId])) return;
       if (event.type === 'tool_start') {
         setActivities((current) => ({ ...current, [event.conversationId]: [...(current[event.conversationId] ?? []), { id: event.toolCallId, toolName: event.toolName, status: 'running', input: event.input, startedAt: new Date().toISOString() }] })); return;
       }
@@ -129,6 +152,7 @@ export function useConversationWorkspace(bridge: DesktopBridge | undefined, opti
         if (event.conversationId === activeRef.current && event.type === 'failed') reportError(event.error, '运行失败。');
       }
       if (event.type === 'completed' || event.type === 'failed' || event.type === 'cancelled') {
+        terminalRunIdsRef.current[event.conversationId] = event.runId;
         if (activeRunIdsRef.current[event.conversationId] === event.runId) {
           const next = { ...activeRunIdsRef.current };
           delete next[event.conversationId];
@@ -143,8 +167,10 @@ export function useConversationWorkspace(bridge: DesktopBridge | undefined, opti
   useEffect(() => {
     if (!bridge) return;
     let mounted = true;
-    void bridge.reasoning.get(activeId).then((selection) => { if (mounted && activeRef.current === activeId) setReasoningSelection(selection); }).catch((reason) => { if (mounted) reportError(reason, '加载会话推理设置失败。'); });
-    void bridge.permissions.get(activeId).then((mode) => { if (mounted && activeRef.current === activeId) setPermissionMode(mode); }).catch((reason) => { if (mounted) reportError(reason, '加载会话权限设置失败。'); });
+    void Promise.all([bridge.reasoning.get(activeId), bridge.permissions.get(activeId), bridge.conversations.capabilities.get(activeId), bridge.conversations.skills?.get?.(activeId) ?? Promise.resolve([]), bridge.skills?.list?.() ?? Promise.resolve([])]).then(([selection, mode, capabilities, selectedSkills, catalog]) => {
+      if (!mounted || activeRef.current !== activeId) return;
+      setReasoningSelection(selection); setPermissionMode(mode); setConversationCapabilities(capabilities); setConversationSkills(selectedSkills); setSkillCatalog(catalog);
+    }).catch((reason) => { if (mounted) reportError(reason, '加载会话设置失败。'); });
     return () => { mounted = false; };
   }, [activeId, bridge, reportError]);
 
@@ -161,5 +187,5 @@ export function useConversationWorkspace(bridge: DesktopBridge | undefined, opti
   const activeRun = activeRunIds[activeId] ? { id: activeRunIds[activeId], conversationId: activeId } : null;
   const isThinking = Boolean(activeRun);
   const activeTitle = useMemo(() => items.find((item) => item.id === activeId)?.title ?? '新会话', [activeId, items]);
-  return { items, setItems, projects, setProjects, workspaceLoaded, activeId, setActiveId: select, activeProjectId, setActiveProjectId, activeProfileId, setActiveProfileId, messages, setMessages, runs, setRuns, activities, setActivities, activeRun, interruptedRun, setInterruptedRun, reasoningSelection, setReasoningSelection, permissionMode, setPermissionMode, error, clearError, activeMessages, activeActivities, conversationRuns, isThinking, activeTitle, refresh };
+  return { items, setItems, projects, setProjects, workspaceLoaded, activeId, setActiveId: select, activeProjectId, setActiveProjectId, activeProfileId, setActiveProfileId, messages, setMessages, runs, setRuns, activities, setActivities, activeRun, interruptedRun, setInterruptedRun, reasoningSelection, setReasoningSelection, permissionMode, setPermissionMode, conversationCapabilities, setConversationCapabilities, skillCatalog, conversationSkills, setConversationSkills, error, clearError, activeMessages, activeActivities, conversationRuns, isThinking, activeTitle, refresh };
 }

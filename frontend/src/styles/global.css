@@ -212,6 +212,21 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid #a7c2ca; outli
 .notes-section-chevron.is-collapsed { transform: rotate(-90deg); }
 .notes-quick-heading:hover .notes-section-chevron, .notes-quick-heading:focus-visible .notes-section-chevron { opacity: 1; }
 .notes-library-heading { width: 100%; margin-top: 1px; }
+.notes-library-heading-row { display: flex; align-items: center; gap: 2px; }
+.notes-library-heading-row .notes-library-heading { flex: 1; }
+.notes-library-add { display: grid; flex: 0 0 auto; place-items: center; width: 25px; height: 25px; margin: 0 2px 0 0; padding: 0; border-radius: 5px; }
+.notes-library-add:hover { background: var(--surface-hover); }
+.notes-library-group { display: grid; gap: 1px; }
+.notes-library-row { display: flex; align-items: center; min-width: 0; min-height: 32px; border-radius: 5px; color: var(--text-secondary); background: transparent; font-size: 13px; }
+.notes-library-row:hover, .notes-library-group.is-selected > .notes-library-row { color: var(--text-primary); background: var(--surface-hover); }
+.notes-library-select { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1; min-height: 32px; padding: 5px 4px 5px 7px; border: 0; color: inherit; background: transparent; font-size: inherit; text-align: left; }
+.notes-library-select > span:nth-child(2) { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-library-expand, .notes-library-row-add { display: grid; flex: 0 0 auto; place-items: center; width: 25px; height: 25px; padding: 0; border: 0; border-radius: 5px; color: var(--text-muted); background: transparent; }
+.notes-library-expand svg { transition: transform 150ms ease; }
+.notes-library-expand svg.is-expanded { transform: rotate(90deg); }
+.notes-library-expand:hover, .notes-library-row-add:hover { color: var(--text-primary); background: var(--surface-root); }
+.notes-library-pages { margin-left: 8px; padding-left: 5px; border-left: 1px solid var(--stroke-subtle); }
+.notes-tree-cross-library-actions { display: contents; }
 .notes-quick-list { display: grid; max-height: 128px; overflow-y: auto; transform-origin: top; animation: notes-section-expand 150ms cubic-bezier(.2, .8, .2, 1) both; }
 .notes-quick-list button { display: flex; align-items: center; gap: 7px; min-width: 0; min-height: 29px; padding: 5px 8px 5px 25px; border: 0; border-radius: 5px; color: var(--text-secondary); background: transparent; font-size: 13px; text-align: left; }
 .notes-quick-list button:hover, .notes-quick-list button.is-selected { color: var(--text-primary); background: var(--surface-hover); }

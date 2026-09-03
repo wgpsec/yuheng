@@ -8,6 +8,7 @@ export type ProviderRepositoryConfig = {
   model: string;
   displayName: string;
   contextWindow: number;
+  supportsImages: boolean;
   hasApiKey: boolean;
 };
 
@@ -17,14 +18,14 @@ const DEFAULT_PROVIDER_SETTING = 'default_provider_id';
 export class ProviderRepository extends RepositoryBase {
 
   list(): ProviderRepositoryConfig[] {
-    const rows = this.db.prepare("SELECT id, protocol, base_url AS baseUrl, model, display_name AS displayName, context_window AS contextWindow FROM provider_profiles ORDER BY CASE WHEN id = 'default' THEN 0 ELSE 1 END, updated_at ASC, id ASC").all() as Row[];
+    const rows = this.db.prepare("SELECT id, protocol, base_url AS baseUrl, model, display_name AS displayName, context_window AS contextWindow, supports_images AS supportsImages FROM provider_profiles ORDER BY CASE WHEN id = 'default' THEN 0 ELSE 1 END, updated_at ASC, id ASC").all() as Row[];
     return rows.map((row) => this.map(row));
   }
 
   get(id?: string): ProviderRepositoryConfig | null {
     const providerId = id ?? this.defaultId();
     if (!providerId) return null;
-    const row = this.db.prepare('SELECT id, protocol, base_url AS baseUrl, model, display_name AS displayName, context_window AS contextWindow FROM provider_profiles WHERE id = ?').get(providerId) as Row | undefined;
+    const row = this.db.prepare('SELECT id, protocol, base_url AS baseUrl, model, display_name AS displayName, context_window AS contextWindow, supports_images AS supportsImages FROM provider_profiles WHERE id = ?').get(providerId) as Row | undefined;
     return row ? this.map(row) : null;
   }
 
@@ -51,17 +52,17 @@ export class ProviderRepository extends RepositoryBase {
     return normalized;
   }
 
-  save(config: Omit<ProviderRepositoryConfig, 'hasApiKey' | 'id'> & { id?: string }): ProviderRepositoryConfig {
+  save(config: Omit<ProviderRepositoryConfig, 'hasApiKey' | 'id' | 'supportsImages'> & { id?: string; supportsImages?: boolean }): ProviderRepositoryConfig {
     const existingCount = Number((this.db.prepare('SELECT COUNT(*) AS count FROM provider_profiles').get() as Row).count);
     const id = config.id?.trim() || (existingCount === 0 ? 'default' : crypto.randomUUID());
     const now = new Date().toISOString();
     this.transaction(() => {
-      this.db.prepare(`INSERT INTO provider_profiles (id, protocol, base_url, model, display_name, context_window, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET protocol=excluded.protocol, base_url=excluded.base_url, model=excluded.model, display_name=excluded.display_name, context_window=excluded.context_window, updated_at=excluded.updated_at`)
-        .run(id, config.protocol, config.baseUrl, config.model, config.displayName, config.contextWindow, now);
+      this.db.prepare(`INSERT INTO provider_profiles (id, protocol, base_url, model, display_name, context_window, supports_images, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET protocol=excluded.protocol, base_url=excluded.base_url, model=excluded.model, display_name=excluded.display_name, context_window=excluded.context_window, supports_images=excluded.supports_images, updated_at=excluded.updated_at`)
+        .run(id, config.protocol, config.baseUrl, config.model, config.displayName, config.contextWindow, config.supportsImages === true ? 1 : 0, now);
       if (existingCount === 0) this.db.prepare('UPDATE conversations SET provider_id = ? WHERE provider_id IS NULL').run(id);
     });
-    return { ...config, id, hasApiKey: true };
+    return { ...config, id, supportsImages: config.supportsImages === true, hasApiKey: true };
   }
 
   delete(id: string): void {
@@ -77,6 +78,6 @@ export class ProviderRepository extends RepositoryBase {
   }
 
   private map(row: Row): ProviderRepositoryConfig {
-    return { id: String(row.id), protocol: row.protocol as ProviderRepositoryConfig['protocol'], baseUrl: String(row.baseUrl), model: String(row.model), displayName: String(row.displayName), contextWindow: Number(row.contextWindow), hasApiKey: false };
+    return { id: String(row.id), protocol: row.protocol as ProviderRepositoryConfig['protocol'], baseUrl: String(row.baseUrl), model: String(row.model), displayName: String(row.displayName), contextWindow: Number(row.contextWindow), supportsImages: Number(row.supportsImages) === 1, hasApiKey: false };
   }
 }

@@ -3,7 +3,30 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
-import { BrowserUseSupervisor, redactBrowserToolInput, type BrowserUseClient } from '../electron/browser-use';
+import { BrowserUseSupervisor, diagnoseBrowserUseEnvironment, browserUseCommandCandidates, redactBrowserToolInput, type BrowserUseClient } from '../electron/browser-use';
+
+describe('Browser Use environment', () => {
+  it('includes Finder-safe uvx locations and prefers the configured command', () => {
+    assert.deepEqual(browserUseCommandCandidates({ YUHENG_BROWSER_USE_COMMAND: '/custom/uvx' }, '/Users/test'), ['/custom/uvx', '/Users/test/.local/bin/uvx', '/opt/homebrew/bin/uvx', '/usr/local/bin/uvx', 'uvx']);
+  });
+
+  it('reports a ready uvx without downloading Browser Use', async () => {
+    const result = await diagnoseBrowserUseEnvironment({ homeDir: '/Users/test', exec: async (command) => {
+      assert.equal(command, '/Users/test/.local/bin/uvx');
+      return { stdout: 'uv 0.8.0\n', stderr: '' };
+    } });
+    assert.equal(result.status, 'ready');
+    assert.equal(result.command, '/Users/test/.local/bin/uvx');
+    assert.equal(result.version, 'uv 0.8.0');
+  });
+
+  it('reports a missing uvx and provides an explicit install command', async () => {
+    const result = await diagnoseBrowserUseEnvironment({ exec: async () => { throw new Error('not found'); } });
+    assert.equal(result.status, 'unavailable');
+    assert.equal(result.command, null);
+    assert.match(result.installCommand, /astral\.sh\/uv\/install/);
+  });
+});
 
 describe('BrowserUseSupervisor', () => {
   it('does not start a sidecar until an enabled plugin executes a tool', async () => {

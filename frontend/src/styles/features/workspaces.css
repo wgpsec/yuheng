@@ -597,9 +597,9 @@ button.task-column-empty:hover { border-color: var(--stroke-default); color: var
 :root[data-theme="light"] .composer.composer-start:focus-within { box-shadow: 0 20px 58px #26323824, 0 0 0 2px #58768118; }
 :root[data-theme="light"] .permission-trigger[aria-expanded="true"], :root[data-theme="light"] .permission-trigger:hover:not(:disabled), :root[data-theme="light"] .reasoning-trigger[aria-expanded="true"], :root[data-theme="light"] .reasoning-trigger:hover:not(:disabled) { background: #eef2f3; }
 :root[data-theme="light"] .permission-trigger.is-full-access { border-color: #b78d69; color: #79512e; background: #fff7ed; }
-:root[data-theme="light"] .permission-menu, :root[data-theme="light"] .reasoning-menu { background: #ffffff; box-shadow: 0 12px 30px #26323824; }
-:root[data-theme="light"] .permission-menu::after, :root[data-theme="light"] .reasoning-menu::after { background: #ffffff; }
-:root[data-theme="light"] .permission-menu button.is-selected { background: #e7edef; }
+:root[data-theme="light"] .capability-menu, :root[data-theme="light"] .permission-menu, :root[data-theme="light"] .reasoning-menu { background: #ffffff; box-shadow: 0 12px 30px #26323824; }
+:root[data-theme="light"] .capability-menu::after, :root[data-theme="light"] .permission-menu::after, :root[data-theme="light"] .reasoning-menu::after { background: #ffffff; }
+:root[data-theme="light"] .capability-menu button.is-selected, :root[data-theme="light"] .permission-menu button.is-selected { background: #e7edef; }
 :root[data-theme="light"] .reasoning-menu button.is-selected { background: #e7edef; }
 :root[data-theme="light"] .reasoning-menu button.is-selected svg { color: #476873; }
 :root[data-theme="light"] .attachment-chip { border-color: #c5d0d4; color: #52636a; background: #f0f3f4; }
@@ -652,6 +652,9 @@ button.task-column-empty:hover { border-color: var(--stroke-default); color: var
 :root[data-theme="notion"] .permission-trigger.is-full-access { border-color: #c3a17d; color: #7b5836; background: #fbf5ed; }
 :root[data-theme="notion"] .permission-menu { background: #ffffff; box-shadow: 0 12px 30px #37352f1f; }
 :root[data-theme="notion"] .permission-menu::after { background: #ffffff; }
+:root[data-theme="notion"] .capability-menu { background: #ffffff; box-shadow: 0 12px 30px #37352f1f; }
+:root[data-theme="notion"] .capability-menu::after { background: #ffffff; }
+:root[data-theme="notion"] .capability-menu button.is-selected { background: #efefed; }
 :root[data-theme="notion"] .reasoning-menu { background: #ffffff; box-shadow: 0 12px 30px #37352f1f; }
 :root[data-theme="notion"] .reasoning-menu::after { background: #ffffff; }
 :root[data-theme="notion"] .reasoning-menu button.is-selected svg { color: #37352f; }

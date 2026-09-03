@@ -315,13 +315,15 @@ test('indexes note titles and markdown content in global search', () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-notes-search-'));
   const store = new AppStore(dataDir);
   try {
-    const note = store.createNote('发布计划');
+    const knowledgeBase = store.createKnowledgeBase({ name: '开发知识库' });
+    const note = store.createNoteInKnowledgeBase(knowledgeBase.id, '发布计划');
     store.updateNote(note.id, { content: '记录灰度发布和回滚步骤' });
     const titleResult = store.search('发布计划').find((result) => result.kind === 'note');
     const contentResult = store.search('灰度发布').find((result) => result.kind === 'note');
     assert.equal(titleResult?.id, note.id);
     assert.equal(contentResult?.id, note.id);
-    assert.equal(contentResult?.context, '笔记');
+    assert.equal(contentResult?.context, '开发知识库 / 发布计划');
+    assert.equal(contentResult?.knowledgeBaseId, knowledgeBase.id);
   } finally {
     store.close();
     fs.rmSync(dataDir, { recursive: true, force: true });

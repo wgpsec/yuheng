@@ -14,3 +14,8 @@ test('conversation controller rejects events from a superseded run', () => {
   assert.equal(acceptsRunEventScope('run-new', 'run-old'), false);
   assert.equal(acceptsRunEventScope('run-new', 'run-new'), true);
 });
+
+test('conversation controller rejects events from the most recent terminal run', () => {
+  assert.equal(acceptsRunEventScope(undefined, 'run-old', 'run-old'), false);
+  assert.equal(acceptsRunEventScope(undefined, 'run-new', 'run-old'), false);
+});

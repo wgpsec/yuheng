@@ -40,6 +40,7 @@ import { registerManagedProtocols } from '../protocols/register-managed-protocol
 import { MainWindowLifecycle } from '../windows/main-window';
 import { TrayLifecycle } from '../windows/tray-lifecycle';
 import { PetWindowLifecycle } from '../windows/pet-window';
+import { attachmentMimeType } from '../attachment-types';
 
 const isDevelopment = Boolean(process.env.ELECTRON_RENDERER_URL);
 export const applicationVersionValue = applicationVersion(path.resolve(__dirname, '../..'));
@@ -73,15 +74,7 @@ let runExecutor: RunExecutor;
 let automaticBackupTimer: NodeJS.Timeout | undefined;
 let allowWindowClose = false;
 let desktopPresenceConfig: DesktopPresenceConfig = { notificationsEnabled: true, menuBarEnabled: true };
-type Attachment = Omit<StoredAttachment, 'data'>;
 const attachments = new Map<string, StoredAttachment>();
-const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
-const MAX_TOTAL_ATTACHMENT_BYTES = 20 * 1024 * 1024;
-const allowedAttachmentTypes: Record<string, string> = {
-  '.txt': 'text/plain', '.md': 'text/markdown', '.csv': 'text/csv', '.json': 'application/json',
-  '.js': 'text/javascript', '.ts': 'text/typescript', '.py': 'text/x-python', '.html': 'text/html', '.css': 'text/css',
-  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
-};
 
 const petStateCoordinator = new PetStateCoordinator({
   onStateChange: (state) => {
@@ -133,10 +126,6 @@ function dismissTaskPetReminder(): void {
   activeTaskPetReminderId = null;
   if (taskPetReminderTimer) clearTimeout(taskPetReminderTimer);
   taskPetReminderTimer = undefined;
-}
-
-function attachmentMimeType(name: string): string {
-  return allowedAttachmentTypes[path.extname(name).toLowerCase()] ?? 'application/octet-stream';
 }
 
 function setPetFullscreenHidden(hidden: boolean): void {
@@ -471,6 +460,7 @@ export async function initializeNormalApplication(owner: DatabaseOwner, shutdown
   shutdown.register('browser-use', () => browserUse.dispose());
   browserArtifacts = new BrowserArtifactStore(path.join(app.getPath('userData'), 'browser-use', 'screenshots'));
   securityAudit = new FileSecurityAuditLog(app.getPath('userData'));
+  const projectRunWorkspace = new ProjectRunWorkspace(path.join(app.getPath('userData'), 'workspace'));
   runExecutor = new RunExecutor({
     store,
     browserUse,
@@ -479,7 +469,7 @@ export async function initializeNormalApplication(owner: DatabaseOwner, shutdown
     runCoordinator,
     approvalCoordinator,
     userDataDirectory: app.getPath('userData'),
-    projectRunWorkspace: new ProjectRunWorkspace(path.join(app.getPath('userData'), 'workspace')),
+    projectRunWorkspace,
     applicationPath: app.getAppPath(),
     emit,
     taskChanged: handleTaskChanged,
@@ -508,7 +498,11 @@ export async function initializeNormalApplication(owner: DatabaseOwner, shutdown
     { scheme: BROWSER_ARTIFACT_SCHEME, resolve: (url) => browserArtifacts.resolveUrl(url) },
     { scheme: NOTE_COVER_SCHEME, resolve: (url) => noteCovers.resolveUrl(url) },
   ]));
-  store.recoverRunningRuns();
+  const recoveredRunWorkspaces = store.recoverRunningRunWorkspaces();
+  await Promise.all(recoveredRunWorkspaces.map(async ({ projectId, runId, workspacePath }) => {
+    try { await projectRunWorkspace.cleanupRecoveredRun(projectId, runId, workspacePath); }
+    catch (error) { console.warn(`无法清理已恢复 Run 工作区 ${runId}：`, error); }
+  }));
   taskReminders.refresh();
   automaticBackupTimer = setInterval(() => { void runAutomaticBackup(); }, 60 * 60 * 1000);
   shutdown.register('automatic-backup-timer', () => {
@@ -671,26 +665,21 @@ export async function initializeNormalApplication(owner: DatabaseOwner, shutdown
     taskBoardsChanged: emitTaskBoardsChanged,
     attachmentMimeType,
   });
-  registerProviderIpc({ registrar: normalIpc, store, secrets, browserUse });
+  registerProviderIpc({ registrar: normalIpc, store, secrets });
   const pickAttachments = async (event: IpcMainInvokeEvent) => {
     const owner = BrowserWindow.fromWebContents(event.sender);
-    const options: OpenDialogOptions = { properties: ['openFile', 'multiSelections'], filters: [{ name: '支持的文件', extensions: Object.keys(allowedAttachmentTypes).map((extension) => extension.slice(1)) }] };
+    const options: OpenDialogOptions = { properties: ['openFile', 'multiSelections'] };
     const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
     if (result.canceled) return [];
     const selected: StoredAttachment[] = [];
-    let totalBytes = 0;
     for (const filePath of result.filePaths) {
-      const extension = path.extname(filePath).toLowerCase();
-      const mimeType = allowedAttachmentTypes[extension];
-      if (!mimeType) throw new Error(`不支持的文件类型：${path.basename(filePath)}`);
-      const data = await fs.readFile(filePath);
-      if (data.byteLength > MAX_ATTACHMENT_BYTES) throw new Error(`文件超过 10 MB：${path.basename(filePath)}`);
-      totalBytes += data.byteLength;
-      if (totalBytes > MAX_TOTAL_ATTACHMENT_BYTES) throw new Error('附件总大小不能超过 20 MB。');
-      selected.push({ id: crypto.randomUUID(), name: path.basename(filePath), mimeType, size: data.byteLength, data });
+      const mimeType = attachmentMimeType(filePath);
+      const metadata = await fs.stat(filePath);
+      if (!metadata.isFile()) throw new Error(`附件不是普通文件：${path.basename(filePath)}`);
+      selected.push({ id: crypto.randomUUID(), name: path.basename(filePath), mimeType, size: metadata.size, sourcePath: filePath });
     }
     selected.forEach((attachment) => attachments.set(attachment.id, attachment));
-    return selected.map(({ data: _data, ...attachment }) => attachment);
+    return selected.map(({ sourcePath: _sourcePath, ...attachment }) => attachment);
   };
   const releaseAttachments = (attachmentIds: unknown) => {
     if (!Array.isArray(attachmentIds)) return;
@@ -759,9 +748,10 @@ export async function initializeNormalApplication(owner: DatabaseOwner, shutdown
     store,
     getPermissionMode: (conversationId) => sessionPermissionModes.get(conversationId) ?? store.getToolPermissionMode(conversationId),
     savePermissionMode: (conversationId, mode) => {
-      if (mode === 'full_session') { sessionPermissionModes.set(conversationId, mode); return mode; }
-      sessionPermissionModes.delete(conversationId);
-      return store.saveToolPermissionMode(conversationId, mode);
+      const saved = store.saveToolPermissionMode(conversationId, mode);
+      if (saved === 'full_session') sessionPermissionModes.set(conversationId, saved);
+      else sessionPermissionModes.delete(conversationId);
+      return saved;
     },
     pickAttachments,
     releaseAttachments,

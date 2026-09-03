@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, chmod, readFile, stat } from 'node:fs/promises';
+import { access, chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -11,8 +11,10 @@ test('stages run attachments read-only inside an isolated project workspace', as
   const root = await mkdtemp(path.join(tmpdir(), 'yuheng-project-workspace-'));
   const manager = new ProjectRunWorkspace(root);
   const csv = Buffer.from('name,count\nalpha,3\n');
+  const sourcePath = path.join(root, 'weekly.csv');
+  await writeFile(sourcePath, csv);
   const prepared = await manager.prepare('project-a', 'run-a', [
-    { id: 'attachment-a', name: 'weekly.csv', mimeType: 'text/csv', size: csv.byteLength, data: csv },
+    { id: 'attachment-a', name: 'weekly.csv', mimeType: 'text/csv', size: csv.byteLength, sourcePath },
   ]);
 
   assert.equal(prepared.projectDirectory, manager.projectDirectory('project-a'));
@@ -37,9 +39,13 @@ test('keeps projects isolated and resolves duplicate attachment names', async ()
   const root = await mkdtemp(path.join(tmpdir(), 'yuheng-project-workspace-'));
   const manager = new ProjectRunWorkspace(root);
   const data = Buffer.from('value');
+  const firstSourcePath = path.join(root, 'first.csv');
+  const secondSourcePath = path.join(root, 'second.csv');
+  await writeFile(firstSourcePath, data);
+  await writeFile(secondSourcePath, data);
   const first = await manager.prepare('project-a', 'run-a', [
-    { id: 'one', name: '../report.csv', mimeType: 'text/csv', size: data.byteLength, data },
-    { id: 'two', name: 'report.csv', mimeType: 'text/csv', size: data.byteLength, data },
+    { id: 'one', name: '../report.csv', mimeType: 'text/csv', size: data.byteLength, sourcePath: firstSourcePath },
+    { id: 'two', name: 'report.csv', mimeType: 'text/csv', size: data.byteLength, sourcePath: secondSourcePath },
   ]);
   const second = await manager.prepare('project-b', 'run-b', []);
 
@@ -72,4 +78,16 @@ test('rejects a configured project directory that is missing', async () => {
     manager.prepare('project-a', 'run-a', [], path.join(root, 'missing-project-directory')),
     /项目工作目录不存在或不是文件夹/u,
   );
+});
+
+test('cleans only the recovered run directory identified by the database', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'yuheng-project-workspace-'));
+  const manager = new ProjectRunWorkspace(root);
+  const stale = path.join(manager.projectDirectory('project-a'), '.yuheng', 'runs', 'run-a');
+  const unknown = path.join(manager.projectDirectory('project-a'), '.yuheng', 'runs', 'unknown');
+  await mkdir(stale, { recursive: true });
+  await mkdir(unknown, { recursive: true });
+  await manager.cleanupRecoveredRun('project-a', 'run-a');
+  await assert.rejects(access(stale, constants.F_OK));
+  await access(unknown, constants.F_OK);
 });

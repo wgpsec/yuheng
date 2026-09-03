@@ -11,7 +11,7 @@ const DATA_FILES: Array<[keyof FullBackupSnapshot, string]> = [
   ['conversationProjects', 'data/conversation-projects.json'], ['conversations', 'data/conversations.json'], ['messages', 'data/messages.json'],
   ['runs', 'data/runs.json'], ['runActivities', 'data/run-activities.json'], ['runArtifacts', 'data/run-artifacts.json'],
   ['providers', 'data/providers.json'], ['appSettings', 'data/app-settings.json'], ['taskBoards', 'data/task-boards.json'],
-  ['taskTypes', 'data/task-types.json'], ['tasks', 'data/tasks.json'], ['notes', 'data/notes.json'],
+  ['taskTypes', 'data/task-types.json'], ['tasks', 'data/tasks.json'], ['knowledgeBases', 'data/knowledge-bases.json'], ['notes', 'data/notes.json'],
 ];
 
 async function collectFiles(root: string, prefix: string, output: Record<string, Buffer>): Promise<void> {
@@ -54,7 +54,7 @@ export async function restoreFullBackup(options: { dataDir: string; store: AppSt
   const parsed = readBackupArchive(options.archive);
   const empty = [] as never[];
   const snapshot = {
-    conversationProjects: parseDataset(parsed.files, 'data/conversation-projects.json', empty), conversations: parseDataset(parsed.files, 'data/conversations.json', empty), messages: parseDataset(parsed.files, 'data/messages.json', empty), runs: parseDataset(parsed.files, 'data/runs.json', empty), runActivities: parseDataset(parsed.files, 'data/run-activities.json', empty), runArtifacts: parseDataset(parsed.files, 'data/run-artifacts.json', empty), providers: parseDataset(parsed.files, 'data/providers.json', empty), appSettings: parseDataset(parsed.files, 'data/app-settings.json', empty), taskBoards: parseDataset(parsed.files, 'data/task-boards.json', empty), taskTypes: parseDataset(parsed.files, 'data/task-types.json', empty), tasks: parseDataset(parsed.files, 'data/tasks.json', empty), notes: parseDataset(parsed.files, 'data/notes.json', []),
+    conversationProjects: parseDataset(parsed.files, 'data/conversation-projects.json', empty), conversations: parseDataset(parsed.files, 'data/conversations.json', empty), messages: parseDataset(parsed.files, 'data/messages.json', empty), runs: parseDataset(parsed.files, 'data/runs.json', empty), runActivities: parseDataset(parsed.files, 'data/run-activities.json', empty), runArtifacts: parseDataset(parsed.files, 'data/run-artifacts.json', empty), providers: parseDataset(parsed.files, 'data/providers.json', empty), appSettings: parseDataset(parsed.files, 'data/app-settings.json', empty), taskBoards: parseDataset(parsed.files, 'data/task-boards.json', empty), taskTypes: parseDataset(parsed.files, 'data/task-types.json', empty), tasks: parseDataset(parsed.files, 'data/tasks.json', empty), knowledgeBases: parseDataset(parsed.files, 'data/knowledge-bases.json', []), notes: parseDataset(parsed.files, 'data/notes.json', []),
   } as FullBackupSnapshot;
   const providerKeysValue = parseDataset<unknown>(parsed.files, 'data/provider-keys.json', {});
   const providerKeys = providerKeysValue && typeof providerKeysValue === 'object' && !Array.isArray(providerKeysValue)

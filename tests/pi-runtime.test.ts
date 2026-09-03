@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { createPiRuntime, type PiSession, type PiSessionEvent, type PiRuntimeEvent, type PiRuntimeInput } from '../electron/pi-runtime';
+import { createPiRuntime, createToolCallIdResolver, type PiSession, type PiSessionEvent, type PiRuntimeEvent, type PiRuntimeInput } from '../electron/pi-runtime';
 
 function input(overrides: Partial<PiRuntimeInput> = {}): PiRuntimeInput {
   return {
@@ -14,6 +14,15 @@ function input(overrides: Partial<PiRuntimeInput> = {}): PiRuntimeInput {
 }
 
 describe('PiRuntime', () => {
+  it('keeps repeated missing-id tool calls distinct and pairs their end events', () => {
+    const resolver = createToolCallIdResolver();
+    const first = resolver.start(undefined, 'read');
+    const second = resolver.start(undefined, 'read');
+    assert.notEqual(first, second);
+    assert.equal(resolver.end(undefined, 'read'), first);
+    assert.equal(resolver.end(undefined, 'read'), second);
+  });
+
   it('forwards assistant text deltas and finishes once when a Pi session ends', async () => {
     const events: string[] = [];
     let sessionListener: ((event: PiSessionEvent) => void) | undefined;

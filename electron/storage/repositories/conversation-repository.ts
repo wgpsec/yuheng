@@ -76,14 +76,14 @@ export class ConversationRepository extends RepositoryBase {
 
   list(includeArchived = false): Conversation[] {
     const rows = this.db.prepare(`SELECT id, project_id AS projectId, title, provider_id AS providerId, profile_id AS profileId,
-      updated_at AS updatedAt, archived, pinned FROM conversations ${includeArchived ? '' : 'WHERE archived = 0'}
+      workspace_path AS workspacePath, updated_at AS updatedAt, archived, pinned FROM conversations ${includeArchived ? '' : 'WHERE archived = 0'}
       ORDER BY pinned DESC, updated_at DESC`).all() as Row[];
     return rows.map((row) => this.mapConversation(row));
   }
 
   get(id: string): Conversation | null {
     const row = this.db.prepare(`SELECT id, project_id AS projectId, title, provider_id AS providerId, profile_id AS profileId,
-      updated_at AS updatedAt, archived, pinned FROM conversations WHERE id = ?`).get(id) as Row | undefined;
+      workspace_path AS workspacePath, updated_at AS updatedAt, archived, pinned FROM conversations WHERE id = ?`).get(id) as Row | undefined;
     return row ? this.mapConversation(row) : null;
   }
 
@@ -110,8 +110,8 @@ export class ConversationRepository extends RepositoryBase {
       : this.defaultProviderId();
     if (!isAgentProfileId(backup.conversation.profileId)) throw new Error('Profile not found.');
     this.transaction(() => {
-      this.db.prepare('INSERT INTO conversations (id, project_id, title, provider_id, profile_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .run(id, 'personal', backup.conversation.title, providerId, backup.conversation.profileId, now, now);
+      this.db.prepare('INSERT INTO conversations (id, project_id, title, provider_id, profile_id, workspace_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(id, 'personal', backup.conversation.title, providerId, backup.conversation.profileId, backup.conversation.workspacePath ?? null, now, now);
       const insert = this.db.prepare('INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)');
       for (const message of backup.messages) insert.run(crypto.randomUUID(), id, message.role, message.content, message.createdAt || now);
     });
@@ -125,8 +125,8 @@ export class ConversationRepository extends RepositoryBase {
     const selectedProviderId = providerId ?? this.defaultProviderId();
     if (selectedProviderId && !this.providerExists(selectedProviderId)) throw new Error('Provider not found.');
     if (!isAgentProfileId(profileId)) throw new Error('Profile not found.');
-    this.db.prepare('INSERT INTO conversations (id, project_id, title, provider_id, profile_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(id, projectId, title, selectedProviderId, profileId, now, now);
+    this.db.prepare('INSERT INTO conversations (id, project_id, title, provider_id, profile_id, workspace_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, projectId, title, selectedProviderId, profileId, null, now, now);
     return { id, projectId, title, updatedAt: now, archived: false, pinned: false, profileId, ...(selectedProviderId ? { providerId: selectedProviderId } : {}) };
   }
 
@@ -138,8 +138,8 @@ export class ConversationRepository extends RepositoryBase {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     this.transaction(() => {
-      this.db.prepare('INSERT INTO conversations (id, project_id, title, provider_id, profile_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .run(id, source.projectId, `${source.title} · 分支`, source.providerId ?? this.defaultProviderId(), source.profileId, now, now);
+      this.db.prepare('INSERT INTO conversations (id, project_id, title, provider_id, profile_id, workspace_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(id, source.projectId, `${source.title} · 分支`, source.providerId ?? this.defaultProviderId(), source.profileId, source.workspacePath ?? null, now, now);
       const insert = this.db.prepare('INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)');
       for (const message of messages.slice(0, index + 1)) insert.run(crypto.randomUUID(), id, message.role, message.content, message.createdAt);
     });
@@ -150,6 +150,20 @@ export class ConversationRepository extends RepositoryBase {
     const row = this.db.prepare('SELECT provider_id AS providerId FROM conversations WHERE id = ?').get(conversationId) as Row | undefined;
     if (!row) throw new Error('Conversation not found.');
     return row.providerId == null ? this.defaultProviderId() : String(row.providerId);
+  }
+
+  workspaceOverride(conversationId: string): string | null {
+    const row = this.db.prepare('SELECT workspace_path AS workspacePath FROM conversations WHERE id = ?').get(conversationId) as Row | undefined;
+    if (!row) throw new Error('Conversation not found.');
+    return row.workspacePath == null ? null : String(row.workspacePath);
+  }
+
+  setWorkspace(conversationId: string, workspacePath: string | null): Conversation {
+    const normalized = workspacePath?.trim() || null;
+    const result = this.db.prepare('UPDATE conversations SET workspace_path = ?, updated_at = ? WHERE id = ?')
+      .run(normalized, new Date().toISOString(), conversationId);
+    if (Number(result.changes) === 0) throw new Error('Conversation not found.');
+    return this.require(conversationId);
   }
 
   setProvider(conversationId: string, providerId: string): string {
@@ -203,6 +217,7 @@ export class ConversationRepository extends RepositoryBase {
       const result = this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
       if (Number(result.changes) === 0) throw new Error('Conversation not found.');
       this.db.prepare('DELETE FROM app_settings WHERE key = ?').run(`tool_permission:${id}`);
+      this.db.prepare('DELETE FROM app_settings WHERE key = ?').run(`conversation_capabilities:${id}`);
     });
   }
 
@@ -272,6 +287,7 @@ export class ConversationRepository extends RepositoryBase {
       archived: Number(row.archived) === 1, pinned: Number(row.pinned) === 1, profileId,
     };
     if (row.providerId != null) conversation.providerId = String(row.providerId);
+    if (row.workspacePath != null) conversation.workspacePath = String(row.workspacePath);
     return conversation;
   }
 

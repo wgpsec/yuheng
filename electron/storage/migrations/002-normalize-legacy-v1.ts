@@ -50,7 +50,18 @@ function createFoundations(db: DatabaseConnection): void {
 }
 
 function addLegacyColumns(db: DatabaseConnection): void {
+  const epoch = new Date(0).toISOString();
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS knowledge_bases (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, icon TEXT, color TEXT,
+      position INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+  `);
+  db.prepare('INSERT OR IGNORE INTO knowledge_bases (id, name, position, archived, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)')
+    .run('default', '默认知识库', 0, epoch, epoch);
   addColumn(db, 'provider_profiles', 'context_window', 'INTEGER NOT NULL DEFAULT 200000');
+  addColumn(db, 'provider_profiles', 'supports_images', 'INTEGER NOT NULL DEFAULT 0');
   addColumn(db, 'conversation_projects', 'workspace_path', 'TEXT');
   addColumn(db, 'conversations', 'project_id', "TEXT REFERENCES conversation_projects(id)");
   addColumn(db, 'conversations', 'description', "TEXT NOT NULL DEFAULT ''");
@@ -75,6 +86,8 @@ function addLegacyColumns(db: DatabaseConnection): void {
   }
 
   if (tableExists(db, 'notes')) {
+    addColumn(db, 'notes', 'knowledge_base_id', 'TEXT REFERENCES knowledge_bases(id) ON DELETE RESTRICT');
+    db.prepare("UPDATE notes SET knowledge_base_id = 'default' WHERE knowledge_base_id IS NULL OR knowledge_base_id = ''").run();
     addColumn(db, 'notes', 'icon', 'TEXT');
     addColumn(db, 'notes', 'cover', 'TEXT');
     addColumn(db, 'notes', 'properties_json', "TEXT NOT NULL DEFAULT '{}'");
@@ -95,11 +108,11 @@ function rebuildProviderProfiles(db: DatabaseConnection): void {
       id TEXT PRIMARY KEY,
       protocol TEXT NOT NULL CHECK (protocol IN ('openai', 'anthropic')),
       base_url TEXT NOT NULL, model TEXT NOT NULL, display_name TEXT NOT NULL,
-      context_window INTEGER NOT NULL DEFAULT 200000, updated_at TEXT NOT NULL
+      context_window INTEGER NOT NULL DEFAULT 200000, supports_images INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
     );
-    INSERT INTO provider_profiles_v2 (id, protocol, base_url, model, display_name, context_window, updated_at)
+    INSERT INTO provider_profiles_v2 (id, protocol, base_url, model, display_name, context_window, supports_images, updated_at)
       SELECT CASE WHEN typeof(id) = 'integer' THEN 'default' ELSE CAST(id AS TEXT) END,
-        protocol, base_url, model, display_name, context_window, updated_at
+        protocol, base_url, model, display_name, context_window, supports_images, updated_at
       FROM provider_profiles;
     DROP TABLE provider_profiles;
     ALTER TABLE provider_profiles_v2 RENAME TO provider_profiles;
@@ -115,12 +128,12 @@ function rebuildConversations(db: DatabaseConnection): void {
       title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
       archived INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0,
       reasoning_level TEXT NOT NULL DEFAULT 'default', provider_id TEXT,
-      profile_id TEXT NOT NULL DEFAULT 'assistant', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      profile_id TEXT NOT NULL DEFAULT 'assistant', workspace_path TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
     INSERT INTO conversations_v2
-      (id, project_id, title, description, archived, pinned, reasoning_level, provider_id, profile_id, created_at, updated_at)
+      (id, project_id, title, description, archived, pinned, reasoning_level, provider_id, profile_id, workspace_path, created_at, updated_at)
       SELECT id, COALESCE(project_id, 'personal'), title, description, archived, pinned,
-        reasoning_level, provider_id, profile_id, created_at, updated_at FROM conversations;
+        reasoning_level, provider_id, profile_id, NULL, created_at, updated_at FROM conversations;
     DROP TABLE conversations;
     ALTER TABLE conversations_v2 RENAME TO conversations;
   `);

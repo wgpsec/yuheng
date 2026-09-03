@@ -2,7 +2,7 @@
 
 状态：已启用
 
-本文是玉衡 macOS 安装包的唯一操作说明。当前发行目标为 macOS 13+、Apple Silicon（arm64）。Windows、Linux、Intel Mac 和 Universal Binary 不在本配置范围内。
+本文是玉衡 macOS 安装包的操作说明，覆盖 macOS 13+、Apple Silicon（arm64）构建。Windows 安装包由 GitHub Actions 的 Windows runner 自动构建，具体流程见项目根目录 README；Linux、Intel Mac 和 Universal Binary 不在当前发行范围内。
 
 ## 构建工具链
 

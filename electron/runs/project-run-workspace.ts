@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 
 export type WorkspaceAttachment = {
@@ -6,7 +7,7 @@ export type WorkspaceAttachment = {
   name: string;
   mimeType: string;
   size: number;
-  data: Uint8Array;
+  sourcePath: string;
 };
 
 export type StagedAttachment = {
@@ -57,6 +58,11 @@ export class ProjectRunWorkspace {
     return path.join(this.workspaceRoot, 'projects', safeSegment(projectId, 'project id'));
   }
 
+  async cleanupRecoveredRun(projectId: string, runId: string, workspacePath?: string | null): Promise<void> {
+    const runDirectory = path.join(this.projectDirectory(projectId, workspacePath), '.yuheng', 'runs', safeSegment(runId, 'run id'));
+    await fs.rm(runDirectory, { recursive: true, force: true });
+  }
+
   async prepare(projectId: string, runId: string, attachments: WorkspaceAttachment[], workspacePath?: string | null): Promise<PreparedRunWorkspace> {
     const customWorkspace = Boolean(workspacePath?.trim());
     const projectDirectory = this.projectDirectory(projectId, workspacePath);
@@ -79,12 +85,14 @@ export class ProjectRunWorkspace {
       for (const attachment of attachments) {
         const name = uniqueAttachmentName(attachment.name, usedNames);
         const absolutePath = path.join(attachmentDirectory, name);
-        await fs.writeFile(absolutePath, attachment.data, { mode: 0o400, flag: 'wx' });
+        const source = await fs.stat(attachment.sourcePath);
+        if (!source.isFile()) throw new Error(`附件不是普通文件：${attachment.name}`);
+        await fs.copyFile(attachment.sourcePath, absolutePath, fsConstants.COPYFILE_EXCL);
         await fs.chmod(absolutePath, 0o400);
         staged.push({
           name,
           mimeType: attachment.mimeType,
-          size: attachment.data.byteLength,
+          size: source.size,
           relativePath: path.posix.join('.yuheng', 'runs', runId, 'attachments', name),
           absolutePath,
         });

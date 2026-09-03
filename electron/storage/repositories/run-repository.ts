@@ -2,6 +2,7 @@ import type { RunActivity, RunActivityStatus, RunArtifact, RunStatus, RunSummary
 import { RepositoryBase } from './repository-base';
 
 type Row = Record<string, unknown>;
+export type RecoveredRunWorkspace = { runId: string; projectId: string; workspacePath: string | null };
 
 export class RunRepository extends RepositoryBase {
 
@@ -23,10 +24,17 @@ export class RunRepository extends RepositoryBase {
   }
 
   recoverRunning(now = new Date().toISOString()): number {
+    return this.recoverRunningWorkspaces(now).length;
+  }
+
+  recoverRunningWorkspaces(now = new Date().toISOString()): RecoveredRunWorkspace[] {
     return this.transaction(() => {
+      const rows = this.db.prepare(`SELECT r.id AS runId, c.project_id AS projectId, COALESCE(c.workspace_path, p.workspace_path) AS workspacePath
+        FROM runs r JOIN conversations c ON c.id = r.conversation_id JOIN conversation_projects p ON p.id = c.project_id
+        WHERE r.status = 'running'`).all() as Row[];
       this.db.prepare("UPDATE run_activities SET status = 'cancelled', finished_at = COALESCE(finished_at, ?) WHERE status = 'running' AND run_id IN (SELECT id FROM runs WHERE status = 'running')").run(now);
-      const result = this.db.prepare("UPDATE runs SET status = 'interrupted', error = ?, finished_at = ? WHERE status = 'running'").run('应用重启时运行被中断。', now);
-      return Number(result.changes);
+      this.db.prepare("UPDATE runs SET status = 'interrupted', error = ?, finished_at = ? WHERE status = 'running'").run('应用重启时运行被中断。', now);
+      return rows.map((row) => ({ runId: String(row.runId), projectId: String(row.projectId), workspacePath: row.workspacePath == null ? null : String(row.workspacePath) }));
     });
   }
 

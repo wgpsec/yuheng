@@ -58,4 +58,14 @@ describe('IPC sender authorization', () => {
     assert.match(main, /runCoordinator\.start\([^\n]+permissionMode/);
     assert.match(executor, /new ToolSecurityPolicy\(preparedWorkspace\.projectDirectory, run\.permissionMode\)/);
   });
+
+  it('exposes knowledge-base operations through the secured notes bridge', () => {
+    const ipc = readFileSync(new URL('../electron/ipc/register-note-ipc.ts', import.meta.url), 'utf8');
+    const preload = readFileSync(new URL('../electron/preload.ts', import.meta.url), 'utf8');
+    for (const channel of ['knowledge-bases:list', 'knowledge-bases:active', 'knowledge-bases:set-active', 'knowledge-bases:create', 'knowledge-bases:update', 'knowledge-bases:delete', 'notes:list-in-knowledge-base', 'notes:create-in-knowledge-base', 'notes:move-to-knowledge-base', 'notes:copy-to-knowledge-base']) {
+      assert.ok(ipc.includes(`registrar.main('${channel}'`), `missing IPC handler ${channel}`);
+      assert.ok(preload.includes(`'${channel}'`), `missing preload channel ${channel}`);
+    }
+    assert.match(preload, /knowledgeBases:\s*\{/);
+  });
 });

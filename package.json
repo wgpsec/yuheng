@@ -1,6 +1,6 @@
 {
   "name": "yuheng",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "private": true,
   "description": "Yuheng desktop personal secretary",
   "main": "dist-electron/main.js",
@@ -15,6 +15,7 @@
       "dist-electron/**/*",
       "dist-renderer/**/*",
       "electron/prompts/**/*",
+      "electron/skills/**/*",
       "assets/yuheng-tray.png",
       "package.json",
       "!node_modules/@injaneity/pi-computer-use/prebuilt/linux/**",
@@ -39,15 +40,33 @@
           ]
         }
       ]
+    },
+    "win": {
+      "icon": "assets/yuheng-icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
     }
   },
   "scripts": {
+    "postinstall": "node scripts/patch-pi-computer-use.mjs",
     "dev": "npm run build:electron && concurrently -k \"vite --host 127.0.0.1 --port ${VITE_PORT:-5173} --strictPort\" \"tsc -p tsconfig.electron.json --watch\" \"wait-on http://127.0.0.1:${VITE_PORT:-5173} && ELECTRON_RENDERER_URL=http://127.0.0.1:${VITE_PORT:-5173} electron dist-electron/main.js\"",
     "build:electron": "tsc -p tsconfig.electron.json",
     "build": "npm run typecheck && npm run build:electron && vite build",
     "build:mac-icon": "scripts/build-mac-icon.sh",
     "package:mac": "scripts/clean-mac-release.sh && npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --arm64 --publish never && scripts/clean-mac-release.sh --app-only",
     "package:mac:dir": "scripts/clean-mac-release.sh && npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --arm64 --dir --publish never",
+    "package:win": "npm run build && electron-builder --win nsis --x64 --publish never",
     "test": "node --import tsx --test tests/*.test.ts",
     "start": "electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit"

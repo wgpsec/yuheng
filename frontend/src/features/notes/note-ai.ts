@@ -32,10 +32,11 @@ const actionInstructions: Record<Exclude<NoteAiAction, 'custom'>, string> = {
   extract_tasks: '请从这篇笔记中提取可执行的待办事项，输出标题、说明和建议截止时间。',
 };
 
-export function buildNoteAiPrompt(note: { title: string; content: string }, action: NoteAiAction, customInstruction?: string, selection?: string): string {
+export function buildNoteAiPrompt(note: { title: string; content: string; knowledgeBaseName?: string; pagePath?: string }, action: NoteAiAction, customInstruction?: string, selection?: string): string {
   const instruction = action === 'custom' ? customInstruction?.trim() || '请协助我整理这篇笔记。' : actionInstructions[action];
   const scope = selection?.trim() ? `以下是用户选中的片段，请只围绕该片段处理：\n${selection.trim()}` : `以下是整篇笔记，请仅基于这篇笔记处理，不要假设未提供的事实：\n${note.content || '（笔记暂无正文）'}`;
-  return `${instruction}\n\n笔记标题：${note.title}\n\n${scope}`;
+  const context = [note.knowledgeBaseName ? `知识库：${note.knowledgeBaseName}` : '', note.pagePath ? `页面路径：${note.pagePath}` : ''].filter(Boolean).join('\n');
+  return `${instruction}\n\n${context ? `${context}\n` : ''}笔记标题：${note.title}\n\n${scope}`;
 }
 
 export function applyNoteAiResult(originalContent: string, action: NoteAiAction, generatedContent: string): { content: string; previousContent: string } {

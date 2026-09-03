@@ -49,6 +49,13 @@ contextBridge.exposeInMainWorld('desktopBridge', {
   search: {
     query: (text: string, limit?: number) => ipcRenderer.invoke('search:query', text, limit),
   },
+  skills: {
+    list: () => ipcRenderer.invoke('skills:list'),
+    choose: () => ipcRenderer.invoke('skills:choose'),
+    import: (skillPath: string) => ipcRenderer.invoke('skills:import', skillPath),
+    save: (skills: unknown) => ipcRenderer.invoke('skills:save', skills),
+    delete: (skillId: string) => ipcRenderer.invoke('skills:delete', skillId),
+  },
   conversations: {
     list: (includeArchived?: boolean) => ipcRenderer.invoke('conversations:list', includeArchived),
     projects: {
@@ -59,13 +66,23 @@ contextBridge.exposeInMainWorld('desktopBridge', {
       setWorkspace: (projectId: string, workspacePath: string | null) => ipcRenderer.invoke('conversation-projects:set-workspace', projectId, workspacePath),
       delete: (projectId: string) => ipcRenderer.invoke('conversation-projects:delete', projectId),
     },
+    chooseWorkspace: () => ipcRenderer.invoke('conversation-workspace:choose'),
     messages: (conversationId: string) => ipcRenderer.invoke('conversations:messages', conversationId),
     branch: (conversationId: string, messageId: string) => ipcRenderer.invoke('conversations:branch', conversationId, messageId),
     create: (title?: string, projectId?: string, providerId?: string, profileId?: 'assistant' | 'analyst' | 'auditor') => ipcRenderer.invoke('conversations:create', title, projectId, providerId, profileId),
     setProvider: (conversationId: string, providerId: string) => ipcRenderer.invoke('conversations:set-provider', conversationId, providerId),
     setProfile: (conversationId: string, profileId: 'assistant' | 'analyst' | 'auditor') => ipcRenderer.invoke('conversations:set-profile', conversationId, profileId),
+    capabilities: {
+      get: (conversationId: string) => ipcRenderer.invoke('conversations:capabilities:get', conversationId),
+      save: (conversationId: string, capabilities: unknown) => ipcRenderer.invoke('conversations:capabilities:save', conversationId, capabilities),
+    },
+    skills: {
+      get: (conversationId: string) => ipcRenderer.invoke('conversations:skills:get', conversationId),
+      save: (conversationId: string, skillIds: string[]) => ipcRenderer.invoke('conversations:skills:save', conversationId, skillIds),
+    },
     rename: (conversationId: string, title: string) => ipcRenderer.invoke('conversations:rename', conversationId, title),
     move: (conversationId: string, projectId: string) => ipcRenderer.invoke('conversations:move', conversationId, projectId),
+    setWorkspace: (conversationId: string, workspacePath: string | null) => ipcRenderer.invoke('conversations:set-workspace', conversationId, workspacePath),
     archive: (conversationId: string, archived: boolean) => ipcRenderer.invoke('conversations:archive', conversationId, archived),
     pin: (conversationId: string, pinned: boolean) => ipcRenderer.invoke('conversations:pin', conversationId, pinned),
     delete: (conversationId: string) => ipcRenderer.invoke('conversations:delete', conversationId),
@@ -84,10 +101,14 @@ contextBridge.exposeInMainWorld('desktopBridge', {
   browserUse: {
     get: () => ipcRenderer.invoke('browser-use:get'),
     save: (config: unknown) => ipcRenderer.invoke('browser-use:save', config),
+    diagnose: () => ipcRenderer.invoke('browser-use:diagnose'),
   },
   computerUse: {
     get: () => ipcRenderer.invoke('computer-use:get'),
     save: (config: unknown) => ipcRenderer.invoke('computer-use:save', config),
+    diagnose: () => ipcRenderer.invoke('computer-use:diagnose'),
+    openPermission: (kind: 'accessibility' | 'screenRecording') => ipcRenderer.invoke('computer-use:open-permission', kind),
+    install: () => ipcRenderer.invoke('computer-use:install'),
   },
   pet: {
     get: () => ipcRenderer.invoke('pet:get'),
@@ -171,7 +192,7 @@ contextBridge.exposeInMainWorld('desktopBridge', {
       create: (name: string) => ipcRenderer.invoke('tasks:boards:create', name),
       rename: (id: string, name: string) => ipcRenderer.invoke('tasks:boards:rename', id, name),
       reorder: (id: string, targetId: string) => ipcRenderer.invoke('tasks:boards:reorder', id, targetId),
-      delete: (id: string, replacementBoardId: string) => ipcRenderer.invoke('tasks:boards:delete', id, replacementBoardId),
+      delete: (id: string, replacementBoardId?: string) => ipcRenderer.invoke('tasks:boards:delete', id, replacementBoardId),
     },
     list: (boardId: string) => ipcRenderer.invoke('tasks:list', boardId),
     takeOpenRequest: () => ipcRenderer.invoke('tasks:open-request:take'),
@@ -200,6 +221,21 @@ contextBridge.exposeInMainWorld('desktopBridge', {
   },
   notes: {
     list: (includeArchived?: boolean) => ipcRenderer.invoke('notes:list', includeArchived),
+    knowledgeBases: {
+      list: (includeArchived?: boolean) => ipcRenderer.invoke('knowledge-bases:list', includeArchived),
+      get: (id: string) => ipcRenderer.invoke('knowledge-bases:get', id),
+      getDefault: () => ipcRenderer.invoke('knowledge-bases:default'),
+      getActiveId: () => ipcRenderer.invoke('knowledge-bases:active'),
+      setActiveId: (id: string) => ipcRenderer.invoke('knowledge-bases:set-active', id),
+      create: (input?: unknown) => ipcRenderer.invoke('knowledge-bases:create', input),
+      update: (id: string, patch: unknown) => ipcRenderer.invoke('knowledge-bases:update', id, patch),
+      delete: (id: string) => ipcRenderer.invoke('knowledge-bases:delete', id),
+      reorder: (id: string, targetId: string) => ipcRenderer.invoke('knowledge-bases:reorder', id, targetId),
+    },
+    listInKnowledgeBase: (knowledgeBaseId: string, includeArchived?: boolean) => ipcRenderer.invoke('notes:list-in-knowledge-base', knowledgeBaseId, includeArchived),
+    createInKnowledgeBase: (knowledgeBaseId: string, input?: unknown, parentId?: string | null) => ipcRenderer.invoke('notes:create-in-knowledge-base', knowledgeBaseId, input, parentId),
+    moveToKnowledgeBase: (id: string, knowledgeBaseId: string, parentId?: string | null, targetId?: string) => ipcRenderer.invoke('notes:move-to-knowledge-base', id, knowledgeBaseId, parentId, targetId),
+    copyToKnowledgeBase: (id: string, knowledgeBaseId: string, parentId?: string | null) => ipcRenderer.invoke('notes:copy-to-knowledge-base', id, knowledgeBaseId, parentId),
     get: (id: string) => ipcRenderer.invoke('notes:get', id),
     create: (input?: unknown, parentId?: string | null) => ipcRenderer.invoke('notes:create', input, parentId),
     update: (id: string, patch: unknown) => ipcRenderer.invoke('notes:update', id, patch),

@@ -1,5 +1,6 @@
 import { DEFAULT_TOOL_PERMISSION_MODE, isPersistentToolPermissionMode, type PersistentToolPermissionMode } from '../../permission-mode';
-import type { BackupConfig, BrowserUseConfig, ComputerUseConfig, DesktopPetConfig, DesktopPresenceConfig, ReasoningSelection } from '../../store';
+import type { BackupConfig, BrowserUseConfig, ComputerUseConfig, ConversationCapabilities, ConversationCapabilityOverride, DesktopPetConfig, DesktopPresenceConfig, ReasoningSelection } from '../../store';
+import type { UserSkillRegistration } from '../../skills';
 import { RepositoryBase } from './repository-base';
 
 type Row = Record<string, unknown>;
@@ -24,10 +25,7 @@ export class SettingsRepository extends RepositoryBase {
 
   saveBrowserUse(config: BrowserUseConfig): BrowserUseConfig {
     const normalized = { enabled: config.enabled === true };
-    this.transaction(() => {
-      this.set('browser_use', normalized);
-      if (normalized.enabled) this.set('computer_use', { enabled: false });
-    });
+    this.set('browser_use', normalized);
     return normalized;
   }
 
@@ -37,11 +35,39 @@ export class SettingsRepository extends RepositoryBase {
 
   saveComputerUse(config: ComputerUseConfig): ComputerUseConfig {
     const normalized = { enabled: config.enabled === true };
-    this.transaction(() => {
-      this.set('computer_use', normalized);
-      if (normalized.enabled) this.set('browser_use', { enabled: false });
-    });
+    this.set('computer_use', normalized);
     return normalized;
+  }
+
+  getConversationCapabilities(conversationId: string): ConversationCapabilities {
+    this.requireConversation(conversationId);
+    return this.get(`conversation_capabilities:${conversationId}`, { browserUse: 'default', computerUse: 'default' } satisfies ConversationCapabilities, readConversationCapabilities);
+  }
+
+  saveConversationCapabilities(conversationId: string, capabilities: ConversationCapabilities): ConversationCapabilities {
+    this.requireConversation(conversationId);
+    const normalized = readConversationCapabilities(capabilities);
+    return this.set(`conversation_capabilities:${conversationId}`, normalized);
+  }
+
+  getSkillRegistrations(): UserSkillRegistration[] {
+    return this.get('skill_registrations', [], readSkillRegistrations);
+  }
+
+  saveSkillRegistrations(registrations: UserSkillRegistration[]): UserSkillRegistration[] {
+    const normalized = readSkillRegistrations(registrations);
+    return this.set('skill_registrations', normalized);
+  }
+
+  getConversationSkills(conversationId: string): string[] {
+    this.requireConversation(conversationId);
+    return this.get(`conversation_skills:${conversationId}`, [], readSkillIds);
+  }
+
+  saveConversationSkills(conversationId: string, skillIds: string[]): string[] {
+    this.requireConversation(conversationId);
+    const normalized = readSkillIds(skillIds);
+    return this.set(`conversation_skills:${conversationId}`, normalized);
   }
 
   getDesktopPet(): DesktopPetConfig {
@@ -115,7 +141,7 @@ export class SettingsRepository extends RepositoryBase {
 
   saveToolPermission(conversationId: string, mode: PersistentToolPermissionMode): PersistentToolPermissionMode {
     this.requireConversation(conversationId);
-    if (!isPersistentToolPermissionMode(mode)) throw new Error('Only persistent permission modes can be stored.');
+    if (!isPersistentToolPermissionMode(mode)) throw new Error('Unsupported tool permission mode.');
     return this.set(`tool_permission:${conversationId}`, mode);
   }
 
@@ -151,6 +177,33 @@ export class SettingsRepository extends RepositoryBase {
 
 function readEnabledConfig(value: unknown): { enabled: boolean } {
   return { enabled: Boolean(value && typeof value === 'object' && (value as Record<string, unknown>).enabled === true) };
+}
+
+function readConversationCapabilities(value: unknown): ConversationCapabilities {
+  const item = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const normalize = (candidate: unknown): ConversationCapabilityOverride => candidate === 'enabled' || candidate === 'disabled' ? candidate : 'default';
+  return { browserUse: normalize(item.browserUse), computerUse: normalize(item.computerUse) };
+}
+
+function readSkillIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim()))];
+}
+
+function readSkillRegistrations(value: unknown): UserSkillRegistration[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const raw = item as Record<string, unknown>;
+    if (typeof raw.id !== 'string' || typeof raw.path !== 'string' || !raw.path.trim()) return [];
+    return [{
+      id: raw.id.trim(),
+      name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : raw.id.trim(),
+      description: typeof raw.description === 'string' ? raw.description.trim() : '',
+      path: raw.path.trim(),
+      enabled: raw.enabled === true,
+    } satisfies UserSkillRegistration];
+  });
 }
 
 function numberInRange(value: unknown, minimum: number, maximum: number): number | undefined {

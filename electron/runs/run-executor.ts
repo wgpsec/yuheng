@@ -18,7 +18,7 @@ export type StoredAttachment = {
   name: string;
   mimeType: string;
   size: number;
-  data: Uint8Array;
+  sourcePath: string;
 };
 
 export type RunEvent =
@@ -69,8 +69,7 @@ export class RunExecutor {
     let assistantCreatedAt: string | null = null;
     let assistantContent = '';
     let runUsage: RunUsage | undefined;
-    const browserUseConfig = store.getBrowserUseConfig();
-    const computerUseConfig = store.getComputerUseConfig();
+    const capabilities = store.getEffectiveConversationCapabilities(conversationId);
     const profileId = store.getConversationProfile(conversationId);
     const profile = getAgentProfile(profileId);
     let releaseComputerUse: (() => void) | undefined;
@@ -80,7 +79,7 @@ export class RunExecutor {
       const project = store.getConversation(conversationId);
       const workspaceManager = this.options.projectRunWorkspace
         ?? new ProjectRunWorkspace(path.join(this.options.userDataDirectory, 'workspace'));
-      preparedWorkspace = await workspaceManager.prepare(project.projectId, runId, runAttachments, store.getConversationProjectWorkspace(project.projectId));
+      preparedWorkspace = await workspaceManager.prepare(project.projectId, runId, runAttachments, store.getConversationWorkspace(conversationId));
       const toolSecurity = new ToolSecurityBroker({
         policy: new ToolSecurityPolicy(preparedWorkspace.projectDirectory, run.permissionMode),
         audit: this.options.securityAudit,
@@ -94,14 +93,17 @@ export class RunExecutor {
           signal,
         ),
       });
-      if (computerUseConfig.enabled) releaseComputerUse = await this.computerUseLease.acquire(run.controller.signal);
+      if (capabilities.computerUse) releaseComputerUse = await this.computerUseLease.acquire(run.controller.signal);
       runtime = createPiRuntime({
         sessionFactory: createPiSessionFactory(config, apiKey, {
           agentDir: path.join(this.options.userDataDirectory, 'pi-agent'),
+          applicationPath: this.options.applicationPath,
           yuhengSystemPrompt: loadYuhengSystemPrompt(this.options.applicationPath),
           profilePrompt: loadAgentProfilePrompt(this.options.applicationPath, profileId),
           runtimeContext: profile.timeContext === 'full' ? formatRuntimeContext() : undefined,
           thinkingLevel: reasoningLevel,
+          skillRegistrations: store.getSkillRegistrations(),
+          selectedSkillIds: store.getConversationSkills(conversationId),
           taskService: {
             listBoards: () => store.listTaskBoards(),
             listTypes: (boardId) => store.listTaskTypes(boardId),
@@ -110,8 +112,8 @@ export class RunExecutor {
             updateTask: (taskId, update) => store.updateTask(taskId, update),
             taskChanged: this.options.taskChanged,
           },
-          browserUse: browserUseConfig.enabled ? { supervisor: this.options.browserUse } : undefined,
-          computerUse: computerUseConfig.enabled ? {} : undefined,
+          browserUse: capabilities.browserUse ? { supervisor: this.options.browserUse } : undefined,
+          computerUse: capabilities.computerUse ? {} : undefined,
           security: {
             authorize: ({ toolCallId, toolName, input, signal }) => toolSecurity.authorize({
               runId,
@@ -128,12 +130,9 @@ export class RunExecutor {
       const inputIndex = messages.findIndex((message) => message.id === run.inputMessageId);
       if (inputIndex < 0 || messages[inputIndex].role !== 'user') throw new Error('运行输入消息已不存在。');
       const prompt = messages[inputIndex].content;
-      const images = runAttachments
-        .filter((attachment) => attachment.mimeType.startsWith('image/'))
-        .map((attachment) => ({ type: 'image' as const, data: Buffer.from(attachment.data).toString('base64'), mimeType: attachment.mimeType }));
       await runtime.start({
         prompt: `${prompt || '请查看附件并回复。'}${preparedWorkspace.promptContext}`,
-        images,
+        images: [],
         sessionId: conversationId,
         cwd: preparedWorkspace.projectDirectory,
         history: messages.slice(0, inputIndex).map(({ role, content, createdAt }) => ({ role, content, createdAt })),

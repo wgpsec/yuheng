@@ -28,8 +28,9 @@ export type CanonicalSchemaResult = Pick<SchemaInvariantResult, 'ok' | 'violatio
 
 export const CANONICAL_INDEXES = [
   'idx_conversations_project_updated',
+  'idx_knowledge_bases_position',
   'idx_note_versions_note_created',
-  'idx_notes_parent_position',
+  'idx_notes_knowledge_base_parent_position',
   'idx_run_artifacts_activity',
   'idx_tasks_board_status_updated',
 ] as const;
@@ -37,10 +38,11 @@ export const CANONICAL_INDEXES = [
 export const CANONICAL_BUSINESS_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   app_settings: ['key', 'value', 'updated_at'],
   conversation_projects: ['id', 'name', 'position', 'workspace_path', 'created_at', 'updated_at'],
-  conversations: ['id', 'project_id', 'title', 'description', 'archived', 'pinned', 'reasoning_level', 'provider_id', 'profile_id', 'created_at', 'updated_at'],
+  conversations: ['id', 'project_id', 'title', 'description', 'archived', 'pinned', 'reasoning_level', 'provider_id', 'profile_id', 'workspace_path', 'created_at', 'updated_at'],
   messages: ['id', 'conversation_id', 'role', 'content', 'created_at'],
+  knowledge_bases: ['id', 'name', 'icon', 'color', 'position', 'archived', 'created_at', 'updated_at'],
   note_versions: ['id', 'note_id', 'title', 'content', 'icon', 'cover', 'properties_json', 'created_at'],
-  notes: ['id', 'parent_id', 'title', 'content', 'icon', 'cover', 'properties_json', 'position', 'archived', 'favorite', 'last_opened_at', 'created_at', 'updated_at'],
+  notes: ['id', 'knowledge_base_id', 'parent_id', 'title', 'content', 'icon', 'cover', 'properties_json', 'position', 'archived', 'favorite', 'last_opened_at', 'created_at', 'updated_at'],
   provider_profiles: ['id', 'protocol', 'base_url', 'model', 'display_name', 'context_window', 'updated_at'],
   run_activities: ['id', 'run_id', 'tool_call_id', 'tool_name', 'status', 'input', 'output', 'started_at', 'finished_at'],
   run_artifacts: ['id', 'run_id', 'tool_call_id', 'kind', 'mime_type', 'size', 'url', 'created_at'],
@@ -62,7 +64,7 @@ export function createCanonicalBusinessSchema(db: DatabaseSync): void {
       id TEXT PRIMARY KEY,
       protocol TEXT NOT NULL CHECK (protocol IN ('openai', 'anthropic')),
       base_url TEXT NOT NULL, model TEXT NOT NULL, display_name TEXT NOT NULL,
-      context_window INTEGER NOT NULL DEFAULT 200000, updated_at TEXT NOT NULL
+      context_window INTEGER NOT NULL DEFAULT 200000, supports_images INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY,
@@ -70,7 +72,7 @@ export function createCanonicalBusinessSchema(db: DatabaseSync): void {
       title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
       archived INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0,
       reasoning_level TEXT NOT NULL DEFAULT 'default', provider_id TEXT,
-      profile_id TEXT NOT NULL DEFAULT 'assistant', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      profile_id TEXT NOT NULL DEFAULT 'assistant', workspace_path TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY,
@@ -118,8 +120,15 @@ export function createCanonicalBusinessSchema(db: DatabaseSync): void {
       source_conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS knowledge_bases (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, icon TEXT, color TEXT,
+      position INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS notes (
-      id TEXT PRIMARY KEY, parent_id TEXT REFERENCES notes(id) ON DELETE CASCADE,
+      id TEXT PRIMARY KEY,
+      knowledge_base_id TEXT NOT NULL DEFAULT 'default' REFERENCES knowledge_bases(id) ON DELETE RESTRICT,
+      parent_id TEXT REFERENCES notes(id) ON DELETE CASCADE,
       title TEXT NOT NULL, content TEXT NOT NULL DEFAULT '', icon TEXT, cover TEXT,
       properties_json TEXT NOT NULL DEFAULT '{}', position INTEGER NOT NULL DEFAULT 0,
       archived INTEGER NOT NULL DEFAULT 0, favorite INTEGER NOT NULL DEFAULT 0,
@@ -133,12 +142,19 @@ export function createCanonicalBusinessSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_tasks_board_status_updated ON tasks(board_id, status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_conversations_project_updated ON conversations(project_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_run_artifacts_activity ON run_artifacts(run_id, tool_call_id, created_at ASC);
-    CREATE INDEX IF NOT EXISTS idx_notes_parent_position ON notes(parent_id, archived, position, id);
+    CREATE INDEX IF NOT EXISTS idx_knowledge_bases_position ON knowledge_bases(archived, position, id);
     CREATE INDEX IF NOT EXISTS idx_note_versions_note_created ON note_versions(note_id, created_at DESC);
   `);
+  if (columnNames(db, 'notes').has('knowledge_base_id')) {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_notes_knowledge_base_parent_position ON notes(knowledge_base_id, parent_id, archived, position, id)');
+  } else {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_notes_parent_position ON notes(parent_id, archived, position, id)');
+  }
   const now = new Date(0).toISOString();
   db.prepare('INSERT OR IGNORE INTO conversation_projects (id, name, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
-    .run('personal', '个人事务', 0, now, now);
+    .run('personal', '默认', 0, now, now);
+  db.prepare('INSERT OR IGNORE INTO knowledge_bases (id, name, position, archived, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)')
+    .run('default', '默认知识库', 0, now, now);
   db.prepare('INSERT OR IGNORE INTO task_boards (id, name, position) VALUES (?, ?, ?)').run('default', '默认看板', 0);
   const insertType = db.prepare('INSERT OR IGNORE INTO task_types (id, board_id, name, position) VALUES (?, ?, ?, ?)');
   insertType.run('todo', 'default', '待处理', 0);
@@ -256,7 +272,7 @@ function validateRequiredForeignKeys(db: DatabaseSync, violations: string[]): vo
     run_artifacts: [['run_id', 'runs', 'id', 'CASCADE']],
     task_types: [['board_id', 'task_boards', 'id', 'CASCADE']],
     tasks: [['board_id', 'task_boards', 'id', 'CASCADE'], ['status', 'task_types', 'id', 'NO ACTION'], ['source_conversation_id', 'conversations', 'id', 'SET NULL']],
-    notes: [['parent_id', 'notes', 'id', 'CASCADE']],
+    notes: [['knowledge_base_id', 'knowledge_bases', 'id', 'RESTRICT'], ['parent_id', 'notes', 'id', 'CASCADE']],
     note_versions: [['note_id', 'notes', 'id', 'CASCADE']],
   };
   for (const [table, foreignKeys] of Object.entries(expected)) {
@@ -287,6 +303,7 @@ function validateCheckConstraints(db: DatabaseSync, violations: string[]): void 
 
 function validateSeeds(db: DatabaseSync, violations: string[]): void {
   if (!db.prepare("SELECT 1 FROM conversation_projects WHERE id = 'personal'").get()) violations.push('missing_seed:conversation_project');
+  if (!db.prepare("SELECT 1 FROM knowledge_bases WHERE id = 'default'").get()) violations.push('missing_seed:knowledge_base');
   const boards = db.prepare('SELECT id FROM task_boards').all() as Row[];
   if (boards.length === 0) violations.push('missing_seed:task_board');
   for (const board of boards) {

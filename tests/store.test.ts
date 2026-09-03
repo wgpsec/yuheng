@@ -235,6 +235,8 @@ describe('AppStore provider settings', () => {
     try {
       const first = store.saveProvider({ protocol: 'openai', baseUrl: 'https://one.example/v1', model: 'one', displayName: '一个模型', contextWindow: 200_000 });
       const second = store.saveProvider({ protocol: 'anthropic', baseUrl: 'https://two.example/v1', model: 'two', displayName: '另一个模型', contextWindow: 300_000 });
+      assert.equal(first.supportsImages, false);
+      assert.equal(second.supportsImages, false);
       assert.equal(store.listProviders().length, 2);
       // Editing a secondary profile must not silently change the default route for new conversations.
       store.saveProvider({ id: second.id, protocol: 'anthropic', baseUrl: 'https://two.example/v2', model: 'two-v2', displayName: '另一个模型（更新）', contextWindow: 300_000 });
@@ -275,6 +277,7 @@ describe('AppStore provider settings', () => {
     let store = new AppStore(dataDir);
     try {
       assert.equal(store.getProvider()?.contextWindow, DEFAULT_PROVIDER_CONTEXT_WINDOW);
+      assert.equal(store.getProvider()?.supportsImages, false);
       store.saveProvider({ id: 'default', protocol: 'openai', baseUrl: 'https://api.example.test/v1', model: 'test-model', displayName: '测试模型', contextWindow: 320_000 });
       store.close();
       store = new AppStore(dataDir);
@@ -287,6 +290,34 @@ describe('AppStore provider settings', () => {
 });
 
 describe('AppStore conversations', () => {
+  it('supports an independent workspace override with project inheritance', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
+    const store = new AppStore(dataDir);
+    try {
+      const project = store.createConversationProject('项目', '/tmp/project-workspace');
+      const inherited = store.createConversation('继承项目目录', project.id);
+      const override = store.createConversation('独立目录', project.id);
+      assert.equal(store.getConversationWorkspace(inherited.id), '/tmp/project-workspace');
+      assert.equal(store.getConversationWorkspaceOverride(inherited.id), null);
+      store.setConversationWorkspace(override.id, '/tmp/conversation-workspace');
+      assert.equal(store.getConversationWorkspace(override.id), '/tmp/conversation-workspace');
+      assert.equal(store.getConversation(inherited.id).workspacePath, undefined);
+      assert.equal(store.getConversation(override.id).workspacePath, '/tmp/conversation-workspace');
+
+      const movedOverride = store.moveConversation(override.id, 'personal');
+      assert.equal(movedOverride.workspacePath, '/tmp/conversation-workspace');
+      store.setConversationWorkspace(override.id, null);
+      assert.equal(store.getConversationWorkspace(override.id), null);
+
+      const message = store.addMessage(inherited.id, 'user', '创建分支');
+      const branch = store.branchConversation(inherited.id, message.id);
+      assert.equal(branch.workspacePath, undefined);
+    } finally {
+      store.close();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('persists an independent agent profile per conversation', () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
     let store = new AppStore(dataDir);
@@ -507,6 +538,23 @@ describe('AppStore global search', () => {
   });
 });
 
+describe('AppStore Skill settings', () => {
+  it('persists user registrations and conversation selections independently', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-skills-'));
+    const store = new AppStore(dataDir);
+    try {
+      const first = store.createConversation();
+      const second = store.createConversation();
+      const registration = { id: 'user-demo', name: 'Demo', description: 'Demo skill', path: '/tmp/demo-skill', enabled: false };
+      assert.deepEqual(store.saveSkillRegistrations([registration]), [registration]);
+      assert.deepEqual(store.getSkillRegistrations(), [registration]);
+      assert.deepEqual(store.saveConversationSkills(first.id, ['user-demo', 'missing', 'user-demo']), ['user-demo', 'missing']);
+      assert.deepEqual(store.getConversationSkills(first.id), ['user-demo', 'missing']);
+      assert.deepEqual(store.getConversationSkills(second.id), []);
+    } finally { store.close(); fs.rmSync(dataDir, { recursive: true, force: true }); }
+  });
+});
+
 describe('AppStore Browser Use settings', () => {
   it('keeps the optional browser plugin disabled until explicitly enabled', () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
@@ -523,16 +571,20 @@ describe('AppStore Browser Use settings', () => {
     }
   });
 
-  it('keeps Browser Use and Computer Use mutually exclusive', () => {
+  it('keeps Browser Use and Computer Use independent and supports per-conversation overrides', () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
     const store = new AppStore(dataDir);
     try {
       assert.deepEqual(store.saveComputerUseConfig({ enabled: true }), { enabled: true });
       assert.deepEqual(store.getComputerUseConfig(), { enabled: true });
-      assert.deepEqual(store.getBrowserUseConfig(), { enabled: false });
       assert.deepEqual(store.saveBrowserUseConfig({ enabled: true }), { enabled: true });
       assert.deepEqual(store.getBrowserUseConfig(), { enabled: true });
-      assert.deepEqual(store.getComputerUseConfig(), { enabled: false });
+      assert.deepEqual(store.getComputerUseConfig(), { enabled: true });
+      const conversation = store.createConversation('能力覆盖');
+      assert.deepEqual(store.getConversationCapabilities(conversation.id), { browserUse: 'default', computerUse: 'default' });
+      assert.deepEqual(store.getEffectiveConversationCapabilities(conversation.id), { browserUse: true, computerUse: true });
+      assert.deepEqual(store.saveConversationCapabilities(conversation.id, { browserUse: 'disabled', computerUse: 'enabled' }), { browserUse: 'disabled', computerUse: 'enabled' });
+      assert.deepEqual(store.getEffectiveConversationCapabilities(conversation.id), { browserUse: false, computerUse: true });
     } finally {
       store.close();
       fs.rmSync(dataDir, { recursive: true, force: true });
@@ -563,7 +615,7 @@ describe('AppStore Browser Use settings', () => {
     }
   });
 
-  it('defaults tool permissions to smart and persists cautious choices per conversation', () => {
+  it('defaults tool permissions to smart and persists choices per conversation', () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
     let store = new AppStore(dataDir);
     let firstId = '';
@@ -578,10 +630,10 @@ describe('AppStore Browser Use settings', () => {
       assert.equal(store.saveToolPermissionMode(first.id, 'cautious'), 'cautious');
       assert.equal(store.getToolPermissionMode(first.id), 'cautious');
       assert.equal(store.getToolPermissionMode(second.id), 'smart');
-      assert.throws(() => store.saveToolPermissionMode(first.id, 'full_session' as never), /persistent permission modes/);
+      assert.equal(store.saveToolPermissionMode(first.id, 'full_session'), 'full_session');
       store.close();
       store = new AppStore(dataDir);
-      assert.equal(store.getToolPermissionMode(firstId), 'cautious');
+      assert.equal(store.getToolPermissionMode(firstId), 'full_session');
       assert.equal(store.getToolPermissionMode(secondId), 'smart');
     } finally {
       store.close();
@@ -611,13 +663,10 @@ describe('AppStore tasks', () => {
       assert.deepEqual(store.reorderTaskBoards(personalBoard.id, defaultBoard.id).map((board) => board.id), [personalBoard.id, defaultBoard.id, workBoard.id]);
       const reviewType = store.createTaskType('审核中', workBoard.id);
       const migratedTask = store.createTask({ title: '迁移任务', description: '保留正文', status: reviewType.id, priority: 'high' }, workBoard.id);
-      const personalType = store.createTaskType('审核中', personalBoard.id);
-      store.deleteTaskBoard(workBoard.id, personalBoard.id);
+      store.deleteTaskBoard(workBoard.id);
       assert.deepEqual(store.listTaskBoards().map((board) => board.id), [personalBoard.id, defaultBoard.id]);
-      const migrated = store.getTask(migratedTask.id);
-      assert.equal(migrated.boardId, personalBoard.id);
-      assert.equal(migrated.status, personalType.id);
-      assert.equal(migrated.description, '保留正文');
+      assert.throws(() => store.getTask(migratedTask.id), /Task not found/);
+      assert.deepEqual(store.listTaskTypes(workBoard.id), []);
     } finally {
       store.close();
       fs.rmSync(dataDir, { recursive: true, force: true });
@@ -646,21 +695,18 @@ describe('AppStore tasks', () => {
     }
   });
 
-  it('allows deleting the default board only with an explicit replacement and persists the new default', () => {
+  it('allows deleting a non-empty default board and persists the remaining default', () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
     let store = new AppStore(dataDir);
     try {
       const [defaultBoard] = store.listTaskBoards();
       const replacement = store.createTaskBoard('新默认');
-      const other = store.createTaskBoard('其他');
-      store.reorderTaskBoards(other.id, defaultBoard.id);
       const task = store.createTask({ title: '默认任务' }, defaultBoard.id);
 
-      store.deleteTaskBoard(defaultBoard.id, replacement.id);
+      store.deleteTaskBoard(defaultBoard.id);
 
       assert.equal(store.getDefaultTaskBoardId(), replacement.id);
-      assert.equal(store.listTasks()[0]?.id, task.id);
-      assert.throws(() => store.deleteTaskBoard(replacement.id, replacement.id), /不同的替代看板/);
+      assert.throws(() => store.getTask(task.id), /Task not found/);
       store.close();
       store = new AppStore(dataDir);
       assert.equal(store.getDefaultTaskBoardId(), replacement.id);
@@ -692,35 +738,35 @@ describe('AppStore tasks', () => {
     }
   });
 
-  it('maps unmatched task types to the target first column without disturbing existing order', () => {
+  it('deletes all task types and tasks in a board', () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
     const store = new AppStore(dataDir);
     try {
       const [source] = store.listTaskBoards();
-      const target = store.createTaskBoard('目标');
       const sourceType = store.createTaskType('仅源列', source.id);
-      const targetType = store.listTaskTypes(target.id)[0];
-      const existing = store.createTask({ title: '已有任务', status: targetType.id }, target.id);
       const migrating = store.createTask({ title: '无匹配任务', status: sourceType.id }, source.id);
 
+      const target = store.createTaskBoard('目标');
+      assert.equal(store.search('无匹配任务').some((result) => result.id === migrating.id), true);
       store.deleteTaskBoard(source.id, target.id);
 
-      assert.equal(store.getTask(migrating.id).status, targetType.id);
-      assert.deepEqual(store.listTasks(target.id).map((task) => task.id), [existing.id, migrating.id]);
+      assert.throws(() => store.getTask(migrating.id), /Task not found/);
+      assert.deepEqual(store.listTaskTypes(source.id), []);
+      assert.deepEqual(store.listTasks(target.id), []);
+      assert.equal(store.search('无匹配任务').some((result) => result.id === migrating.id), false);
     } finally {
       store.close();
       fs.rmSync(dataDir, { recursive: true, force: true });
     }
   });
 
-  it('rejects missing replacements and deleting the final board without changing data', () => {
+  it('rejects deleting the final board without changing data', () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
     const store = new AppStore(dataDir);
     try {
       const [onlyBoard] = store.listTaskBoards();
       const task = store.createTask({ title: '不可丢失' }, onlyBoard.id);
-      assert.throws(() => store.deleteTaskBoard(onlyBoard.id, 'missing'), /Replacement task board not found/);
-      assert.throws(() => store.deleteTaskBoard(onlyBoard.id, onlyBoard.id), /不同的替代看板/);
+      assert.throws(() => store.deleteTaskBoard(onlyBoard.id), /At least one task board is required/);
       assert.deepEqual(store.listTaskBoards().map((board) => board.id), [onlyBoard.id]);
       assert.equal(store.getTask(task.id).title, '不可丢失');
     } finally {

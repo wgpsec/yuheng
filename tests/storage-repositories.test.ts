@@ -88,7 +88,7 @@ describe('storage repository domain behavior', () => {
     }
   });
 
-  it('keeps provider assignment and mutually exclusive runtime settings in narrow repositories', () => {
+  it('keeps provider assignment and independent runtime settings in narrow repositories', () => {
     const harness = createRepositoryHarness();
     try {
       const conversation = harness.repositories.conversations.create();
@@ -98,13 +98,16 @@ describe('storage repository domain behavior', () => {
         model: 'fixture-model',
         displayName: 'Fixture Provider',
         contextWindow: 8192,
+        supportsImages: true,
       });
 
       assert.equal(provider.id, 'default');
+      assert.equal(provider.supportsImages, true);
+      assert.equal(harness.repositories.providers.get(provider.id)?.supportsImages, true);
       assert.equal(harness.repositories.conversations.providerId(conversation.id), provider.id);
       assert.deepEqual(harness.repositories.settings.saveComputerUse({ enabled: true }), { enabled: true });
       assert.deepEqual(harness.repositories.settings.saveBrowserUse({ enabled: true }), { enabled: true });
-      assert.deepEqual(harness.repositories.settings.getComputerUse(), { enabled: false });
+      assert.deepEqual(harness.repositories.settings.getComputerUse(), { enabled: true });
     } finally {
       closeRepositoryHarness(harness);
     }
@@ -199,13 +202,18 @@ describe('storage repository domain behavior', () => {
       assert.equal(source.repositories.conversations.projectWorkspace(project.id), '/Users/example/project');
       assert.equal(source.repositories.conversations.setProjectWorkspace(project.id, null).workspacePath, null);
       source.repositories.conversations.setProjectWorkspace(project.id, '/Users/example/project');
+      const conversation = source.repositories.conversations.create('独立会话', project.id);
+      source.repositories.conversations.setWorkspace(conversation.id, '/Users/example/conversation');
 
       const snapshot = source.repositories.backups.export();
       const exported = snapshot.conversationProjects.find(({ id }) => id === project.id);
       assert.equal(exported?.workspacePath, '/Users/example/project');
+      assert.equal(snapshot.conversations.find(({ id }) => id === conversation.id)?.workspacePath, '/Users/example/conversation');
       target.repositories.backups.import(snapshot);
       const imported = target.repositories.conversations.listProjects().find(({ name }) => name === '外部工作区');
       assert.equal(imported?.workspacePath, '/Users/example/project');
+      const importedConversation = target.repositories.conversations.list(true).find(({ title }) => title === '独立会话');
+      assert.equal(importedConversation?.workspacePath, '/Users/example/conversation');
     } finally {
       closeRepositoryHarness(source);
       closeRepositoryHarness(target);

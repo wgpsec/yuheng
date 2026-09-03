@@ -7,7 +7,7 @@ export type ConversationBackup = {
   format: 'yuheng-conversation';
   version: 1;
   exportedAt: string;
-  conversation: Pick<Conversation, 'title' | 'providerId' | 'profileId'>;
+  conversation: Pick<Conversation, 'title' | 'providerId' | 'profileId' | 'workspacePath'>;
   messages: Array<Pick<Message, 'role' | 'content' | 'createdAt'>>;
 };
 
@@ -16,7 +16,7 @@ export function toConversationBackup(conversation: Conversation, messages: Messa
     format: 'yuheng-conversation',
     version: CONVERSATION_BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
-    conversation: { title: conversation.title, ...(conversation.providerId ? { providerId: conversation.providerId } : {}), profileId: conversation.profileId },
+    conversation: { title: conversation.title, ...(conversation.providerId ? { providerId: conversation.providerId } : {}), profileId: conversation.profileId, workspacePath: conversation.workspacePath ?? null },
     messages: messages.map(({ role, content, createdAt }) => ({ role, content, createdAt })),
   };
 }
@@ -36,7 +36,9 @@ export function parseConversationBackup(raw: unknown): ConversationBackup {
   if (profileId !== 'assistant' && profileId !== 'analyst' && profileId !== 'auditor') throw new Error('会话备份包含无效 Profile。');
   const providerId = conversation.providerId;
   if (providerId !== undefined && (typeof providerId !== 'string' || !providerId.trim())) throw new Error('会话备份包含无效 Provider。');
-  return { format: 'yuheng-conversation', version: 1, exportedAt: typeof raw.exportedAt === 'string' ? raw.exportedAt : new Date().toISOString(), conversation: { title: conversation.title.trim().slice(0, 200), profileId, ...(providerId ? { providerId } : {}) }, messages };
+  const workspacePath = conversation.workspacePath;
+  if (workspacePath !== undefined && workspacePath !== null && (typeof workspacePath !== 'string' || !workspacePath.trim())) throw new Error('会话备份包含无效工作目录。');
+  return { format: 'yuheng-conversation', version: 1, exportedAt: typeof raw.exportedAt === 'string' ? raw.exportedAt : new Date().toISOString(), conversation: { title: conversation.title.trim().slice(0, 200), profileId, ...(providerId ? { providerId } : {}), workspacePath: typeof workspacePath === 'string' ? workspacePath.trim() : null }, messages };
 }
 
 export function conversationBackupMarkdown(backup: ConversationBackup): string {

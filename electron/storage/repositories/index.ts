@@ -1,6 +1,7 @@
 import type { DatabaseOwner } from '../database';
 import { BackupRepository } from './backup-repository';
 import { ConversationRepository } from './conversation-repository';
+import { KnowledgeBaseRepository } from './knowledge-base-repository';
 import { NoteRepository } from './note-repository';
 import { ProviderRepository } from './provider-repository';
 import { RunRepository } from './run-repository';
@@ -10,6 +11,7 @@ import { TaskRepository } from './task-repository';
 
 export type StorageRepositories = {
   conversations: ConversationRepository;
+  knowledgeBases: KnowledgeBaseRepository;
   notes: NoteRepository;
   providers: ProviderRepository;
   runs: RunRepository;
@@ -22,6 +24,7 @@ export type StorageRepositories = {
 export function createStorageRepositories(owner: DatabaseOwner): StorageRepositories {
   return {
     conversations: new ConversationRepository(owner),
+    knowledgeBases: new KnowledgeBaseRepository(owner),
     notes: new NoteRepository(owner),
     providers: new ProviderRepository(owner),
     runs: new RunRepository(owner),

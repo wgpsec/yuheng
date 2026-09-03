@@ -85,12 +85,12 @@ export function useTaskWorkspace(bridge: DesktopBridge | undefined, onOpenReques
   const createBoard = useCallback(async (name: string) => { if (!bridge) return null; const created = await bridge.tasks.boards.create(name); setBoards((current) => [...current, created]); setActiveBoardId(created.id); return created; }, [bridge, setActiveBoardId]);
   const renameBoard = useCallback(async (id: string, name: string) => { if (!bridge) return; const updated = await bridge.tasks.boards.rename(id, name); setBoards((current) => current.map((board) => board.id === id ? updated : board)); }, [bridge]);
   const reorderBoard = useCallback(async (id: string, targetId: string) => { if (!bridge) return; setBoards(await bridge.tasks.boards.reorder(id, targetId)); }, [bridge]);
-  const deleteBoard = useCallback(async (id: string, replacementBoardId: string) => {
+  const deleteBoard = useCallback(async (id: string) => {
     if (!bridge) return;
-    await bridge.tasks.boards.delete(id, replacementBoardId);
+    await bridge.tasks.boards.delete(id);
     const next = boards.filter((board) => board.id !== id);
     setBoards(next);
-    if (boardRef.current === id) setActiveBoardId(replacementBoardId || next[0]?.id || '');
+    if (boardRef.current === id) setActiveBoardId(next[0]?.id || '');
   }, [boards, bridge, setActiveBoardId]);
   const importAsset = useCallback(async (file: File): Promise<TaskAsset> => { if (!bridge) throw new Error('附件服务不可用。'); return bridge.tasks.assets.import({ name: file.name, mimeType: file.type || 'application/octet-stream', data: await file.arrayBuffer() }); }, [bridge]);
   const pickAssets = useCallback(async (): Promise<TaskAsset[]> => bridge?.tasks.assets.pick() ?? [], [bridge]);

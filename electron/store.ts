@@ -6,6 +6,8 @@ import type { PersistentToolPermissionMode } from './permission-mode';
 import { createStorageRepositories, type StorageRepositories } from './storage/repositories';
 import { DatabaseOwner } from './storage/database';
 import { prepareStandaloneDatabase } from './storage/standalone-database';
+import type { RecoveredRunWorkspace } from './storage/repositories/run-repository';
+import type { UserSkillRegistration } from './skills';
 
 export type ProviderConfig = {
   id: string;
@@ -14,10 +16,16 @@ export type ProviderConfig = {
   model: string;
   displayName: string;
   contextWindow: number;
+  supportsImages?: boolean;
   hasApiKey: boolean;
 };
 export type BrowserUseConfig = { enabled: boolean };
 export type ComputerUseConfig = { enabled: boolean };
+export type ConversationCapabilityOverride = 'default' | 'enabled' | 'disabled';
+export type ConversationCapabilities = {
+  browserUse: ConversationCapabilityOverride;
+  computerUse: ConversationCapabilityOverride;
+};
 export type PetFeedbackMode = 'important' | 'all' | 'hidden';
 export type DesktopPetConfig = {
   enabled: boolean;
@@ -45,7 +53,7 @@ export const MIN_PROVIDER_CONTEXT_WINDOW = 4_096;
 export const MAX_PROVIDER_CONTEXT_WINDOW = 10_000_000;
 export const CURRENT_SCHEMA_VERSION = 1;
 export type ConversationProject = { id: string; name: string; position: number; workspacePath?: string | null };
-export type Conversation = { id: string; projectId: string; title: string; updatedAt: string; archived: boolean; pinned: boolean; providerId?: string; profileId: AgentProfileId };
+export type Conversation = { id: string; projectId: string; title: string; updatedAt: string; archived: boolean; pinned: boolean; providerId?: string; profileId: AgentProfileId; workspacePath?: string | null };
 export type Message = { id: string; role: 'user' | 'assistant'; content: string; createdAt: string };
 export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
 export type RunUsage = { inputTokens: number; outputTokens: number; totalTokens: number; contextTokens: number | null; contextWindow: number; contextPercent: number | null };
@@ -74,6 +82,7 @@ export type Task = {
 };
 export type Note = {
   id: string;
+  knowledgeBaseId: string;
   parentId: string | null;
   title: string;
   content: string;
@@ -87,9 +96,21 @@ export type Note = {
   updatedAt: string;
   properties: NoteProperties;
 };
+export type KnowledgeBase = {
+  id: string;
+  name: string;
+  icon: string | null;
+  color: string | null;
+  position: number;
+  archived: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
 export type NoteProperties = { status: string | null; date: string | null; tags: string[] };
 export type NoteVersion = { id: string; noteId: string; title: string; content: string; icon: string | null; cover: string | null; properties: NoteProperties; createdAt: string };
 export type CreateNoteInput = { title?: string; parentId?: string | null; content?: string; icon?: string | null };
+export type CreateKnowledgeBaseInput = { name?: string; icon?: string | null; color?: string | null };
+export type UpdateKnowledgeBaseInput = Partial<Pick<KnowledgeBase, 'name' | 'icon' | 'color' | 'archived'>>;
 export type UpdateNoteInput = Partial<Pick<Note, 'title' | 'content' | 'archived' | 'icon' | 'cover' | 'favorite' | 'properties'>>;
 export type CreateTaskInput = Pick<Task, 'title'> & Partial<Pick<Task, 'description' | 'status' | 'priority' | 'dueAt' | 'remindAt' | 'sourceConversationId'>>;
 export type UpdateTaskInput = Partial<Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'dueAt' | 'remindAt'>>;
@@ -103,21 +124,23 @@ export type SearchResult = {
   context: string;
   updatedAt: string;
   archived: boolean;
+  knowledgeBaseId?: string;
 };
 
 export type FullBackupSnapshot = {
   conversationProjects: Array<{ id: string; name: string; position: number; workspacePath?: string | null; createdAt: string; updatedAt: string }>;
-  conversations: Array<{ id: string; projectId: string; title: string; description: string; archived: boolean; pinned: boolean; reasoningLevel: string; providerId: string | null; profileId: string; createdAt: string; updatedAt: string }>;
+  conversations: Array<{ id: string; projectId: string; title: string; description: string; archived: boolean; pinned: boolean; reasoningLevel: string; providerId: string | null; profileId: string; workspacePath?: string | null; createdAt: string; updatedAt: string }>;
   messages: Array<{ id: string; conversationId: string; role: Message['role']; content: string; createdAt: string }>;
   runs: Array<{ id: string; conversationId: string; inputMessageId: string | null; status: RunStatus; error: string | null; startedAt: string; finishedAt: string | null; inputTokens: number | null; outputTokens: number | null; totalTokens: number | null; contextTokens: number | null; contextWindow: number | null; contextPercent: number | null }>;
   runActivities: Array<{ id: string; runId: string; toolCallId: string; toolName: string; status: RunActivityStatus; input: string | null; output: string | null; startedAt: string; finishedAt: string | null }>;
   runArtifacts: Array<{ id: string; runId: string; toolCallId: string; kind: RunArtifact['kind']; mimeType: string; size: number; url: string; createdAt: string }>;
-  providers: Array<{ id: string; protocol: ProviderConfig['protocol']; baseUrl: string; model: string; displayName: string; contextWindow: number; updatedAt: string }>;
+  providers: Array<{ id: string; protocol: ProviderConfig['protocol']; baseUrl: string; model: string; displayName: string; contextWindow: number; supportsImages?: boolean; updatedAt: string }>;
   appSettings: Array<{ key: string; value: string; updatedAt: string }>;
   taskBoards: Array<{ id: string; name: string; position: number }>;
   taskTypes: Array<{ id: string; boardId: string; name: string; position: number }>;
   tasks: Array<{ id: string; boardId: string; title: string; description: string; position: number; status: string; priority: TaskPriority; dueAt: string | null; remindAt: string | null; reminderFiredAt: string | null; sourceConversationId: string | null; createdAt: string; updatedAt: string }>;
-  notes?: Array<{ id: string; parentId: string | null; title: string; content: string; icon?: string | null; cover?: string | null; properties?: NoteProperties; position: number; archived: boolean; favorite?: boolean; lastOpenedAt?: string | null; createdAt: string; updatedAt: string }>;
+  knowledgeBases?: Array<{ id: string; name: string; icon?: string | null; color?: string | null; position: number; archived: boolean; createdAt: string; updatedAt: string }>;
+  notes?: Array<{ id: string; knowledgeBaseId?: string | null; parentId: string | null; title: string; content: string; icon?: string | null; cover?: string | null; properties?: NoteProperties; position: number; archived: boolean; favorite?: boolean; lastOpenedAt?: string | null; createdAt: string; updatedAt: string }>;
   noteVersions?: Array<{ id: string; noteId: string; title: string; content: string; icon?: string | null; cover?: string | null; properties?: NoteProperties; createdAt: string }>;
 };
 export type BackupConfig = { enabled: boolean; directory: string; retention: number; lastRunAt: string | null; lastError: string | null };
@@ -166,6 +189,20 @@ export class AppStore {
 
   getConversationProjectWorkspace(id: string): string | null {
     return this.repositories.conversations.projectWorkspace(id);
+  }
+
+  getConversationWorkspaceOverride(id: string): string | null {
+    return this.repositories.conversations.workspaceOverride(id);
+  }
+
+  getConversationWorkspace(id: string): string | null {
+    const conversation = this.repositories.conversations.require(id);
+    const projectWorkspace = this.repositories.conversations.projectWorkspace(conversation.projectId);
+    return conversation.workspacePath?.trim() || projectWorkspace?.trim() || null;
+  }
+
+  setConversationWorkspace(id: string, workspacePath: string | null): Conversation {
+    return this.repositories.conversations.setWorkspace(id, workspacePath);
   }
 
   setConversationProjectWorkspace(id: string, workspacePath: string | null): ConversationProject {
@@ -272,6 +309,10 @@ export class AppStore {
     return this.repositories.runs.recoverRunning();
   }
 
+  recoverRunningRunWorkspaces(): RecoveredRunWorkspace[] {
+    return this.repositories.runs.recoverRunningWorkspaces();
+  }
+
   startToolActivity(runId: string, toolCallId: string, toolName: string, input?: string): void {
     this.repositories.runs.startActivity(runId, toolCallId, toolName, input);
   }
@@ -298,6 +339,60 @@ export class AppStore {
 
   listNotes(includeArchived = false): Note[] {
     return this.repositories.notes.list(includeArchived);
+  }
+
+  listKnowledgeBases(includeArchived = false): KnowledgeBase[] {
+    return this.repositories.knowledgeBases.list(includeArchived);
+  }
+
+  getKnowledgeBase(id: string): KnowledgeBase | null {
+    return this.repositories.knowledgeBases.get(id);
+  }
+
+  getDefaultKnowledgeBase(): KnowledgeBase {
+    return this.repositories.knowledgeBases.getDefault();
+  }
+
+  getActiveKnowledgeBaseId(): string | null {
+    const configured = this.repositories.knowledgeBases.getActiveId();
+    if (configured && this.repositories.knowledgeBases.get(configured)?.archived === false) return configured;
+    return this.repositories.knowledgeBases.list()[0]?.id ?? null;
+  }
+
+  setActiveKnowledgeBaseId(id: string): string {
+    return this.repositories.knowledgeBases.setActiveId(id);
+  }
+
+  createKnowledgeBase(input: CreateKnowledgeBaseInput = {}): KnowledgeBase {
+    return this.repositories.knowledgeBases.create(input);
+  }
+
+  updateKnowledgeBase(id: string, patch: UpdateKnowledgeBaseInput): KnowledgeBase {
+    return this.repositories.knowledgeBases.update(id, patch);
+  }
+
+  deleteKnowledgeBase(id: string): void {
+    this.repositories.knowledgeBases.delete(id);
+  }
+
+  reorderKnowledgeBases(id: string, targetId: string): KnowledgeBase[] {
+    return this.repositories.knowledgeBases.reorder(id, targetId);
+  }
+
+  listNotesInKnowledgeBase(knowledgeBaseId: string, includeArchived = false): Note[] {
+    return this.repositories.notes.listInKnowledgeBase(knowledgeBaseId, includeArchived);
+  }
+
+  createNoteInKnowledgeBase(knowledgeBaseId: string, input?: CreateNoteInput | string, parentId?: string | null): Note {
+    return this.repositories.notes.createInKnowledgeBase(knowledgeBaseId, input, parentId);
+  }
+
+  moveNoteToKnowledgeBase(id: string, knowledgeBaseId: string, parentId: string | null = null, targetId?: string): Note {
+    return this.repositories.notes.moveToKnowledgeBase(id, knowledgeBaseId, parentId, targetId);
+  }
+
+  copyNoteToKnowledgeBase(id: string, knowledgeBaseId: string, parentId: string | null = null): Note {
+    return this.repositories.notes.copyToKnowledgeBase(id, knowledgeBaseId, parentId);
   }
 
   getNote(id: string): Note | null {
@@ -352,7 +447,7 @@ export class AppStore {
     return this.repositories.tasks.reorderBoards(id, targetId);
   }
 
-  deleteTaskBoard(id: string, replacementBoardId: string): void {
+  deleteTaskBoard(id: string, replacementBoardId?: string): void {
     this.repositories.tasks.deleteBoard(id, replacementBoardId);
   }
 
@@ -462,6 +557,40 @@ export class AppStore {
 
   saveComputerUseConfig(config: ComputerUseConfig): ComputerUseConfig {
     return this.repositories.settings.saveComputerUse(config);
+  }
+
+  getSkillRegistrations(): UserSkillRegistration[] {
+    return this.repositories.settings.getSkillRegistrations();
+  }
+
+  saveSkillRegistrations(registrations: UserSkillRegistration[]): UserSkillRegistration[] {
+    return this.repositories.settings.saveSkillRegistrations(registrations);
+  }
+
+  getConversationSkills(conversationId: string): string[] {
+    return this.repositories.settings.getConversationSkills(conversationId);
+  }
+
+  saveConversationSkills(conversationId: string, skillIds: string[]): string[] {
+    return this.repositories.settings.saveConversationSkills(conversationId, skillIds);
+  }
+
+  getConversationCapabilities(conversationId: string): ConversationCapabilities {
+    return this.repositories.settings.getConversationCapabilities(conversationId);
+  }
+
+  saveConversationCapabilities(conversationId: string, capabilities: ConversationCapabilities): ConversationCapabilities {
+    return this.repositories.settings.saveConversationCapabilities(conversationId, capabilities);
+  }
+
+  getEffectiveConversationCapabilities(conversationId: string): { browserUse: boolean; computerUse: boolean } {
+    const overrides = this.getConversationCapabilities(conversationId);
+    const browserDefault = this.getBrowserUseConfig().enabled;
+    const computerDefault = this.getComputerUseConfig().enabled;
+    return {
+      browserUse: overrides.browserUse === 'default' ? browserDefault : overrides.browserUse === 'enabled',
+      computerUse: overrides.computerUse === 'default' ? computerDefault : overrides.computerUse === 'enabled',
+    };
   }
 
   getReasoningSelection(conversationId: string): ReasoningSelection {

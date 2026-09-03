@@ -6,6 +6,13 @@ export type ReleaseNote = {
 
 export const releaseNotes: readonly ReleaseNote[] = [
   {
+    version: '0.3.5',
+    title: '对话布局优化',
+    changes: [
+      '对话消息、Token 用量统计、运行记录和恢复提示统一内容轨道，修复宽屏下内容未对齐且可用空间不足的问题。',
+    ],
+  },
+  {
     version: '0.3.4',
     title: '看板删除与启动修复',
     changes: [
@@ -145,7 +152,7 @@ export const releaseNotes: readonly ReleaseNote[] = [
     title: 'Computer Use',
     changes: [
       '新增可选的 Computer Use，支持桌面控制和受控浏览器操作。',
-      'Browser Use 与 Computer Use 互斥启用，避免两套浏览器控制能力同时运行。',
+      'Browser Use 与 Computer Use 可独立启用，会话输入区支持按会话覆盖默认值。',
       'Computer Use 截图作为运行产物保存，并在工具执行记录中展示。',
     ],
   },

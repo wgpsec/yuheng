@@ -15,8 +15,9 @@ import { NoteSaveQueue, clearNoteDraft, noteSaveStatus, noteSnapshotEqual, readN
 import { getNoteTemplate } from './note-templates';
 import { noteOutline } from './note-outline';
 import { localDateMention, parseTaskMentionHref, taskMentionHref } from './note-mentions';
+import { TextInputDialog } from './text-input-dialog';
 
-type NotesWorkspaceProps = { bridge?: DesktopBridge; initialNoteId?: string | null; refreshKey?: number; showNavigation?: boolean; onNotesChanged?: () => void; onActiveNoteTitleChange?: (title: string) => void; onActiveNoteChange?: (id: string | null) => void; onAskAi?: (note: Note, action: NoteAiAction, customInstruction?: string) => void; onRunAi?: (note: Note, action: NoteAiAction, customInstruction?: string, signal?: AbortSignal) => Promise<string>; onCreateTask?: (note: Note) => void; onOpenTask?: (boardId: string, taskId: string) => void; onImportAsset?: (file: File) => Promise<TaskAsset>; onPickAssets?: () => Promise<TaskAsset[]>; onOpenAsset?: (url: string) => Promise<void> };
+type NotesWorkspaceProps = { bridge?: DesktopBridge; knowledgeBaseId?: string | null; initialNoteId?: string | null; refreshKey?: number; showNavigation?: boolean; onNotesChanged?: () => void; onActiveNoteTitleChange?: (title: string) => void; onActiveNoteChange?: (id: string | null) => void; onAskAi?: (note: Note, action: NoteAiAction, customInstruction?: string) => void; onRunAi?: (note: Note, action: NoteAiAction, customInstruction?: string, signal?: AbortSignal) => Promise<string>; onCreateTask?: (note: Note) => void; onOpenTask?: (boardId: string, taskId: string) => void; onImportAsset?: (file: File) => Promise<TaskAsset>; onPickAssets?: () => Promise<TaskAsset[]>; onOpenAsset?: (url: string) => Promise<void> };
 const UNTITLED_NOTE_TITLE = '未命名笔记';
 type NoteFont = 'default' | 'serif' | 'mono';
 type NoteDisplaySettings = { font: NoteFont; fullWidth: boolean; smallText: boolean };
@@ -73,7 +74,7 @@ function NoteTreeItem({ node, activeId, expanded, onToggle, onSelect, onCreateCh
   </div>;
 }
 
-export function NotesWorkspace({ bridge, initialNoteId, refreshKey = 0, showNavigation = true, onNotesChanged, onActiveNoteTitleChange, onActiveNoteChange, onAskAi, onRunAi, onCreateTask, onOpenTask, onImportAsset, onPickAssets, onOpenAsset }: NotesWorkspaceProps) {
+export function NotesWorkspace({ bridge, knowledgeBaseId, initialNoteId, refreshKey = 0, showNavigation = true, onNotesChanged, onActiveNoteTitleChange, onActiveNoteChange, onAskAi, onRunAi, onCreateTask, onOpenTask, onImportAsset, onPickAssets, onOpenAsset }: NotesWorkspaceProps) {
   const [notes, setNotes] = useState<Note[]>([]);
   const [activeId, setActiveId] = useState<string | null>(initialNoteId ?? (typeof localStorage !== 'undefined' ? localStorage.getItem('yuheng-active-note') : null));
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -99,6 +100,7 @@ export function NotesWorkspace({ bridge, initialNoteId, refreshKey = 0, showNavi
   const [aiNotice, setAiNotice] = useState<string | null>(null);
   const [aiPreview, setAiPreview] = useState<{ action: NoteAiAction; content: string; noteId: string; baseContent: string } | null>(null);
   const [undoContent, setUndoContent] = useState<string | null>(null);
+  const [textDialog, setTextDialog] = useState<{ title: string; value: string; submit: (value: string) => void | Promise<void> } | null>(null);
   const [dirty, setDirty] = useState(false);
   const [failedSaveNoteIds, setFailedSaveNoteIds] = useState<Set<string>>(() => new Set());
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -140,7 +142,7 @@ export function NotesWorkspace({ bridge, initialNoteId, refreshKey = 0, showNavi
     },
     onError: (noteId, reason) => {
       setFailedSaveNoteIds((current) => new Set(current).add(noteId));
-      setError(reason instanceof Error ? reason.message : '保存笔记失败。');
+      setError(reason instanceof Error ? reason.message : '保存页面失败。');
     },
   }), [bridge, onActiveNoteTitleChange, onNotesChanged]);
   const activePath = useMemo(() => activeNote ? getNotePath(notes, activeNote.id) : [], [notes, activeNote?.id]);
@@ -216,7 +218,7 @@ export function NotesWorkspace({ bridge, initialNoteId, refreshKey = 0, showNavi
     const generation = ++refreshGeneration.current;
     setLoading(true);
     try {
-      const items = await bridge.notes.list(true);
+      const items = knowledgeBaseId ? await bridge.notes.listInKnowledgeBase(knowledgeBaseId, true) : await bridge.notes.list(true);
       if (generation !== refreshGeneration.current) return;
       setNotes(items);
       const nextId = preferredId && items.some((item) => item.id === preferredId) ? preferredId : activeId && items.some((item) => item.id === activeId) ? activeId : items.find((item) => !item.archived)?.id ?? null;
@@ -226,7 +228,7 @@ export function NotesWorkspace({ bridge, initialNoteId, refreshKey = 0, showNavi
         const draft = readNoteDraft(storage, nextId);
         const current = items.find((item) => item.id === nextId);
         if (draft && current && !noteSnapshotEqual(draft, current)) {
-          if (window.confirm('发现这篇笔记有未提交的本地编辑，是否恢复？')) {
+          if (window.confirm('发现此页面有未提交的本地编辑，是否恢复？')) {
             setNotes((existing) => existing.map((item) => item.id === nextId ? { ...item, ...draft } : item));
             setDirty(true);
           } else clearNoteDraft(storage, nextId);
@@ -234,13 +236,13 @@ export function NotesWorkspace({ bridge, initialNoteId, refreshKey = 0, showNavi
       }
       setError(null);
     } catch (reason) {
-      if (generation === refreshGeneration.current) setError(reason instanceof Error ? reason.message : '加载笔记失败。');
+      if (generation === refreshGeneration.current) setError(reason instanceof Error ? reason.message : '加载知识库失败。');
     } finally {
       if (generation === refreshGeneration.current) setLoading(false);
     }
   };
 
-  useEffect(() => { void refresh(initialNoteId); }, [bridge, initialNoteId, refreshKey]);
+  useEffect(() => { void refresh(initialNoteId); }, [bridge, initialNoteId, refreshKey, knowledgeBaseId]);
   useEffect(() => {
     if (!bridge) return;
     let cancelled = false;
@@ -324,13 +326,15 @@ export function NotesWorkspace({ bridge, initialNoteId, refreshKey = 0, showNavi
     creatingNoteRef.current = true;
     try {
       const template = getNoteTemplate('blank');
-      const created = await bridge.notes.create({ title: template.title, content: template.content, icon: template.icon, parentId });
+      const created = knowledgeBaseId
+        ? await bridge.notes.createInKnowledgeBase(knowledgeBaseId, { title: template.title, content: template.content, icon: template.icon, parentId })
+        : await bridge.notes.create({ title: template.title, content: template.content, icon: template.icon, parentId });
       const nextNotes = [...notes, created];
       setNotes(nextNotes);
       setActive(created.id, nextNotes);
       onNotesChanged?.();
       setDirty(false);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : '新建笔记失败。'); }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '新建页面失败。'); }
     finally { creatingNoteRef.current = false; }
   };
 
@@ -357,13 +361,14 @@ export function NotesWorkspace({ bridge, initialNoteId, refreshKey = 0, showNavi
   };
 
   const renameNote = async (node: Pick<Note, 'id' | 'title'>) => {
-    const title = window.prompt('笔记名称', node.title)?.trim();
-    if (!title || !bridge || title === node.title) return;
-    try {
-      const updated = await bridge.notes.update(node.id, { title });
-      setNotes((current) => current.map((item) => item.id === updated.id ? updated : item));
-      onNotesChanged?.();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : '重命名笔记失败。'); }
+    setTextDialog({ title: '重命名页面', value: node.title, submit: async (title) => {
+      if (!bridge || title === node.title) return;
+      try {
+        const updated = await bridge.notes.update(node.id, { title });
+        setNotes((current) => current.map((item) => item.id === updated.id ? updated : item));
+        onNotesChanged?.();
+      } catch (reason) { setError(reason instanceof Error ? reason.message : '重命名页面失败。'); }
+    } });
   };
 
   const archiveNote = async (node: Pick<Note, 'id' | 'title'>) => {
@@ -373,7 +378,7 @@ export function NotesWorkspace({ bridge, initialNoteId, refreshKey = 0, showNavi
       setNotes((current) => current.map((item) => item.id === updated.id ? updated : item));
       onNotesChanged?.();
       if (activeId === node.id) setActive(notes.find((item) => !item.archived && item.id !== node.id)?.id ?? null);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : '归档笔记失败。'); }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '归档页面失败。'); }
   };
 
   const deleteNote = async (node: Pick<Note, 'id' | 'title'>) => {
@@ -385,7 +390,7 @@ export function NotesWorkspace({ bridge, initialNoteId, refreshKey = 0, showNavi
       if (activeId === node.id) setActive(remaining.find((item) => !item.archived)?.id ?? null);
       else await refresh(activeId);
       onNotesChanged?.();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : '删除笔记失败。'); }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '删除页面失败。'); }
   };
 
   const moveNote = async (id: string, parentId: string | null, targetId?: string) => {
@@ -394,7 +399,7 @@ export function NotesWorkspace({ bridge, initialNoteId, refreshKey = 0, showNavi
       await bridge.notes.move(id, parentId, targetId);
       onNotesChanged?.();
       await refresh(id);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : '移动笔记失败。'); }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '移动页面失败。'); }
   };
 
   const updateDecoration = (patch: { icon?: string | null; cover?: string | null }) => {
@@ -474,7 +479,7 @@ export function NotesWorkspace({ bridge, initialNoteId, refreshKey = 0, showNavi
     try {
       const content = await onRunAi(activeNote, action, customInstruction);
       if (activeId === requestedNoteId) setAiPreview({ action, content, noteId: requestedNoteId, baseContent });
-    } catch (reason) { setError(reason instanceof Error ? reason.message : '笔记 AI 操作失败。'); }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '知识库 AI 操作失败。'); }
     finally { setAiBusy(false); }
   };
 
@@ -482,7 +487,7 @@ export function NotesWorkspace({ bridge, initialNoteId, refreshKey = 0, showNavi
     if (!activeNote || !aiPreview) return;
     if (aiPreview.noteId !== activeNote.id || aiPreview.baseContent !== activeNote.content) {
       setAiPreview(null);
-      setError('笔记内容已发生变化，请重新生成 AI 结果。');
+      setError('页面内容已发生变化，请重新生成 AI 结果。');
       return;
     }
     const result = applyNoteAiResult(activeNote.content, aiPreview.action, aiPreview.content);
@@ -499,36 +504,36 @@ export function NotesWorkspace({ bridge, initialNoteId, refreshKey = 0, showNavi
     setDirty(true);
   };
 
-  if (!bridge) return <div className="notes-page"><div className="notes-empty-state"><NotebookPen size={28} /><h1>笔记</h1><p>桌面应用连接后可以使用笔记。</p></div></div>;
+  if (!bridge) return <div className="notes-page"><div className="notes-empty-state"><NotebookPen size={28} /><h1>知识库</h1><p>桌面应用连接后可以使用知识库。</p></div></div>;
   return <div className={`notes-page ${showNavigation ? '' : 'notes-page-editor-only'}`}>
-    {showNavigation && <aside className="notes-sidebar" aria-label="笔记导航">
-      <div className="notes-sidebar-heading"><div><span>笔记</span><small>{notes.filter((note) => !note.archived).length} 个页面</small></div><button type="button" className="icon-button" onClick={() => void createNote()} aria-label="新建笔记" title="新建笔记"><Plus size={17} /></button></div>
+    {showNavigation && <aside className="notes-sidebar" aria-label="知识库导航">
+      <div className="notes-sidebar-heading"><div><span>页面</span><small>{notes.filter((note) => !note.archived).length} 个页面</small></div><button type="button" className="icon-button" onClick={() => void createNote()} aria-label="新建页面" title="新建页面"><Plus size={17} /></button></div>
       <div className="notes-tree-actions"><button type="button" className="notes-new-page" onClick={() => void createNote()}><FilePlus2 size={15} />新建页面</button></div>
-      <div className="notes-tree" aria-label="笔记页面树">
-        {loading && <div className="notes-tree-empty">正在加载笔记...</div>}
-        {!loading && tree.length === 0 && <div className="notes-tree-empty">还没有笔记</div>}
+      <div className="notes-tree" aria-label="知识库页面树">
+        {loading && <div className="notes-tree-empty">正在加载知识库...</div>}
+        {!loading && tree.length === 0 && <div className="notes-tree-empty">还没有页面</div>}
         {!loading && tree.map((node) => <NoteTreeItem key={node.id} node={node} activeId={activeId} expanded={expanded} onToggle={(id) => setExpanded((current) => ({ ...current, [id]: !(current[id] !== false) }))} onSelect={setActive} onCreateChild={(id) => void createNote(id)} onRename={renameNote} onArchive={archiveNote} onDelete={deleteNote} notes={notes} onMove={(id, parentId, targetId) => void moveNote(id, parentId, targetId)} />)}
       </div>
       <button type="button" className="notes-archive-link" onClick={() => void refresh()}><Archive size={14} />归档页面</button>
     </aside>}
-    <section className="notes-editor-shell" aria-label="笔记编辑器">
+    <section className="notes-editor-shell" aria-label="知识库编辑器">
       {error && <div className="notes-error" role="alert">{error}{activeNote && saveQueue.hasPending(activeNote.id) && <button type="button" onClick={retryActiveNoteSave}>重试保存</button>}<button type="button" onClick={() => setError(null)} aria-label="关闭错误">×</button></div>}
-      {!activeNote && !loading && <div className="notes-empty-state"><NotebookPen size={32} /><h1>从一页笔记开始</h1><p>记录想法、整理资料，再交给玉衡协助完善。</p><button type="button" className="notes-primary-action" onClick={() => void createNote()}><Plus size={16} />新建笔记</button></div>}
-      {activeNote && <nav className="notes-breadcrumb notes-shell-breadcrumb" aria-label="笔记路径">{activePath.map((item, index) => <span className="notes-breadcrumb-item" key={item.id}>{index > 0 && <ChevronRight size={13} aria-hidden="true" />}{index === activePath.length - 1 ? <span aria-current="page">{item.title}</span> : <button type="button" onClick={() => setActive(item.id)}>{item.title}</button>}</span>)}</nav>}
+      {!activeNote && !loading && <div className="notes-empty-state"><NotebookPen size={32} /><h1>从一页知识库页面开始</h1><p>记录想法、整理资料，再交给玉衡协助完善。</p><button type="button" className="notes-primary-action" onClick={() => void createNote()}><Plus size={16} />新建页面</button></div>}
+      {activeNote && <nav className="notes-breadcrumb notes-shell-breadcrumb" aria-label="页面路径">{activePath.map((item, index) => <span className="notes-breadcrumb-item" key={item.id}>{index > 0 && <ChevronRight size={13} aria-hidden="true" />}{index === activePath.length - 1 ? <span aria-current="page">{item.title}</span> : <button type="button" onClick={() => setActive(item.id)}>{item.title}</button>}</span>)}</nav>}
       {activeNote && <div ref={editorScrollRef} className={`notes-editor has-breadcrumb ${displaySettings.fullWidth ? 'is-full-width' : ''} notes-font-${displaySettings.font} ${displaySettings.smallText ? 'is-small-text' : ''}`} key={activeNote.id}>
         {activeNote.cover && <div className="notes-cover" style={(() => { const cover = builtInNoteCover(activeNote.cover); return cover ? noteCoverBackgroundStyle(cover.background, cover.image) : noteCoverBackgroundStyle(undefined, activeNote.cover); })()} role="img" aria-label="页面封面" />}
         <div className="notes-decoration-tools" onMouseLeave={() => { if (!emojiPickerOpen && !coverPickerOpen) setEmojiPickerOpen(false); }}><button type="button" onClick={() => { setEmojiPickerOpen((value) => !value); setCoverPickerOpen(false); setEmojiQuery(''); }}><span className="notes-decoration-icon">{activeNote.icon ?? '●'}</span>添加图标</button><button type="button" onClick={() => { const opening = !coverPickerOpen; if (opening) setCoverPreviewRatio((editorScrollRef.current?.clientWidth ?? 896) / 280); setCoverPickerOpen(opening); setEmojiPickerOpen(false); }}>▧ {activeNote.cover ? '更换封面' : '添加 Cover'}</button><button type="button" onClick={() => void chooseCustomCover()}>上传图片</button>{activeNote.cover && <button type="button" onClick={() => updateDecoration({ cover: null })}>移除封面</button>}{emojiPickerOpen && <div className="notes-emoji-picker" role="dialog" aria-label="选择页面图标"><input value={emojiQuery} onChange={(event) => setEmojiQuery(event.target.value)} placeholder="搜索 emoji" aria-label="搜索 emoji" autoFocus /><div className="notes-emoji-grid">{['📚','📝','📌','💡','⭐','✅','🎯','🚀','🌱','🎨','💬','🔖','🧭','🗂️','📅','🏠','❤️','🔥','🔍','⚙️'].filter((emoji) => !emojiQuery || emoji.includes(emojiQuery)).map((emoji) => <button type="button" key={emoji} onClick={() => { updateDecoration({ icon: emoji }); setEmojiPickerOpen(false); }}>{emoji}</button>)}</div><button type="button" className="notes-emoji-clear" onClick={() => { updateDecoration({ icon: null }); setEmojiPickerOpen(false); }}>清除图标</button></div>}{coverPickerOpen && <div className="notes-cover-picker" role="dialog" aria-label="选择页面封面"><div className="notes-cover-picker-header"><strong>选择封面</strong><button type="button" onClick={() => setCoverPickerOpen(false)} aria-label="关闭封面选择器">×</button></div><div className="notes-cover-picker-tabs"><span className="is-active">图库</span><button type="button" onClick={() => void chooseCustomCover()}>上传图片</button></div><div className="notes-cover-picker-grid" style={{ '--note-cover-preview-ratio': coverPreviewRatio } as CSSProperties}>{BUILT_IN_NOTE_COVERS.map((cover) => <button type="button" key={cover.id} className={activeNote.cover === cover.id ? 'is-selected' : ''} onClick={() => chooseBuiltInCover(cover.id)} style={noteCoverBackgroundStyle(cover.background, cover.image)} aria-label={cover.label}><span>{cover.label}</span></button>)}</div>{activeNote.cover && <button type="button" className="notes-cover-picker-remove" onClick={() => { updateDecoration({ cover: null }); setCoverPickerOpen(false); }}>移除封面</button>}</div>}</div>
         <div className="notes-editor-header">
-          <div className="notes-title-line"><span className="notes-title-icon">{activeNote.icon}</span><input autoFocus={activeNote.title === UNTITLED_NOTE_TITLE} className="notes-title-input" value={activeNote.title} onFocus={(event) => { if (event.currentTarget.value === UNTITLED_NOTE_TITLE) event.currentTarget.select(); }} onChange={(event) => { const title = event.target.value; setNotes((current) => current.map((item) => item.id === activeNote.id ? { ...item, title } : item)); setDirty(true); }} aria-label="笔记标题" placeholder={UNTITLED_NOTE_TITLE} /></div>
+          <div className="notes-title-line"><span className="notes-title-icon">{activeNote.icon}</span><input autoFocus={activeNote.title === UNTITLED_NOTE_TITLE} className="notes-title-input" value={activeNote.title} onFocus={(event) => { if (event.currentTarget.value === UNTITLED_NOTE_TITLE) event.currentTarget.select(); }} onChange={(event) => { const title = event.target.value; setNotes((current) => current.map((item) => item.id === activeNote.id ? { ...item, title } : item)); setDirty(true); }} aria-label="页面标题" placeholder={UNTITLED_NOTE_TITLE} /></div>
           <div className="notes-page-actions">
             <span className={activeSaveStatus === 'saving' ? 'is-saving' : activeSaveStatus === 'failed' ? 'is-save-failed' : ''}>{activeSaveStatus === 'saving' ? '保存中' : activeSaveStatus === 'failed' ? '保存失败' : '已保存'}</span>
             {outline.length >= 2 && <span className="notes-outline-wrap"><button type="button" className="notes-page-outline" aria-label="页面目录" title="页面目录" aria-expanded={outlineOpen} onClick={() => { setPageMenuOpen(false); setOutlineOpen((current) => !current); }}><ListTree size={17} /></button>{outlineOpen && <div className="notes-outline-menu" role="navigation" aria-label="页面目录"><div className="notes-outline-heading">目录</div>{outline.map((item) => <button type="button" key={`${item.index}-${item.text}`} className={item.index === activeOutlineIndex ? 'is-active' : ''} style={{ paddingLeft: 9 + (item.level - 1) * 14 }} onClick={() => { const heading = editorScrollRef.current?.querySelectorAll<HTMLElement>('.ProseMirror h1, .ProseMirror h2, .ProseMirror h3')[item.index]; heading?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); setActiveOutlineIndex(item.index); setOutlineOpen(false); }}>{item.text}</button>)}</div>}</span>}
             <button type="button" className={`notes-page-favorite ${activeNote.favorite ? 'is-active' : ''}`} aria-label={activeNote.favorite ? '取消收藏页面' : '收藏页面'} title={activeNote.favorite ? '取消收藏' : '收藏'} aria-pressed={activeNote.favorite} onClick={() => void toggleFavorite()}><Star size={17} fill={activeNote.favorite ? 'currentColor' : 'none'} /></button>
-            <span className="notes-page-menu-wrap"><button type="button" className="notes-page-more" aria-label="页面设置" aria-expanded={pageMenuOpen} onClick={() => setPageMenuOpen((current) => !current)}><MoreHorizontal size={19} /></button>{pageMenuOpen && <div className="notes-page-menu" role="menu" aria-label="页面设置"><div className="notes-page-menu-heading">页面设置</div><div className="notes-page-fonts" role="group" aria-label="页面字体">{([['default', 'Ag', '默认'], ['serif', 'Ag', '衬线'], ['mono', 'Ag', '等宽']] as const).map(([font, sample, label]) => <button type="button" key={font} className={displaySettings.font === font ? 'is-selected' : ''} onClick={() => setDisplaySettings((current) => ({ ...current, font }))}><strong className={`notes-font-sample notes-font-${font}`}>{sample}</strong><span>{label}</span></button>)}</div><button type="button" className="notes-page-menu-item" role="menuitem" onClick={() => setDisplaySettings((current) => ({ ...current, fullWidth: !current.fullWidth }))}>{displaySettings.fullWidth ? <Minimize2 size={15} /> : <Maximize2 size={15} />}<span>全宽</span><small>{displaySettings.fullWidth ? '开启' : '关闭'}</small></button><button type="button" className="notes-page-menu-item" role="menuitem" onClick={() => setDisplaySettings((current) => ({ ...current, smallText: !current.smallText }))}><Type size={15} /><span>小字号</span><small>{displaySettings.smallText ? '开启' : '关闭'}</small></button><button type="button" className="notes-page-menu-item" role="menuitem" onClick={() => void openVersionHistory()}><History size={15} /><span>版本历史</span></button><div className="notes-page-menu-separator" />{(onAskAi || onRunAi) && <>{([['summarize', '总结'], ['rewrite', '改写'], ['expand', '扩展'], ['extract_tasks', '提取任务']] as const).map(([action, label]) => <button type="button" role="menuitem" className="notes-page-menu-item" key={action} onClick={() => void requestAi(action)}><Sparkles size={15} /><span>{label}</span></button>)}<button type="button" role="menuitem" className="notes-page-menu-item" onClick={() => { const instruction = window.prompt('告诉玉衡如何处理这篇笔记'); if (instruction?.trim()) void requestAi('custom', instruction.trim()); }}><Sparkles size={15} /><span>自定义指令</span></button></>}{undoContent !== null && <button type="button" role="menuitem" className="notes-page-menu-item" onClick={undoAiApply}>撤销应用</button>}{onCreateTask && <button type="button" role="menuitem" className="notes-page-menu-item" onClick={() => { setPageMenuOpen(false); onCreateTask(activeNote); }}><ListTodo size={15} /><span>转为任务</span></button>}<button type="button" role="menuitem" className="notes-page-menu-item" onClick={() => { setPageMenuOpen(false); void createNote(activeNote.id); }}><FilePlus2 size={15} /><span>新建子页面</span></button><button type="button" role="menuitem" className="notes-page-menu-item" onClick={() => { setPageMenuOpen(false); void bridge.notes.update(activeNote.id, { archived: !activeNote.archived }).then((updated) => { setNotes((current) => current.map((item) => item.id === updated.id ? updated : item)); onNotesChanged?.(); }); }}><Archive size={15} /><span>{activeNote.archived ? '恢复归档' : '归档页面'}</span></button><button type="button" role="menuitem" className="notes-page-menu-item is-destructive" onClick={() => { setPageMenuOpen(false); void deleteNote(activeNote); }}><Trash2 size={15} /><span>删除页面</span></button></div>}</span>
+            <span className="notes-page-menu-wrap"><button type="button" className="notes-page-more" aria-label="页面设置" aria-expanded={pageMenuOpen} onClick={() => setPageMenuOpen((current) => !current)}><MoreHorizontal size={19} /></button>{pageMenuOpen && <div className="notes-page-menu" role="menu" aria-label="页面设置"><div className="notes-page-menu-heading">页面设置</div><div className="notes-page-fonts" role="group" aria-label="页面字体">{([['default', 'Ag', '默认'], ['serif', 'Ag', '衬线'], ['mono', 'Ag', '等宽']] as const).map(([font, sample, label]) => <button type="button" key={font} className={displaySettings.font === font ? 'is-selected' : ''} onClick={() => setDisplaySettings((current) => ({ ...current, font }))}><strong className={`notes-font-sample notes-font-${font}`}>{sample}</strong><span>{label}</span></button>)}</div><button type="button" className="notes-page-menu-item" role="menuitem" onClick={() => setDisplaySettings((current) => ({ ...current, fullWidth: !current.fullWidth }))}>{displaySettings.fullWidth ? <Minimize2 size={15} /> : <Maximize2 size={15} />}<span>全宽</span><small>{displaySettings.fullWidth ? '开启' : '关闭'}</small></button><button type="button" className="notes-page-menu-item" role="menuitem" onClick={() => setDisplaySettings((current) => ({ ...current, smallText: !current.smallText }))}><Type size={15} /><span>小字号</span><small>{displaySettings.smallText ? '开启' : '关闭'}</small></button><button type="button" className="notes-page-menu-item" role="menuitem" onClick={() => void openVersionHistory()}><History size={15} /><span>版本历史</span></button><div className="notes-page-menu-separator" />{(onAskAi || onRunAi) && <>{([['summarize', '总结'], ['rewrite', '改写'], ['expand', '扩展'], ['extract_tasks', '提取任务']] as const).map(([action, label]) => <button type="button" role="menuitem" className="notes-page-menu-item" key={action} onClick={() => void requestAi(action)}><Sparkles size={15} /><span>{label}</span></button>)}<button type="button" role="menuitem" className="notes-page-menu-item" onClick={() => { setPageMenuOpen(false); setTextDialog({ title: '自定义指令', value: '', submit: (instruction) => requestAi('custom', instruction) }); }}><Sparkles size={15} /><span>自定义指令</span></button></>}{undoContent !== null && <button type="button" role="menuitem" className="notes-page-menu-item" onClick={undoAiApply}>撤销应用</button>}{onCreateTask && <button type="button" role="menuitem" className="notes-page-menu-item" onClick={() => { setPageMenuOpen(false); onCreateTask(activeNote); }}><ListTodo size={15} /><span>转为任务</span></button>}<button type="button" role="menuitem" className="notes-page-menu-item" onClick={() => { setPageMenuOpen(false); void createNote(activeNote.id); }}><FilePlus2 size={15} /><span>新建子页面</span></button><button type="button" role="menuitem" className="notes-page-menu-item" onClick={() => { setPageMenuOpen(false); void bridge.notes.update(activeNote.id, { archived: !activeNote.archived }).then((updated) => { setNotes((current) => current.map((item) => item.id === updated.id ? updated : item)); onNotesChanged?.(); }); }}><Archive size={15} /><span>{activeNote.archived ? '恢复归档' : '归档页面'}</span></button><button type="button" role="menuitem" className="notes-page-menu-item is-destructive" onClick={() => { setPageMenuOpen(false); void deleteNote(activeNote); }}><Trash2 size={15} /><span>删除页面</span></button></div>}</span>
           </div>
         </div>
         {(activeNote.properties.status || activeNote.properties.date || activeNote.properties.tags.length > 0) && <section className="notes-properties" aria-label="页面属性"><label><span>状态</span><input value={activeNote.properties.status ?? ''} onChange={(event) => updateProperties({ status: event.target.value || null })} placeholder="添加状态" maxLength={80} /></label><label><span><CalendarDays size={14} />日期</span><input type="date" value={activeNote.properties.date ?? ''} onChange={(event) => updateProperties({ date: event.target.value || null })} /></label><label><span><Tags size={14} />标签</span><input value={activeNote.properties.tags.join(', ')} onChange={(event) => updateProperties({ tags: event.target.value.split(/[,，]/u).map((tag) => tag.trim()).filter(Boolean) })} placeholder="用逗号分隔" /></label></section>}
-        {aiBusy && <div className="notes-ai-progress" role="status" aria-live="polite"><span className="notes-ai-progress-icon"><Sparkles size={16} /></span><span><strong>正在{aiActionLabel}…</strong><small>玉衡正在处理这篇笔记，完成后会显示结果预览。</small></span><span className="notes-ai-progress-dots" aria-hidden="true">···</span></div>}
+        {aiBusy && <div className="notes-ai-progress" role="status" aria-live="polite"><span className="notes-ai-progress-icon"><Sparkles size={16} /></span><span><strong>正在{aiActionLabel}…</strong><small>玉衡正在处理此页面，完成后会显示结果预览。</small></span><span className="notes-ai-progress-dots" aria-hidden="true">···</span></div>}
         {!aiBusy && aiNotice && <div className="notes-ai-notice" role="status" aria-live="polite"><Sparkles size={14} />{aiNotice}</div>}
         {aiPreview && <div className="notes-ai-preview" aria-label="AI 结果预览"><div className="notes-ai-preview-heading"><strong>结果预览</strong><span>应用前请确认内容</span></div><div className="notes-ai-preview-content"><div className="notes-ai-diff" role="list" aria-label="内容差异">{diffNoteContent(aiPreview.baseContent, aiPreview.content).map((line, index) => <div className={`notes-ai-diff-line is-${line.kind}`} key={`${line.kind}-${index}`} role="listitem"><span aria-hidden="true">{line.kind === 'added' ? '+' : line.kind === 'removed' ? '−' : ' '}</span><code>{line.text || ' '}</code></div>)}</div></div><div className="notes-ai-preview-actions"><button type="button" className="notes-ai-action" onClick={applyAiPreview}>应用到笔记</button><button type="button" className="icon-button" onClick={() => setAiPreview(null)} aria-label="取消预览" title="取消预览"><Trash2 size={15} /></button></div></div>}
         <MarkdownBlockEditor key={`${activeNote.id}:${childPageKey}`} value={noteContent} extensions={[notePageExtension]} noteLinkOptions={noteLinkOptions} noteLinkHref={noteLinkHref} onOpenNote={previewLinkedNote} mentionOptions={mentionOptions} onOpenTask={onOpenTask} onMoveBlock={async (targetId, sourceContent, blockMarkdown) => { const moved = await bridge.notes.moveBlock(activeNote.id, targetId, sourceContent, blockMarkdown); setNotes((current) => current.map((item) => item.id === moved.target.id ? moved.target : item)); onNotesChanged?.(); }} onImportAsset={onImportAsset} onPickAssets={onPickAssets} onOpenAsset={onOpenAsset} floatingToolbar blockRangeSelection onChange={(content) => { setNotes((current) => current.map((item) => item.id === activeNote.id ? { ...item, content } : item)); setDirty(true); }} />
@@ -538,5 +543,6 @@ export function NotesWorkspace({ bridge, initialNoteId, refreshKey = 0, showNavi
       {activeNote && historyOpen && <aside className="notes-history-panel" aria-label="版本历史"><header><div><History size={16} /><strong>版本历史</strong></div><button type="button" aria-label="关闭版本历史" onClick={() => setHistoryOpen(false)}><X size={17} /></button></header><div className="notes-history-list">{historyLoading && noteVersions.length === 0 && <div className="notes-history-empty">正在加载历史...</div>}{!historyLoading && noteVersions.length === 0 && <div className="notes-history-empty">还没有可恢复的历史版本</div>}{noteVersions.map((version) => <article key={version.id}><div className="notes-history-meta"><time dateTime={version.createdAt}>{new Date(version.createdAt).toLocaleString('zh-CN')}</time><button type="button" onClick={() => void restoreVersion(version)} disabled={historyLoading}><RotateCcw size={14} />恢复</button></div><strong>{version.icon ? `${version.icon} ` : ''}{version.title}</strong><p>{noteVersionSummary(version.content)}</p></article>)}</div></aside>}
       {activeNote && peekNote && <aside className="notes-peek-panel" aria-label={`预览页面：${peekNote.title}`}><header><div><span aria-hidden="true">{peekNote.icon ?? '▧'}</span><strong>{peekNote.title}</strong></div><div><button type="button" onClick={() => { setActive(peekNote.id); setPeekNoteId(null); }} title="完整打开页面"><ExternalLink size={16} /></button><button type="button" aria-label="关闭页面预览" onClick={() => setPeekNoteId(null)}><X size={17} /></button></div></header><div className="notes-peek-content"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children }) => <a href={href} onClick={(event) => { event.preventDefault(); if (!href) return; if (href.startsWith('yuheng-note://')) { try { previewLinkedNote(decodeURIComponent(href.slice('yuheng-note://'.length))); } catch { setError('页面链接无效。'); } return; } const taskIdentity = parseTaskMentionHref(href); if (taskIdentity) { onOpenTask?.(taskIdentity.boardId, taskIdentity.taskId); return; } if (href.startsWith('http://') || href.startsWith('https://')) void bridge.app.openExternal(href); }}>{children}</a>, img: ({ alt }) => <span className="notes-peek-image-placeholder">[图片{alt ? `：${alt}` : ''}]</span> }}>{peekNote.content || '*空白页面*'}</ReactMarkdown></div></aside>}
     </section>
+    {textDialog && <TextInputDialog title={textDialog.title} value={textDialog.value} onChange={(value) => setTextDialog((current) => current ? { ...current, value } : current)} onCancel={() => setTextDialog(null)} onSubmit={async (value) => { setTextDialog(null); await textDialog.submit(value); }} />}
   </div>;
 }

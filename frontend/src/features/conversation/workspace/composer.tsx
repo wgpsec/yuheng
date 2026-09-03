@@ -1,6 +1,6 @@
-import { BrainCircuit, Check, ChevronDown, ShieldAlert, ShieldCheck, ShieldOff, type LucideIcon } from 'lucide-react';
+import { BrainCircuit, Check, ChevronDown, Globe2, MonitorCog, ShieldAlert, ShieldCheck, ShieldOff, Sparkles, type LucideIcon } from 'lucide-react';
 import { FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { Attachment, ReasoningLevel, ReasoningSelection, ToolPermissionMode } from '../../../contracts/desktop-bridge';
+import type { AgentSkillCatalogEntry, Attachment, ConversationCapabilities, ConversationCapabilityOverride, ReasoningLevel, ReasoningSelection, ToolPermissionMode } from '../../../contracts/desktop-bridge';
 
 const reasoningOptions: Array<{ value: ReasoningSelection; label: string }> = [
   { value: 'default', label: '默认' },
@@ -40,13 +40,19 @@ type ComposerProps = {
   onReasoningSelectionChange?: (selection: ReasoningSelection) => void;
   permissionMode?: ToolPermissionMode;
   onPermissionModeChange?: (mode: ToolPermissionMode) => void;
+  conversationCapabilities?: ConversationCapabilities;
+  defaultCapabilities?: { browserUse: boolean; computerUse: boolean };
+  onCapabilityChange?: (capability: keyof ConversationCapabilities, value: ConversationCapabilityOverride) => void;
+  skillCatalog?: AgentSkillCatalogEntry[];
+  selectedSkillIds?: string[];
+  onSkillIdsChange?: (skillIds: string[]) => void;
   onAttach: () => Promise<void>;
   onRemoveAttachment: (id: string) => void;
   onSubmit: (value: string, attachments: Attachment[], reasoningLevel?: ReasoningLevel) => void;
   onCancel: () => void;
 };
 
-type ComposerMenu = 'permission' | 'reasoning';
+type ComposerMenu = 'permission' | 'reasoning' | 'browser' | 'computer' | 'skills';
 
 export function Composer({
   busy,
@@ -59,6 +65,12 @@ export function Composer({
   onReasoningSelectionChange,
   permissionMode = 'smart',
   onPermissionModeChange,
+  conversationCapabilities = { browserUse: 'default', computerUse: 'default' },
+  defaultCapabilities = { browserUse: false, computerUse: false },
+  onCapabilityChange,
+  skillCatalog = [],
+  selectedSkillIds = [],
+  onSkillIdsChange,
   onAttach,
   onRemoveAttachment,
   onSubmit,
@@ -141,6 +153,26 @@ export function Composer({
 
   const selectedPermission = permissionOptions.find((option) => option.value === permissionMode) ?? permissionOptions[1];
   const PermissionIcon = selectedPermission.icon;
+  const browserEnabled = conversationCapabilities.browserUse === 'enabled' || (conversationCapabilities.browserUse === 'default' && defaultCapabilities.browserUse);
+  const computerEnabled = conversationCapabilities.computerUse === 'enabled' || (conversationCapabilities.computerUse === 'default' && defaultCapabilities.computerUse);
+  const selectedSkillCount = selectedSkillIds.length;
+  const capabilityMenu = (kind: 'browser' | 'computer', key: keyof ConversationCapabilities, label: string, Icon: LucideIcon, enabled: boolean) => (
+    <div className="capability-picker">
+      <button type="button" className={`capability-trigger ${enabled ? 'is-enabled' : ''}`} onClick={() => toggleMenu(kind)} disabled={busy} aria-label={`${label}：${enabled ? '已开启' : '已关闭'}`} title={kind === 'computer' && enabled ? '已开启桌面能力，同时加载 Computer Use Skill' : undefined} aria-haspopup="menu" aria-expanded={openMenu === kind}>
+        <Icon size={14} aria-hidden="true" /><span>{label}</span><ChevronDown size={12} aria-hidden="true" />
+      </button>
+      {(openMenu === kind || closingMenu === kind) && <div className={`capability-menu ${closingMenu === kind ? 'is-closing' : ''}`} role="menu" aria-label={`${label}设置`}>
+        {([['default', '跟随默认', '使用设置页中的默认值'], ['enabled', '开启', `当前会话始终开启${label}`], ['disabled', '关闭', `当前会话不使用${label}`]] as const).map(([value, optionLabel, baseDescription]) => {
+          const description = kind === 'computer'
+            ? value === 'disabled' ? '关闭桌面能力，也不会加载 Computer Use Skill' : value === 'enabled' ? '开启桌面能力，并加载 Computer Use Skill' : '跟随默认设置；桌面能力开启时加载 Computer Use Skill'
+            : baseDescription;
+          return (
+          <button type="button" key={value} className={conversationCapabilities[key] === value ? 'is-selected' : ''} role="menuitemradio" aria-checked={conversationCapabilities[key] === value} onClick={() => { onCapabilityChange?.(key, value); closeMenu(kind); }}><span><strong>{optionLabel}</strong><small>{description}</small></span>{conversationCapabilities[key] === value && <Check size={13} aria-hidden="true" />}</button>
+          );
+        })}
+      </div>}
+    </div>
+  );
 
   return (
     <form className={`composer ${variant === 'start' ? 'composer-start' : ''} ${editing ? 'is-editing' : ''}`} onSubmit={submit}>
@@ -164,6 +196,20 @@ export function Composer({
       <div className="composer-actions">
         <div className="composer-tools" ref={pickerAreaRef}>
           <button type="button" className="tool-button" onClick={() => void onAttach()} disabled={busy} aria-label="添加附件">＋ 附件</button>
+          {capabilityMenu('browser', 'browserUse', '浏览器', Globe2, browserEnabled)}
+          {capabilityMenu('computer', 'computerUse', '桌面', MonitorCog, computerEnabled)}
+          <div className="capability-picker">
+            <button type="button" className={`capability-trigger ${selectedSkillCount > 0 ? 'is-enabled' : ''}`} onClick={() => toggleMenu('skills')} disabled={busy} aria-label={`Skills：已选择 ${selectedSkillCount} 个`} aria-haspopup="menu" aria-expanded={openMenu === 'skills'}>
+              <Sparkles size={14} aria-hidden="true" /><span>Skills{selectedSkillCount ? ` ${selectedSkillCount}` : ''}</span><ChevronDown size={12} aria-hidden="true" />
+            </button>
+            {(openMenu === 'skills' || closingMenu === 'skills') && <div className={`capability-menu skills-menu ${closingMenu === 'skills' ? 'is-closing' : ''}`} role="menu" aria-label="选择 Skills">
+              {skillCatalog.filter((skill) => skill.source === 'user').map((skill) => {
+                const selected = selectedSkillIds.includes(skill.id);
+                return <button type="button" key={skill.id} className={selected ? 'is-selected' : ''} role="menuitemcheckbox" aria-checked={selected} disabled={!skill.available || skill.enabled !== true} onClick={() => { const next = selected ? selectedSkillIds.filter((id) => id !== skill.id) : [...selectedSkillIds, skill.id]; onSkillIdsChange?.(next); }}><span><strong>{skill.name}</strong><small>{!skill.available ? '文件不可用' : skill.enabled !== true ? '请先在设置中启用' : skill.description}</small></span>{selected && <Check size={13} aria-hidden="true" />}</button>;
+              })}
+              {skillCatalog.filter((skill) => skill.source === 'user').length === 0 && <div className="capability-menu-empty"><Sparkles size={15} aria-hidden="true" /><span><strong>暂无已启用 Skill</strong><small>前往设置导入并启用</small></span></div>}
+            </div>}
+          </div>
           <div className="permission-picker">
             <button
               type="button"

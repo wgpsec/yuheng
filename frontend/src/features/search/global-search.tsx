@@ -10,7 +10,7 @@ const groupLabels: Record<SearchResultKind, string> = {
   message: '消息',
   task: '任务',
   board: '看板',
-  note: '笔记',
+  note: '知识库',
 };
 
 function ResultIcon({ kind }: { kind: SearchResultKind }) {
@@ -122,11 +122,11 @@ export function GlobalSearch({ onQuery, onOpen, onClose, onNewConversation, onOp
       <h2 id="global-search-title" className="sr-only">搜索玉衡</h2>
       <div className="global-search-input-row">
         <Search size={18} aria-hidden="true" />
-        <input ref={inputRef} type="search" value={query} onChange={(event) => { setQuery(event.target.value); setSelectedIndex(0); }} placeholder="搜索会话、消息、任务和笔记" aria-label="搜索玉衡" autoComplete="off" />
+        <input ref={inputRef} type="search" value={query} onChange={(event) => { setQuery(event.target.value); setSelectedIndex(0); }} placeholder="搜索会话、消息、任务和知识库" aria-label="搜索玉衡" autoComplete="off" />
         {query && <button type="button" onClick={() => setQuery('')} aria-label="清除搜索"><X size={15} /></button>}
       </div>
       <div className="global-search-filters" role="tablist" aria-label="搜索范围" data-filter={filter}>
-        {([['all', '全部'], ['conversation', '对话'], ['tasks', '任务'], ['notes', '笔记']] as const).map(([value, label]) => <button type="button" role="tab" aria-selected={filter === value} className={filter === value ? 'is-selected' : ''} key={value} onClick={() => { setFilter(value); setSelectedIndex(0); }}>{label}</button>)}
+        {([['all', '全部'], ['conversation', '对话'], ['tasks', '任务'], ['notes', '知识库']] as const).map(([value, label]) => <button type="button" role="tab" aria-selected={filter === value} className={filter === value ? 'is-selected' : ''} key={value} onClick={() => { setFilter(value); setSelectedIndex(0); }}>{label}</button>)}
       </div>
       <div className="global-search-results" role="listbox" aria-label="搜索结果" ref={resultsRef}>
         {!query.trim() && <div className="global-search-actions" aria-label="快捷操作">

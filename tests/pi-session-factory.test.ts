@@ -19,12 +19,42 @@ const emptyTaskService: TaskToolService = {
 };
 
 describe('Pi SDK session factory', () => {
-  it('rejects enabling Browser Use and Computer Use together', () => {
-    assert.throws(() => createPiSessionFactory({ protocol: 'openai', baseUrl: 'https://api.example.test/v1', model: 'test-model', displayName: '测试模型', contextWindow: 200_000, hasApiKey: false }, 'test-key', {
+  it('blocks image content for text-only providers and preserves it for multimodal providers', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'yuheng-pi-images-'));
+    const requestBodies: string[] = [];
+    const server = http.createServer(async (request, response) => {
+      let body = '';
+      for await (const chunk of request) body += chunk;
+      requestBodies.push(body);
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.end(`data: ${JSON.stringify({ id: 'mock', choices: [{ index: 0, delta: { role: 'assistant', content: '收到' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as { port: number }).port;
+    const image = { type: 'image' as const, data: 'aGVsbG8=', mimeType: 'image/png' };
+    try {
+      for (const supportsImages of [false, true]) {
+        const session = await createPiSessionFactory({ protocol: 'openai', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', contextWindow: 200_000, supportsImages, hasApiKey: false }, 'test-key', { agentDir: path.join(root, 'agent', String(supportsImages)) })({ prompt: '查看图片', images: [], sessionId: `session-images-${supportsImages}`, cwd: root, emit: () => undefined });
+        await session.prompt('查看图片', { images: [image] });
+        session.dispose();
+      }
+      const blocked = JSON.stringify(JSON.parse(requestBodies[0] ?? '{}'));
+      const allowed = JSON.stringify(JSON.parse(requestBodies[1] ?? '{}'));
+      assert.match(blocked, /Image reading is disabled/);
+      assert.doesNotMatch(blocked, /aGVsbG8=/);
+      assert.match(allowed, /aGVsbG8=/);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('allows Browser Use and Computer Use together for a session', () => {
+    assert.equal(typeof createPiSessionFactory({ protocol: 'openai', baseUrl: 'https://api.example.test/v1', model: 'test-model', displayName: '测试模型', contextWindow: 200_000, hasApiKey: false }, 'test-key', {
       agentDir: '/tmp/yuheng-agent',
       browserUse: { supervisor: { callTool: async () => ({ content: [] }) }, requestApproval: async () => true },
       computerUse: { requestApproval: async () => true },
-    }), /cannot be enabled together/);
+    }), 'function');
   });
   it('creates an isolated session without contacting the model network', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'yuheng-pi-'));
@@ -88,6 +118,7 @@ describe('Pi SDK session factory', () => {
       assert.match(systemPrompt, /YUHENG_SYSTEM_PROMPT_SENTINEL/);
       assert.match(systemPrompt, /PROFILE_PROMPT_SENTINEL/);
       assert.match(systemPrompt, /<runtime_context>NOW<\/runtime_context>/);
+      assert.doesNotMatch(systemPrompt, /<name>computer-use<\/name>/);
       assert.equal(JSON.stringify(payload).includes('DO NOT SEND THIS HIDDEN INSTRUCTION'), false);
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -318,6 +349,34 @@ describe('Pi SDK session factory', () => {
       const payload = JSON.parse(requestBody || '{}');
       const names = payload.tools.map((tool: { function: { name: string } }) => tool.function.name);
       assert.deepEqual(COMPUTER_USE_TOOL_NAMES.filter((name) => !names.includes(name)), []);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('loads the controlled Computer Use skill only when desktop capability is enabled', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'yuheng-pi-'));
+    let requestBody = '';
+    const server = http.createServer(async (request, response) => {
+      for await (const chunk of request) requestBody += chunk;
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.end(`data: ${JSON.stringify({ id: 'mock', choices: [{ index: 0, delta: { role: 'assistant', content: '完成' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as { port: number }).port;
+    const config = { protocol: 'openai' as const, baseUrl: `http://127.0.0.1:${port}/v1`, model: 'test-model', displayName: '测试模型', contextWindow: 200_000, hasApiKey: false };
+    try {
+      const session = await createPiSessionFactory(config, 'test-key', {
+        agentDir: path.join(root, 'agent'),
+        applicationPath: process.cwd(),
+        computerUse: { requestApproval: async () => true },
+      })({ prompt: '查看桌面', images: [], sessionId: 'session-computer-skill', cwd: root, emit: () => undefined });
+      await session.prompt('查看桌面');
+      await session.shutdown?.();
+      const systemPrompt = JSON.parse(requestBody || '{}').messages.find((message: { role: string }) => message.role === 'system')?.content ?? '';
+      assert.match(systemPrompt, /<name>computer-use<\/name>/);
+      assert.match(systemPrompt, /electron\/skills\/computer-use\/SKILL\.md/);
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
       await rm(root, { recursive: true, force: true });

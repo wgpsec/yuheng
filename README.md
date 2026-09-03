@@ -1,13 +1,13 @@
 # 玉衡（Yuheng）
 
-玉衡是基于 Electron、React、TypeScript 和 Pi SDK 的 macOS 个人秘书客户端，提供对话、任务看板、笔记、提醒和本地数据备份。
+玉衡是基于 Electron、React、TypeScript 和 Pi SDK 的桌面个人秘书客户端，提供对话、任务看板、笔记、提醒和本地数据备份。
 
-当前发行目标：macOS 13+、Apple Silicon（arm64）。Windows、Linux、Intel Mac 和 Universal Binary 不在支持范围内。
+当前发行目标：macOS 13+ Apple Silicon（arm64）和 Windows 10/11（x64）。Linux、Intel Mac 和 Universal Binary 不在支持范围内。
 
 ## 环境要求
 
 - Node.js 20+（开发和构建需要）
-- macOS Apple Silicon
+- macOS Apple Silicon，或 Windows x64
 - npm 依赖通过项目 `.npmrc` 使用国内镜像，安装时不会修改全局 npm 配置
 
 ## 开发启动
@@ -68,6 +68,21 @@ npm run package:mac:dir
 ```
 
 输出为 `release/mac-arm64/玉衡.app`。`release/` 已加入 `.gitignore`，安装包不应提交到源码仓库。
+
+## Windows 打包
+
+Windows 安装包使用 NSIS，macOS 安装包使用 DMG/ZIP。推送形如 `v0.3.6` 的 tag 后，GitHub Actions 会并行构建并上传 Windows x64 `.exe` 和 macOS arm64 DMG/ZIP artifacts。两种平台均显式使用当前设计的玉衡应用图标，不使用 Electron 默认图标。
+
+本地 Windows 构建：
+
+```powershell
+npm ci
+npm run package:win
+```
+
+产物位于 `release/玉衡-<version>-x64.exe`。当前未配置代码签名，Windows SmartScreen 可能显示未知发布者。Computer Use 仅支持 macOS，在 Windows 上会显示为不可用；Browser Use 是否可用取决于 Windows 环境中的 `uv` 安装。
+
+GitHub Actions 使用 `macos-14` 构建 Apple Silicon 包，使用 `windows-latest` 构建 Windows x64 包。macOS 构建沿用 `assets/yuheng-icon.icns`，Windows 构建沿用 `assets/yuheng-icon.png` 并由 electron-builder 生成安装包图标。当前两个平台均未配置签名；正式对外分发前需要分别配置 Apple 公证和 Windows 代码签名。
 
 图标修改后先运行：
 

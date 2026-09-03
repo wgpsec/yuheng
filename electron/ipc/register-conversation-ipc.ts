@@ -3,8 +3,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { isAgentProfileId } from '../agent-profiles';
 import { MAX_CONVERSATION_BACKUP_BYTES, conversationBackupMarkdown, parseConversationBackup } from '../conversation-backup';
-import type { AppStore, ConversationProject } from '../store';
+import type { AppStore, ConversationCapabilities, ConversationCapabilityOverride, ConversationProject } from '../store';
 import { assertText } from './ipc-input';
+import { listSkills } from '../skills';
 import type { DomainIpcRegistrar } from './secured-ipc-registrar';
 
 type ConversationStore = Pick<AppStore,
@@ -12,7 +13,8 @@ type ConversationStore = Pick<AppStore,
   | 'deleteConversationProject' | 'listMessages' | 'branchConversation' | 'createConversation'
   | 'setConversationProvider' | 'getConversation' | 'setConversationProfile' | 'renameConversation'
   | 'moveConversation' | 'setConversationArchived' | 'setConversationPinned' | 'deleteConversation'
-  | 'exportConversation' | 'importConversation'
+  | 'exportConversation' | 'importConversation' | 'setConversationWorkspace' | 'getConversationCapabilities' | 'saveConversationCapabilities'
+  | 'getConversationSkills' | 'saveConversationSkills' | 'getSkillRegistrations'
 >;
 
 export type ConversationIpcDependencies = {
@@ -34,6 +36,13 @@ export function registerConversationIpc({ registrar, store, isConversationActive
   });
   registrar.main('conversation-projects:create', (_event, name: unknown, workspacePath: unknown): ConversationProject => store.createConversationProject(assertText(name, 'name'), typeof workspacePath === 'string' && workspacePath.trim() ? workspacePath.trim() : null));
   registrar.main('conversation-projects:set-workspace', (_event, projectId: unknown, workspacePath: unknown): ConversationProject => store.setConversationProjectWorkspace(assertText(projectId, 'projectId'), typeof workspacePath === 'string' && workspacePath.trim() ? workspacePath.trim() : null));
+  registrar.main('conversation-workspace:choose', async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const result = owner
+      ? await dialog.showOpenDialog(owner, { properties: ['openDirectory', 'createDirectory'] })
+      : await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
   registrar.main('conversation-projects:rename', (_event, projectId: unknown, name: unknown): ConversationProject => store.renameConversationProject(assertText(projectId, 'projectId'), assertText(name, 'name')));
   registrar.main('conversation-projects:delete', (_event, projectId: unknown) => store.deleteConversationProject(assertText(projectId, 'projectId')));
   registrar.main('conversations:messages', (_event, conversationId: unknown) => store.listMessages(assertText(conversationId, 'conversationId')));
@@ -53,8 +62,26 @@ export function registerConversationIpc({ registrar, store, isConversationActive
     store.setConversationProfile(id, profileId);
     return store.getConversation(id);
   });
+  registrar.main('conversations:capabilities:get', (_event, conversationId: unknown): ConversationCapabilities => store.getConversationCapabilities(assertText(conversationId, 'conversationId')));
+  registrar.main('conversations:capabilities:save', (_event, conversationId: unknown, raw: unknown): ConversationCapabilities => {
+    const id = assertText(conversationId, 'conversationId');
+    if (!raw || typeof raw !== 'object') throw new Error('Conversation capabilities are required.');
+    const value = raw as Record<string, unknown>;
+    const valid = (candidate: unknown): candidate is ConversationCapabilityOverride => candidate === 'default' || candidate === 'enabled' || candidate === 'disabled';
+    if (!valid(value.browserUse) || !valid(value.computerUse)) throw new Error('Unsupported conversation capability setting.');
+    return store.saveConversationCapabilities(id, { browserUse: value.browserUse, computerUse: value.computerUse });
+  });
+  registrar.main('conversations:skills:get', (_event, conversationId: unknown) => store.getConversationSkills(assertText(conversationId, 'conversationId')));
+  registrar.main('conversations:skills:save', (_event, conversationId: unknown, raw: unknown) => {
+    const id = assertText(conversationId, 'conversationId');
+    if (!Array.isArray(raw) || raw.some((item) => typeof item !== 'string')) throw new Error('会话 Skill 配置格式无效。');
+    const available = new Set(listSkills(undefined, store.getSkillRegistrations()).map((skill) => skill.id));
+    const selected = [...new Set((raw as string[]).filter((skillId) => available.has(skillId)))];
+    return store.saveConversationSkills(id, selected);
+  });
   registrar.main('conversations:rename', (_event, conversationId: unknown, title: unknown) => store.renameConversation(assertText(conversationId, 'conversationId'), assertText(title, 'title')));
   registrar.main('conversations:move', (_event, conversationId: unknown, projectId: unknown) => store.moveConversation(assertText(conversationId, 'conversationId'), assertText(projectId, 'projectId')));
+  registrar.main('conversations:set-workspace', (_event, conversationId: unknown, workspacePath: unknown) => store.setConversationWorkspace(assertText(conversationId, 'conversationId'), typeof workspacePath === 'string' && workspacePath.trim() ? workspacePath.trim() : null));
   registrar.main('conversations:archive', (_event, conversationId: unknown, archived: unknown) => store.setConversationArchived(assertText(conversationId, 'conversationId'), archived === true));
   registrar.main('conversations:pin', (_event, conversationId: unknown, pinned: unknown) => store.setConversationPinned(assertText(conversationId, 'conversationId'), pinned === true));
   registrar.main('conversations:delete', async (_event, conversationId: unknown) => {
