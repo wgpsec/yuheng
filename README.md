@@ -92,6 +92,26 @@ npm run build:mac-icon
 
 当前安装包未配置 Developer ID 签名和公证，适合内部 macOS arm64 分发。正式对外发布需要配置证书并完成 notarization。完整清单见 [`docs/macos-packaging.md`](docs/macos-packaging.md)。
 
+## Computer Use 权限
+
+macOS 的 Computer Use helper 需要当前登录用户手动授予“辅助功能”和“屏幕录制”权限。权限不能通过 `sudo` 或脚本静默授予；不要使用 `sudo` 启动玉衡、helper 或打包命令，否则权限可能绑定到错误的用户或签名身份。
+
+需要重新授权时，先退出玉衡和旧 helper，再打开对应的系统设置页面：
+
+```bash
+pkill -f pi-computer-use || true
+open 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'
+open 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
+```
+
+在系统设置中找到实际运行的 `pi-computer-use.app`（通常位于 `/Applications/pi-computer-use.app` 或 `~/Applications/pi-computer-use.app`），分别关闭并重新打开“辅助功能”和“屏幕录制”权限，然后正常启动玉衡：
+
+```bash
+./start-mac.command
+```
+
+最后在玉衡“设置 → Agent 能力”点击“检查环境”。只有 helper 诊断同时显示 `accessibility: true` 和 `screenRecording: true` 时，Computer Use 才算就绪。
+
 ## 常用检查
 
 ```bash

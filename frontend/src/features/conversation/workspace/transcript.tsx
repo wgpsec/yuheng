@@ -3,13 +3,13 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ThinkingOrb } from 'thinking-orbs';
 import { GitBranch, ListTodo, Maximize2, Pencil, RefreshCw, X } from 'lucide-react';
-import type { DesktopBridge, RunSummary } from '../../../contracts/desktop-bridge';
+import type { ComputerUseActionOutcome, DesktopBridge, RunSummary } from '../../../contracts/desktop-bridge';
 
 export type TranscriptAttachment = { id: string; name: string; size: number };
 export type TranscriptMessage = { id: string; role: 'user' | 'assistant'; content: string; time: string; createdAt?: string; attachments?: TranscriptAttachment[] };
 export type RecoveryNotice = { message: string; onRetry?: () => void; busy?: boolean };
 export type ToolArtifact = { id: string; kind: 'browser_screenshot' | 'computer_screenshot'; mimeType: string; size: number; url: string };
-export type ToolActivity = { id: string; toolName: string; status: 'running' | 'completed' | 'failed' | 'cancelled'; input?: string; output?: string; startedAt?: string; finishedAt?: string | null; artifacts?: ToolArtifact[] };
+export type ToolActivity = { id: string; toolName: string; status: 'running' | 'completed' | 'failed' | 'cancelled'; input?: string; output?: string; startedAt?: string; finishedAt?: string | null; artifacts?: ToolArtifact[]; actionOutcome?: ComputerUseActionOutcome };
 export type RunUsageView = { inputTokens: number; outputTokens: number; totalTokens: number; contextTokens: number | null; contextWindow: number; contextPercent: number | null; durationMs: number };
 
 export function taskIdentityFromToolActivity(activity: Pick<ToolActivity, 'toolName' | 'output'>): { boardId: string; taskId: string } | null {
@@ -42,7 +42,13 @@ function ToolActivityCard({ activity, onOpenTask }: { activity: ToolActivity; on
     previewCloseTimer.current = window.setTimeout(() => { setPreviewUrl(null); setPreviewClosing(false); previewCloseTimer.current = null; }, 170);
   };
   useEffect(() => () => { if (previewCloseTimer.current !== null) window.clearTimeout(previewCloseTimer.current); }, []);
-  const statusLabel = activity.status === 'running' ? '执行中' : activity.status === 'completed' ? '已完成' : activity.status === 'failed' ? '失败' : '已取消';
+  const statusLabel = activity.actionOutcome?.status === 'not_dispatched'
+    ? '未执行'
+    : activity.actionOutcome?.status === 'dispatched_unverified'
+      ? '已发送，未确认'
+      : activity.actionOutcome?.status === 'verified'
+        ? '已验证'
+        : activity.status === 'running' ? '执行中' : activity.status === 'completed' ? '已完成' : activity.status === 'failed' ? '失败' : '已取消';
   const taskIdentity = activity.status === 'completed' ? taskIdentityFromToolActivity(activity) : null;
   return <article className={`tool-activity is-${activity.status}`}>
     <div className="tool-activity-summary"><span className="tool-activity-indicator" /><strong>{toolLabel(activity.toolName)}</strong><code>{activity.toolName}</code><span className="tool-activity-status">{statusLabel}</span>{taskIdentity && onOpenTask && <button type="button" className="tool-activity-task-link" onClick={() => onOpenTask(taskIdentity.boardId, taskIdentity.taskId)}>打开任务</button>}</div>

@@ -49,12 +49,12 @@ describe('Pi SDK session factory', () => {
     }
   });
 
-  it('allows Browser Use and Computer Use together for a session', () => {
-    assert.equal(typeof createPiSessionFactory({ protocol: 'openai', baseUrl: 'https://api.example.test/v1', model: 'test-model', displayName: '测试模型', contextWindow: 200_000, hasApiKey: false }, 'test-key', {
+  it('rejects Browser Use and Computer Use together for a session', () => {
+    assert.throws(() => createPiSessionFactory({ protocol: 'openai', baseUrl: 'https://api.example.test/v1', model: 'test-model', displayName: '测试模型', contextWindow: 200_000, hasApiKey: false }, 'test-key', {
       agentDir: '/tmp/yuheng-agent',
       browserUse: { supervisor: { callTool: async () => ({ content: [] }) }, requestApproval: async () => true },
       computerUse: { requestApproval: async () => true },
-    }), 'function');
+    }), /不能同时开启/);
   });
   it('creates an isolated session without contacting the model network', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'yuheng-pi-'));

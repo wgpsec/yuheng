@@ -138,7 +138,7 @@ export function useConversationWorkspace(bridge: DesktopBridge | undefined, opti
         setActivities((current) => ({ ...current, [event.conversationId]: [...(current[event.conversationId] ?? []), { id: event.toolCallId, toolName: event.toolName, status: 'running', input: event.input, startedAt: new Date().toISOString() }] })); return;
       }
       if (event.type === 'tool_end') {
-        setActivities((current) => ({ ...current, [event.conversationId]: (current[event.conversationId] ?? []).map((activity) => activity.id === event.toolCallId ? { ...activity, toolName: event.toolName, status: event.isError ? 'failed' : 'completed', output: event.output, finishedAt: new Date().toISOString(), artifacts: event.artifacts } : activity) })); return;
+        setActivities((current) => ({ ...current, [event.conversationId]: (current[event.conversationId] ?? []).map((activity) => activity.id === event.toolCallId ? { ...activity, toolName: event.toolName, status: event.isError ? 'failed' : 'completed', output: event.output, finishedAt: new Date().toISOString(), artifacts: event.artifacts, actionOutcome: event.actionOutcome } : activity) })); return;
       }
       if (event.type === 'delta') {
         setMessages((current) => {

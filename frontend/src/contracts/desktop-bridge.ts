@@ -76,11 +76,16 @@ export type TaskEvent =
   | { type: 'open_today'; boardId: string }
   | { type: 'quick_record'; boardId: string };
 export type TaskAsset = { id: string; name: string; mimeType: string; size: number; url: string };
+export type ComputerUseActionOutcome = {
+  status: 'not_dispatched' | 'dispatched_unverified' | 'verified';
+  reason: string;
+  dispatchedActions: number;
+};
 export type RunEvent =
   | { type: 'accepted'; runId: string; conversationId: string }
   | { type: 'delta'; runId: string; conversationId: string; messageId: string; delta: string; createdAt: string }
   | { type: 'tool_start'; runId: string; conversationId: string; toolCallId: string; toolName: string; input?: string }
-  | { type: 'tool_end'; runId: string; conversationId: string; toolCallId: string; toolName: string; isError: boolean; output?: string; artifacts: RunArtifact[] }
+  | { type: 'tool_end'; runId: string; conversationId: string; toolCallId: string; toolName: string; isError: boolean; output?: string; artifacts: RunArtifact[]; actionOutcome?: ComputerUseActionOutcome }
   | { type: 'approval_required'; runId: string; conversationId: string; approvalId: string; toolCallId: string; toolName: string; input?: string }
   | { type: 'approval_resolved'; runId: string; conversationId: string; approvalId: string; approved: boolean }
   | { type: 'completed'; runId: string; conversationId: string; messageId: string }

@@ -21,6 +21,22 @@ describe('Transcript timeline', () => {
     }));
     assert.match(html, />打开任务</);
   });
+
+  it('shows the structured Computer Use action outcome', () => {
+    const html = renderToStaticMarkup(createElement(Transcript, {
+      messages: [],
+      isThinking: false,
+      activities: [{
+        id: 'act-call',
+        toolName: 'act_ui',
+        status: 'failed' as const,
+        actionOutcome: { status: 'not_dispatched' as const, reason: 'visual_observation_unavailable', dispatchedActions: 0 },
+      }],
+    }));
+
+    assert.match(html, />未执行</);
+  });
+
   it('keeps live assistant replies between their surrounding user messages', () => {
     const messages: TranscriptMessage[] = [
       { id: 'user-1', role: 'user', content: 'first-question', time: '12:21', createdAt: '2026-08-27T04:21:24.195Z' },

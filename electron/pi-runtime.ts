@@ -3,7 +3,7 @@ import type { Static, TSchema } from 'typebox';
 import type { ProviderConfig } from './store';
 import { BROWSER_TOOL_NAMES, type BrowserToolName, type BrowserUseSupervisor } from './browser-use';
 import { executeTaskTool, TASK_TOOL_NAMES, type TaskToolName, type TaskToolService } from './task-agent-tools';
-import { COMPUTER_USE_TOOL_NAMES, computerUseExtensionPath, createComputerUseApprovalExtension, type ComputerUseApproval } from './computer-use';
+import { COMPUTER_USE_TOOL_NAMES, computerUseActionOutcome, computerUseExtensionPath, createComputerUseApprovalExtension, type ComputerUseActionOutcome, type ComputerUseApproval } from './computer-use';
 import { enabledSkillPaths, type UserSkillRegistration } from './skills';
 import { createSecurityToolExtension, type ToolAuthorizer } from './security-tools';
 
@@ -19,7 +19,7 @@ export type PiSessionEvent =
 export type PiRuntimeEvent =
   | { type: 'text_delta'; delta: string }
   | { type: 'tool_start'; toolCallId: string; toolName: string; args?: unknown }
-  | { type: 'tool_end'; toolCallId: string; toolName: string; isError: boolean; result?: unknown }
+  | { type: 'tool_end'; toolCallId: string; toolName: string; isError: boolean; result?: unknown; actionOutcome?: ComputerUseActionOutcome }
   | { type: 'completed'; usage?: PiRunUsage }
   | { type: 'failed'; error: string }
   | { type: 'cancelled' };
@@ -123,6 +123,9 @@ function messageText(content: unknown): string | null {
 
 /** Builds a Pi session using only the explicitly configured provider and tools. */
 export function createPiSessionFactory(config: ProviderConfig, apiKey: string, options: PiSessionFactoryOptions): PiSessionFactory {
+  if (options.browserUse && options.computerUse) {
+    throw new Error('Browser Use 与 Computer Use 不能同时开启，请只选择一种能力。');
+  }
   return async (input) => {
     const [sdk, typebox] = await Promise.all([loadPiSdk(), options.browserUse || options.taskService ? loadTypeBox() : Promise.resolve(undefined)]);
     const modelRuntime = await sdk.ModelRuntime.create({ allowModelNetwork: false, refreshOnCreate: false });
@@ -306,6 +309,7 @@ export function createPiRuntime(options: { sessionFactory: PiSessionFactory }): 
   let removeAbortListener: (() => void) | undefined;
   let terminal = false;
   let startedStats: ReturnType<NonNullable<PiSession['stats']>> | undefined;
+  let unresolvedComputerUseOutcome: ComputerUseActionOutcome | undefined;
 
   const emitTerminal = (input: PiRuntimeInput, event: PiRuntimeEvent): void => {
     if (terminal) return;
@@ -326,6 +330,16 @@ export function createPiRuntime(options: { sessionFactory: PiSessionFactory }): 
     } };
   };
 
+  const computerUseVerdict = (outcome: ComputerUseActionOutcome): string => outcome.status === 'not_dispatched'
+    ? '\n\nComputer Use 未执行任何界面操作：无法获得可靠的操作前观察。请将目标窗口切换到当前桌面并保持可见后重试。'
+    : `\n\nComputer Use 已发送 ${outcome.dispatchedActions} 个界面动作，但未能验证结果。为避免重复操作，已停止继续执行；请检查目标窗口后再重试。`;
+
+  const complete = (input: PiRuntimeInput): void => {
+    if (terminal) return;
+    if (unresolvedComputerUseOutcome) input.emit({ type: 'text_delta', delta: computerUseVerdict(unresolvedComputerUseOutcome) });
+    emitTerminal(input, completedEvent());
+  };
+
   const dispose = async (): Promise<void> => {
     removeAbortListener?.();
     removeAbortListener = undefined;
@@ -340,6 +354,7 @@ export function createPiRuntime(options: { sessionFactory: PiSessionFactory }): 
     async start(input) {
       if (session) throw new Error('Pi runtime is already running.');
       terminal = false;
+      unresolvedComputerUseOutcome = undefined;
       if (input.signal?.aborted) {
         emitTerminal(input, { type: 'cancelled' });
         return;
@@ -354,10 +369,24 @@ export function createPiRuntime(options: { sessionFactory: PiSessionFactory }): 
         }
         const toolCallIds = createToolCallIdResolver();
         unsubscribe = session.subscribe((event) => {
-          if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') input.emit({ type: 'text_delta', delta: event.assistantMessageEvent.delta });
+          if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
+            if (!unresolvedComputerUseOutcome) input.emit({ type: 'text_delta', delta: event.assistantMessageEvent.delta });
+          }
           else if (event.type === 'tool_execution_start') input.emit({ type: 'tool_start', toolCallId: toolCallIds.start(event.toolCallId, event.toolName), toolName: event.toolName, args: event.args });
-          else if (event.type === 'tool_execution_end') input.emit({ type: 'tool_end', toolCallId: toolCallIds.end(event.toolCallId, event.toolName), toolName: event.toolName, isError: event.isError, result: event.result });
-          else if (event.type === 'agent_end' && !event.willRetry) emitTerminal(input, completedEvent());
+          else if (event.type === 'tool_execution_end') {
+            const actionOutcome = computerUseActionOutcome(event.toolName, event.result);
+            if (actionOutcome?.status === 'verified') unresolvedComputerUseOutcome = undefined;
+            else if (actionOutcome) unresolvedComputerUseOutcome = actionOutcome;
+            input.emit({
+              type: 'tool_end',
+              toolCallId: toolCallIds.end(event.toolCallId, event.toolName),
+              toolName: event.toolName,
+              isError: event.isError,
+              result: event.result,
+              ...(actionOutcome ? { actionOutcome } : {}),
+            });
+          }
+          else if (event.type === 'agent_end' && !event.willRetry) complete(input);
         });
         if (input.signal) {
           const onAbort = () => { void this.abort(); };
@@ -366,7 +395,7 @@ export function createPiRuntime(options: { sessionFactory: PiSessionFactory }): 
         }
         await session.prompt(input.prompt, input.images.length > 0 ? { images: input.images } : undefined);
         if (input.signal?.aborted) emitTerminal(input, { type: 'cancelled' });
-        else emitTerminal(input, completedEvent());
+        else complete(input);
       } catch (error) {
         if (input.signal?.aborted) emitTerminal(input, { type: 'cancelled' });
         else emitTerminal(input, { type: 'failed', error: error instanceof Error ? error.message : 'Pi runtime failed.' });

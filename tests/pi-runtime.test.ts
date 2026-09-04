@@ -66,6 +66,36 @@ describe('PiRuntime', () => {
     ]);
   });
 
+  it('replaces assistant claims after an undispatched Computer Use action with the host verdict', async () => {
+    const events: PiRuntimeEvent[] = [];
+    let sessionListener: ((event: PiSessionEvent) => void) | undefined;
+    const session: PiSession = {
+      subscribe(listener) { sessionListener = listener; return () => { sessionListener = undefined; }; },
+      async prompt() {
+        sessionListener?.({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '我来操作。' } });
+        sessionListener?.({
+          type: 'tool_execution_end', toolCallId: 'act-1', toolName: 'act_ui', isError: true,
+          result: { details: { actionOutcome: { status: 'not_dispatched', reason: 'visual_observation_unavailable', dispatchedActions: 0 } } },
+        });
+        sessionListener?.({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '已经输入完成。' } });
+        sessionListener?.({ type: 'agent_end' });
+      },
+      async abort() {},
+      dispose() {},
+    };
+    const runtime = createPiRuntime({ sessionFactory: async () => session });
+
+    await runtime.start(input({ emit: (event) => events.push(event) }));
+
+    assert.equal(events.some((event) => event.type === 'text_delta' && event.delta.includes('已经输入完成')), false);
+    assert.equal(events.some((event) => event.type === 'text_delta' && event.delta.includes('未执行任何界面操作')), true);
+    const toolEnd = events.find((event) => event.type === 'tool_end');
+    assert.deepEqual(toolEnd && 'actionOutcome' in toolEnd ? toolEnd.actionOutcome : undefined, {
+      status: 'not_dispatched', reason: 'visual_observation_unavailable', dispatchedActions: 0,
+    });
+    assert.equal(events.at(-1)?.type, 'completed');
+  });
+
   it('reports the current turn usage separately from earlier session usage', async () => {
     const events: PiRuntimeEvent[] = [];
     let sessionListener: ((event: PiSessionEvent) => void) | undefined;

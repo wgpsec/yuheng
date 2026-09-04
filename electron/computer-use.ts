@@ -1,11 +1,12 @@
 import type { ExtensionFactory, ToolCallEvent } from '@earendil-works/pi-coding-agent';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-export const COMPUTER_USE_VERSION = '0.5.0';
+export const COMPUTER_USE_VERSION = '0.5.6';
 const execFileAsync = promisify(execFile);
 const COMPUTER_USE_INSTALL_COMMAND = '内置 helper，无需单独下载；点击“安装或修复”完成安装。';
 export const COMPUTER_USE_TOOL_NAMES = [
@@ -23,6 +24,24 @@ export const COMPUTER_USE_TOOL_NAMES = [
 ] as const;
 
 export type ComputerUseToolName = typeof COMPUTER_USE_TOOL_NAMES[number];
+export type ComputerUseActionOutcome = {
+  status: 'not_dispatched' | 'dispatched_unverified' | 'verified';
+  reason: string;
+  dispatchedActions: number;
+};
+
+export function computerUseActionOutcome(toolName: string, result: unknown): ComputerUseActionOutcome | undefined {
+  if (toolName !== 'act_ui' || !result || typeof result !== 'object') return undefined;
+  const details = (result as { details?: unknown }).details;
+  if (!details || typeof details !== 'object') return undefined;
+  const outcome = (details as { actionOutcome?: unknown }).actionOutcome;
+  if (!outcome || typeof outcome !== 'object') return undefined;
+  const value = outcome as Record<string, unknown>;
+  if (value.status !== 'not_dispatched' && value.status !== 'dispatched_unverified' && value.status !== 'verified') return undefined;
+  if (typeof value.reason !== 'string' || !Number.isInteger(value.dispatchedActions) || Number(value.dispatchedActions) < 0) return undefined;
+  return { status: value.status, reason: value.reason, dispatchedActions: Number(value.dispatchedActions) };
+}
+
 export type ComputerUseEnvironment = {
   status: 'ready' | 'unavailable' | 'needs_permission';
   platform: string;
@@ -41,6 +60,64 @@ export type ComputerUseEnvironment = {
 export type ComputerUsePermissionKind = 'accessibility' | 'screenRecording';
 type ScreenRecordingStatus = ComputerUseEnvironment['screenRecording'];
 
+type HelperPermissionResult = {
+  accessibility: boolean;
+  screenRecording: boolean;
+  source: {
+    attribution: 'helper-app' | 'caller' | null;
+    executablePath: string | null;
+  } | null;
+};
+
+async function queryHelperPermissions(homeDir: string): Promise<HelperPermissionResult | null> {
+  const socketPath = process.env.PI_CU_SOCKET_PATH?.trim() || path.join(homeDir, 'Library', 'Caches', 'pi-computer-use', 'bridge.sock');
+  return await new Promise<HelperPermissionResult | null>((resolve) => {
+    const socket = net.createConnection(socketPath);
+    let buffer = '';
+    let settled = false;
+    const finish = (result: HelperPermissionResult | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish(null), 6_000);
+    socket.setEncoding('utf8');
+    socket.on('connect', () => socket.write(`${JSON.stringify({ id: 'diagnose', cmd: 'checkPermissions' })}\n`));
+    socket.on('data', (chunk) => {
+      buffer += String(chunk);
+      const newline = buffer.indexOf('\n');
+      if (newline < 0) return;
+      try {
+        const parsed = JSON.parse(buffer.slice(0, newline)) as { ok?: boolean; result?: Record<string, unknown> };
+        if (parsed.ok !== true || !parsed.result) return finish(null);
+        const result = parsed.result;
+        const source = result.source as Record<string, unknown> | undefined;
+        finish({
+          accessibility: result.accessibility === true,
+          screenRecording: result.screenRecordingCapturable === true || result.screenRecording === true,
+          source: source
+            ? {
+              attribution: source.attribution === 'helper-app' ? 'helper-app' : source.attribution === 'caller' ? 'caller' : null,
+              executablePath: typeof source.executablePath === 'string' && source.executablePath.trim() ? source.executablePath : null,
+            }
+            : null,
+        });
+      } catch {
+        finish(null);
+      }
+    });
+    socket.on('error', () => finish(null));
+  });
+}
+
+function isExpectedHelperSource(result: HelperPermissionResult, helperPath: string, resolvePath: (filePath: string) => string): boolean {
+  if (result.source?.attribution !== 'helper-app' || !result.source.executablePath) return false;
+  const expected = path.join(helperPath, 'Contents', 'MacOS', 'bridge');
+  return resolvePath(result.source.executablePath) === resolvePath(expected);
+}
+
 function electronSystemPreferences(): { isTrustedAccessibilityClient?: (prompt: boolean) => boolean; getMediaAccessStatus?: (mediaType: 'screen') => ScreenRecordingStatus } | null {
   try {
     return require('electron').systemPreferences ?? null;
@@ -49,10 +126,25 @@ function electronSystemPreferences(): { isTrustedAccessibilityClient?: (prompt: 
   }
 }
 
-export function computerUseHelperPath(homeDir = os.homedir(), fileExists: (filePath: string) => boolean = fs.existsSync): string | null {
+export function computerUseHelperPath(
+  homeDir = os.homedir(),
+  fileExists: (filePath: string) => boolean = fs.existsSync,
+  directoryIsWritable: (directoryPath: string) => boolean = (directoryPath) => {
+    try {
+      fs.accessSync(directoryPath, fs.constants.W_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+): string {
   const configured = process.env.PI_COMPUTER_USE_HELPER_APP_PATH?.trim();
-  const candidates = configured ? [configured] : [path.join('/Applications', 'pi-computer-use.app'), path.join(homeDir, 'Applications', 'pi-computer-use.app')];
-  return candidates.find((candidate) => fileExists(candidate)) ?? candidates[0] ?? null;
+  if (configured) return path.resolve(configured);
+
+  // Keep selection aligned with pi-computer-use's installer/runtime resolver.
+  const systemHelperPath = path.join('/Applications', 'pi-computer-use.app');
+  if (fileExists(systemHelperPath) && directoryIsWritable(path.dirname(systemHelperPath))) return systemHelperPath;
+  return path.join(homeDir, 'Applications', 'pi-computer-use.app');
 }
 
 export async function diagnoseComputerUseEnvironment(options: {
@@ -60,9 +152,12 @@ export async function diagnoseComputerUseEnvironment(options: {
   arch?: string;
   homeDir?: string;
   fileExists?: (filePath: string) => boolean;
+  directoryIsWritable?: (directoryPath: string) => boolean;
   exec?: (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>;
   accessibilityCheck?: () => boolean;
   screenRecordingCheck?: () => ScreenRecordingStatus;
+  helperPermissionCheck?: (homeDir: string) => Promise<HelperPermissionResult | null>;
+  resolvePath?: (filePath: string) => string;
 } = {}): Promise<ComputerUseEnvironment> {
   const platform = options.platform ?? process.platform;
   const arch = options.arch ?? process.arch;
@@ -71,7 +166,9 @@ export async function diagnoseComputerUseEnvironment(options: {
   if (platform === 'darwin') {
     try { macOS = (await run('sw_vers', ['-productVersion'])).stdout.trim() || null; } catch { macOS = null; }
   }
-  const helperPath = platform === 'darwin' ? computerUseHelperPath(options.homeDir, options.fileExists ?? fs.existsSync) : null;
+  const helperPath = platform === 'darwin'
+    ? computerUseHelperPath(options.homeDir, options.fileExists ?? fs.existsSync, options.directoryIsWritable)
+    : null;
   const helperInstalled = Boolean(helperPath && (options.fileExists ?? fs.existsSync)(helperPath));
   const base = { platform, arch, macOS, helperPath, helperInstalled, installCommand: COMPUTER_USE_INSTALL_COMMAND };
   if (platform !== 'darwin') return { ...base, status: 'unavailable', permissions: 'unknown', accessibility: null, screenRecording: 'unknown', permissionTarget: null, message: 'Computer Use 当前仅支持 macOS。' };
@@ -79,14 +176,42 @@ export async function diagnoseComputerUseEnvironment(options: {
   if (!helperInstalled) return { ...base, status: 'unavailable', permissions: 'unknown', accessibility: null, screenRecording: 'unknown', permissionTarget: helperPath, message: '未安装 Computer Use helper。点击“安装或修复”，然后在系统设置中授予辅助功能和屏幕录制权限。' };
 
   const preferences = electronSystemPreferences();
-  const accessibility = options.accessibilityCheck?.() ?? (preferences?.isTrustedAccessibilityClient ? preferences.isTrustedAccessibilityClient(false) : null);
-  const screenRecording = options.screenRecordingCheck?.() ?? (preferences?.getMediaAccessStatus ? preferences.getMediaAccessStatus('screen') : 'unknown');
-  const permissions = accessibility === true && screenRecording === 'granted' ? 'granted' : accessibility === null || screenRecording === 'unknown' ? 'unknown' : 'required';
+  const explicitPermissionChecks = options.accessibilityCheck !== undefined || options.screenRecordingCheck !== undefined;
+  const helperPermissions = options.helperPermissionCheck
+    ? await options.helperPermissionCheck(options.homeDir ?? os.homedir())
+    : explicitPermissionChecks
+      ? null
+      : await queryHelperPermissions(options.homeDir ?? os.homedir());
+  const resolvePath = options.resolvePath ?? ((filePath: string) => {
+    try { return fs.realpathSync.native(filePath); } catch { return path.resolve(filePath); }
+  });
+  const installedHelperPath = helperPath!;
+  const helperSourceMatches = helperPermissions ? isExpectedHelperSource(helperPermissions, installedHelperPath, resolvePath) : null;
+  if (helperSourceMatches === false) {
+    const actual = helperPermissions?.source?.executablePath ?? '未知';
+    const expected = path.join(installedHelperPath, 'Contents', 'MacOS', 'bridge');
+    return {
+      ...base,
+      status: 'unavailable',
+      permissions: 'unknown',
+      accessibility: helperPermissions?.accessibility ?? null,
+      screenRecording: helperPermissions?.screenRecording ? 'granted' : 'denied',
+      permissionTarget: helperPath,
+      message: `Computer Use helper 来源不匹配：当前为 ${actual}，应为 ${expected}。请点击“安装或修复”后重新检查。`,
+    };
+  }
+  const accessibility = helperPermissions
+    ? helperPermissions.accessibility
+    : options.accessibilityCheck?.() ?? (preferences?.isTrustedAccessibilityClient ? preferences.isTrustedAccessibilityClient(false) : null);
+  const screenRecording = helperPermissions
+    ? (helperPermissions.screenRecording ? 'granted' : 'denied')
+    : options.screenRecordingCheck?.() ?? (preferences?.getMediaAccessStatus ? preferences.getMediaAccessStatus('screen') : 'unknown');
+  const permissions = accessibility === true && screenRecording === 'granted' ? 'granted' : accessibility === null || screenRecording === 'unknown' || (!explicitPermissionChecks && !helperPermissions) ? 'unknown' : 'required';
   const status = permissions === 'granted' ? 'ready' : 'needs_permission';
   const message = status === 'ready'
-    ? 'Computer Use 已就绪，辅助功能和屏幕录制均已授权。'
+    ? 'Computer Use 系统权限已就绪：helper 的辅助功能和屏幕录制均已授权。单个窗口当前是否可捕获，将在实际观察时确认。'
     : permissions === 'unknown'
-      ? '无法读取 macOS 权限状态，请点击“授权”打开系统设置，然后重新检查。'
+      ? '无法读取 pi-computer-use helper 的实时权限状态，请先启动 helper 或点击“授权”，然后重新检查。'
       : `缺少 macOS 权限：${accessibility === true ? '' : '辅助功能'}${accessibility !== true && screenRecording !== 'granted' ? '、' : ''}${screenRecording === 'granted' ? '' : '屏幕录制'}。`;
   return { ...base, status, permissions, accessibility, screenRecording, permissionTarget: helperPath, message };
 }

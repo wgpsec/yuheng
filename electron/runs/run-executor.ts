@@ -3,7 +3,7 @@ import path from 'node:path';
 import { getAgentProfile, loadAgentProfilePrompt, formatRuntimeContext } from '../agent-profiles';
 import { BrowserArtifactStore, browserImagesFromToolResult, type BrowserArtifact } from '../browser-artifacts';
 import { BrowserUseSupervisor } from '../browser-use';
-import { ComputerUseLease } from '../computer-use';
+import { ComputerUseLease, type ComputerUseActionOutcome } from '../computer-use';
 import { createPiRuntime, createPiSessionFactory, type ReasoningLevel } from '../pi-runtime';
 import { FileSecurityAuditLog } from '../security-audit';
 import { ToolSecurityBroker, ToolSecurityPolicy, redactToolApprovalInput } from '../security-policy';
@@ -25,7 +25,7 @@ export type RunEvent =
   | { type: 'accepted'; runId: string; conversationId: string }
   | { type: 'delta'; runId: string; conversationId: string; messageId: string; delta: string; createdAt: string }
   | { type: 'tool_start'; runId: string; conversationId: string; toolCallId: string; toolName: string; input?: string }
-  | { type: 'tool_end'; runId: string; conversationId: string; toolCallId: string; toolName: string; isError: boolean; output?: string; artifacts: BrowserArtifact[] }
+  | { type: 'tool_end'; runId: string; conversationId: string; toolCallId: string; toolName: string; isError: boolean; output?: string; artifacts: BrowserArtifact[]; actionOutcome?: ComputerUseActionOutcome }
   | { type: 'approval_required'; runId: string; conversationId: string; approvalId: string; toolCallId: string; toolName: string; input?: string }
   | { type: 'approval_resolved'; runId: string; conversationId: string; approvalId: string; approved: boolean }
   | { type: 'completed'; runId: string; conversationId: string; messageId: string }
@@ -157,7 +157,17 @@ export class RunExecutor {
               return artifact;
             });
             store.finishToolActivity(runId, event.toolCallId, event.toolName, event.isError, output);
-            this.options.emit(sender, { type: 'tool_end', runId, conversationId, toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError, output, artifacts });
+            this.options.emit(sender, {
+              type: 'tool_end',
+              runId,
+              conversationId,
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              isError: event.isError,
+              output,
+              artifacts,
+              ...(event.actionOutcome ? { actionOutcome: event.actionOutcome } : {}),
+            });
             return;
           }
           if (event.type === 'completed') { runUsage = event.usage; return; }
