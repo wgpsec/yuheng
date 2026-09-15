@@ -59,6 +59,25 @@ describe('IPC sender authorization', () => {
     assert.match(executor, /new ToolSecurityPolicy\(preparedWorkspace\.projectDirectory, run\.permissionMode\)/);
   });
 
+  it('exposes Finder attachment paths through the secured main-renderer bridge', () => {
+    const runIpc = readFileSync(new URL('../electron/ipc/register-run-ipc.ts', import.meta.url), 'utf8');
+    const main = readFileSync(new URL('../electron/app/normal-application.ts', import.meta.url), 'utf8');
+    const preload = readFileSync(new URL('../electron/preload.ts', import.meta.url), 'utf8');
+    assert.match(runIpc, /registrar\.main\('attachments:add-paths'/);
+    assert.match(main, /const addAttachments = async \(rawPaths: unknown\)/);
+    assert.match(main, /if \(!path\.isAbsolute\(filePath\)\)/);
+    assert.match(preload, /import \{ contextBridge, ipcRenderer, webUtils \} from 'electron'/);
+    assert.match(preload, /addPaths: \(paths: string\[\]\) => ipcRenderer\.invoke\('attachments:add-paths', paths\)/);
+    assert.match(preload, /pathForFile: \(file: File\) => webUtils\.getPathForFile\(file\)/);
+  });
+
+  it('limits Finder drop handling to the conversation workspace', () => {
+    const renderer = readFileSync(new URL('../frontend/src/production/ProductionRenderer.tsx', import.meta.url), 'utf8');
+    assert.match(renderer, /settingsMounted \|\| activeView !== 'conversation' \|\| !event\.dataTransfer\.types\.includes\('Files'\)/);
+    assert.match(renderer, /onDrop=\{handleAttachmentDrop\}/);
+    assert.match(renderer, /attachmentDropActive && activeView === 'conversation' && !settingsMounted/);
+  });
+
   it('exposes knowledge-base operations through the secured notes bridge', () => {
     const ipc = readFileSync(new URL('../electron/ipc/register-note-ipc.ts', import.meta.url), 'utf8');
     const preload = readFileSync(new URL('../electron/preload.ts', import.meta.url), 'utf8');

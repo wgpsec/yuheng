@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { PetOpenTarget } from './pet-state';
 import type { DesktopPetConfig } from './store';
 
@@ -184,6 +184,8 @@ contextBridge.exposeInMainWorld('desktopBridge', {
   },
   attachments: {
     pick: () => ipcRenderer.invoke('attachments:pick'),
+    addPaths: (paths: string[]) => ipcRenderer.invoke('attachments:add-paths', paths),
+    pathForFile: (file: File) => webUtils.getPathForFile(file),
     release: (attachmentIds: string[]) => ipcRenderer.invoke('attachments:release', attachmentIds),
   },
   tasks: {

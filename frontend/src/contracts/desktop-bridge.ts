@@ -264,6 +264,8 @@ export type DesktopBridge = {
   };
   attachments: {
     pick: () => Promise<Attachment[]>;
+    addPaths: (paths: string[]) => Promise<Attachment[]>;
+    pathForFile: (file: File) => string;
     release: (attachmentIds: string[]) => Promise<void>;
   };
   tasks: {

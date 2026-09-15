@@ -14,6 +14,7 @@ export type RunIpcDependencies = {
   getPermissionMode(conversationId: string): ToolPermissionMode;
   savePermissionMode(conversationId: string, mode: ToolPermissionMode): ToolPermissionMode;
   pickAttachments(event: IpcMainInvokeEvent): Promise<unknown>;
+  addAttachments(paths: unknown): Promise<unknown>;
   releaseAttachments(attachmentIds: unknown): void;
   start(event: IpcMainInvokeEvent, conversationId: unknown, content: unknown, attachmentIds: unknown, reasoningLevel: unknown): unknown;
   retry(event: IpcMainInvokeEvent, conversationId: unknown, inputMessageId: unknown, content: unknown, reasoningLevel: unknown): unknown;
@@ -42,6 +43,7 @@ export function registerRunIpc(dependencies: RunIpcDependencies): void {
     return dependencies.savePermissionMode(id, raw);
   });
   registrar.main('attachments:pick', (event) => dependencies.pickAttachments(event));
+  registrar.main('attachments:add-paths', (_event, paths: unknown) => dependencies.addAttachments(paths));
   registrar.main('attachments:release', (_event, attachmentIds: unknown) => dependencies.releaseAttachments(attachmentIds));
   registrar.main('runs:start', (event, conversationId: unknown, content: unknown, attachmentIds: unknown, reasoningLevel: unknown) => dependencies.start(event, conversationId, content, attachmentIds, reasoningLevel));
   registrar.main('runs:retry', (event, conversationId: unknown, inputMessageId: unknown, content: unknown, reasoningLevel: unknown) => dependencies.retry(event, conversationId, inputMessageId, content, reasoningLevel));

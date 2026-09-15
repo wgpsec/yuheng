@@ -19,33 +19,9 @@ describe('MigrationRunner', () => {
     const databasePath = path.join(dataDir, 'yuheng.sqlite');
     const db = new DatabaseSync(databasePath);
     try {
-      createCanonicalBusinessSchema(db);
-      db.exec(`
-        PRAGMA foreign_keys = OFF;
-        DROP INDEX idx_conversations_project_updated;
-        CREATE TABLE conversations_v3 (
-          id TEXT PRIMARY KEY,
-          project_id TEXT NOT NULL DEFAULT 'personal' REFERENCES conversation_projects(id),
-          title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
-          archived INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0,
-          reasoning_level TEXT NOT NULL DEFAULT 'default', provider_id TEXT,
-          profile_id TEXT NOT NULL DEFAULT 'assistant', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-        );
-        INSERT INTO conversations_v3 (id, project_id, title, description, archived, pinned, reasoning_level, provider_id, profile_id, created_at, updated_at)
-          SELECT id, project_id, title, description, archived, pinned, reasoning_level, provider_id, profile_id, created_at, updated_at FROM conversations;
-        DROP TABLE conversations;
-        ALTER TABLE conversations_v3 RENAME TO conversations;
-        CREATE INDEX idx_conversations_project_updated ON conversations(project_id, updated_at DESC);
-        CREATE TABLE schema_migrations (
-          version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL,
-          app_version TEXT NOT NULL, source TEXT NOT NULL, applied_at TEXT NOT NULL
-        );
-      `);
-      for (const migration of migrations.slice(0, 3)) {
-        db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?, ?, ?, ?)')
-          .run(migration.version, migration.name, migration.checksum, 'fixture', 'applied', '2026-08-31T00:00:00.000Z');
-      }
-      db.exec('PRAGMA user_version = 3; PRAGMA foreign_keys = ON;');
+      createV3Fixture(db);
+      assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_bases'").get(), undefined);
+      assert.equal(db.prepare("SELECT 1 FROM pragma_table_info('provider_profiles') WHERE name = 'supports_images'").get(), undefined);
     } finally {
       db.close();
     }
@@ -217,3 +193,44 @@ describe('MigrationRunner', () => {
     }
   });
 });
+
+/** Build the schema as it existed at migration version 3, before knowledge bases and image capability. */
+function createV3Fixture(db: DatabaseSync): void {
+  createCanonicalBusinessSchema(db);
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    DROP TABLE note_versions;
+    DROP TABLE notes;
+    DROP TABLE knowledge_bases;
+    DROP TABLE provider_profiles;
+    CREATE TABLE provider_profiles (
+      id TEXT PRIMARY KEY,
+      protocol TEXT NOT NULL CHECK (protocol IN ('openai', 'anthropic')),
+      base_url TEXT NOT NULL, model TEXT NOT NULL, display_name TEXT NOT NULL,
+      context_window INTEGER NOT NULL DEFAULT 200000, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE notes (
+      id TEXT PRIMARY KEY, parent_id TEXT REFERENCES notes(id) ON DELETE CASCADE,
+      title TEXT NOT NULL, content TEXT NOT NULL DEFAULT '', icon TEXT, cover TEXT,
+      properties_json TEXT NOT NULL DEFAULT '{}', position INTEGER NOT NULL DEFAULT 0,
+      archived INTEGER NOT NULL DEFAULT 0, favorite INTEGER NOT NULL DEFAULT 0,
+      last_opened_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE note_versions (
+      id TEXT PRIMARY KEY, note_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+      title TEXT NOT NULL, content TEXT NOT NULL, icon TEXT, cover TEXT,
+      properties_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
+    );
+    CREATE INDEX idx_notes_parent_position ON notes(parent_id, archived, position, id);
+    CREATE INDEX idx_note_versions_note_created ON note_versions(note_id, created_at DESC);
+    CREATE TABLE schema_migrations (
+      version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL,
+      app_version TEXT NOT NULL, source TEXT NOT NULL, applied_at TEXT NOT NULL
+    );
+  `);
+  for (const migration of migrations.slice(0, 3)) {
+    db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?, ?, ?, ?)')
+      .run(migration.version, migration.name, migration.checksum, 'fixture', 'applied', '2026-08-31T00:00:00.000Z');
+  }
+  db.exec('PRAGMA user_version = 3; PRAGMA foreign_keys = ON;');
+}

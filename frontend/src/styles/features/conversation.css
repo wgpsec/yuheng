@@ -6,6 +6,7 @@
 .conversation-start-orb { display: grid; place-items: center; width: 72px; height: 72px; margin-bottom: 18px; border: 1px solid #2b3338; border-radius: 50%; background: #171b1e; box-shadow: 0 16px 42px #0000002b; animation: conversation-start-orb-enter 420ms 45ms cubic-bezier(.16, 1, .3, 1) both; }
 .conversation-start h2 { margin: 0; color: var(--text-primary); font-size: 25px; font-weight: 620; line-height: 1.25; }
 .conversation-start-composer { width: 100%; margin-top: 28px; animation: conversation-start-item-enter 330ms 75ms cubic-bezier(.16, 1, .3, 1) both; }
+.attachment-drop-overlay { position: absolute; z-index: 25; inset: 38px 12px 12px; display: grid; place-items: center; border: 1px dashed var(--accent); border-radius: 10px; color: var(--text-primary); background: color-mix(in srgb, var(--surface-root) 88%, var(--accent)); font-size: 14px; pointer-events: none; }
 .conversation-starters { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 5px 22px; margin-top: 16px; animation: conversation-start-item-enter 330ms 125ms cubic-bezier(.16, 1, .3, 1) both; }
 .conversation-starters button { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 5px 3px; border: 0; color: var(--text-tertiary); background: transparent; font-size: 13px; transition: color 140ms ease, transform 140ms cubic-bezier(.2, .8, .2, 1); }
 .conversation-starters button:hover { color: var(--text-primary); }

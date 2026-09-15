@@ -25,28 +25,50 @@ export class SettingsRepository extends RepositoryBase {
 
   saveBrowserUse(config: BrowserUseConfig): BrowserUseConfig {
     const normalized = { enabled: config.enabled === true };
-    this.set('browser_use', normalized);
+    this.transaction(() => {
+      this.set('browser_use', normalized);
+      if (normalized.enabled) this.set('computer_use', { enabled: false });
+    });
     return normalized;
   }
 
   getComputerUse(): ComputerUseConfig {
+    // Older releases could persist both defaults as enabled. Keep Browser Use as
+    // the stable precedence for that legacy state so opening an old database
+    // never creates an invalid runtime capability combination.
+    if (this.getBrowserUse().enabled) return { enabled: false };
     return this.get('computer_use', { enabled: false }, readEnabledConfig);
   }
 
   saveComputerUse(config: ComputerUseConfig): ComputerUseConfig {
     const normalized = { enabled: config.enabled === true };
-    this.set('computer_use', normalized);
+    this.transaction(() => {
+      this.set('computer_use', normalized);
+      if (normalized.enabled) this.set('browser_use', { enabled: false });
+    });
     return normalized;
   }
 
   getConversationCapabilities(conversationId: string): ConversationCapabilities {
     this.requireConversation(conversationId);
-    return this.get(`conversation_capabilities:${conversationId}`, { browserUse: 'default', computerUse: 'default' } satisfies ConversationCapabilities, readConversationCapabilities);
+    const capabilities = this.get(`conversation_capabilities:${conversationId}`, { browserUse: 'default', computerUse: 'default' } satisfies ConversationCapabilities, readConversationCapabilities);
+    return capabilities.browserUse === 'enabled' && capabilities.computerUse === 'enabled'
+      ? { ...capabilities, computerUse: 'disabled' }
+      : capabilities;
   }
 
   saveConversationCapabilities(conversationId: string, capabilities: ConversationCapabilities): ConversationCapabilities {
     this.requireConversation(conversationId);
-    const normalized = readConversationCapabilities(capabilities);
+    let normalized = readConversationCapabilities(capabilities);
+    if (normalized.browserUse === 'enabled' && normalized.computerUse === 'enabled') {
+      throw new Error('Browser Use 与 Computer Use 不能同时开启。');
+    }
+    if (normalized.browserUse === 'enabled' && normalized.computerUse === 'default' && this.getComputerUse().enabled) {
+      normalized = { ...normalized, computerUse: 'disabled' };
+    }
+    if (normalized.computerUse === 'enabled' && normalized.browserUse === 'default' && this.getBrowserUse().enabled) {
+      normalized = { ...normalized, browserUse: 'disabled' };
+    }
     return this.set(`conversation_capabilities:${conversationId}`, normalized);
   }
 

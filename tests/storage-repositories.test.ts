@@ -88,7 +88,7 @@ describe('storage repository domain behavior', () => {
     }
   });
 
-  it('keeps provider assignment and independent runtime settings in narrow repositories', () => {
+  it('keeps provider assignment and mutually exclusive runtime settings in narrow repositories', () => {
     const harness = createRepositoryHarness();
     try {
       const conversation = harness.repositories.conversations.create();
@@ -107,7 +107,25 @@ describe('storage repository domain behavior', () => {
       assert.equal(harness.repositories.conversations.providerId(conversation.id), provider.id);
       assert.deepEqual(harness.repositories.settings.saveComputerUse({ enabled: true }), { enabled: true });
       assert.deepEqual(harness.repositories.settings.saveBrowserUse({ enabled: true }), { enabled: true });
-      assert.deepEqual(harness.repositories.settings.getComputerUse(), { enabled: true });
+      assert.deepEqual(harness.repositories.settings.getComputerUse(), { enabled: false });
+    } finally {
+      closeRepositoryHarness(harness);
+    }
+  });
+
+  it('normalizes legacy and per-conversation capability conflicts before runtime creation', () => {
+    const harness = createRepositoryHarness();
+    try {
+      const conversation = harness.repositories.conversations.create();
+      harness.repositories.settings.set('browser_use', { enabled: true });
+      harness.repositories.settings.set('computer_use', { enabled: true });
+      assert.deepEqual(harness.repositories.settings.getBrowserUse(), { enabled: true });
+      assert.deepEqual(harness.repositories.settings.getComputerUse(), { enabled: false });
+
+      assert.deepEqual(
+        harness.repositories.settings.saveConversationCapabilities(conversation.id, { browserUse: 'default', computerUse: 'enabled' }),
+        { browserUse: 'disabled', computerUse: 'enabled' },
+      );
     } finally {
       closeRepositoryHarness(harness);
     }

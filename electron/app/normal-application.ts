@@ -666,13 +666,10 @@ export async function initializeNormalApplication(owner: DatabaseOwner, shutdown
     attachmentMimeType,
   });
   registerProviderIpc({ registrar: normalIpc, store, secrets });
-  const pickAttachments = async (event: IpcMainInvokeEvent) => {
-    const owner = BrowserWindow.fromWebContents(event.sender);
-    const options: OpenDialogOptions = { properties: ['openFile', 'multiSelections'] };
-    const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
-    if (result.canceled) return [];
+  const registerAttachments = async (filePaths: string[]) => {
     const selected: StoredAttachment[] = [];
-    for (const filePath of result.filePaths) {
+    for (const filePath of filePaths) {
+      if (!path.isAbsolute(filePath)) throw new Error('附件路径必须是绝对路径。');
       const mimeType = attachmentMimeType(filePath);
       const metadata = await fs.stat(filePath);
       if (!metadata.isFile()) throw new Error(`附件不是普通文件：${path.basename(filePath)}`);
@@ -680,6 +677,19 @@ export async function initializeNormalApplication(owner: DatabaseOwner, shutdown
     }
     selected.forEach((attachment) => attachments.set(attachment.id, attachment));
     return selected.map(({ sourcePath: _sourcePath, ...attachment }) => attachment);
+  };
+  const pickAttachments = async (event: IpcMainInvokeEvent) => {
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const options: OpenDialogOptions = { properties: ['openFile', 'multiSelections'] };
+    const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
+    if (result.canceled) return [];
+    return registerAttachments(result.filePaths);
+  };
+  const addAttachments = async (rawPaths: unknown) => {
+    if (!Array.isArray(rawPaths)) throw new Error('附件路径无效。');
+    const paths = rawPaths.filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+    if (paths.length !== rawPaths.length) throw new Error('附件路径无效。');
+    return registerAttachments(paths);
   };
   const releaseAttachments = (attachmentIds: unknown) => {
     if (!Array.isArray(attachmentIds)) return;
@@ -754,6 +764,7 @@ export async function initializeNormalApplication(owner: DatabaseOwner, shutdown
       return saved;
     },
     pickAttachments,
+    addAttachments,
     releaseAttachments,
     start: startRun,
     retry: retryRun,

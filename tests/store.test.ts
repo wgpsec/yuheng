@@ -571,7 +571,7 @@ describe('AppStore Browser Use settings', () => {
     }
   });
 
-  it('keeps Browser Use and Computer Use independent and supports per-conversation overrides', () => {
+  it('keeps Browser Use and Computer Use mutually exclusive', () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuheng-store-'));
     const store = new AppStore(dataDir);
     try {
@@ -579,10 +579,13 @@ describe('AppStore Browser Use settings', () => {
       assert.deepEqual(store.getComputerUseConfig(), { enabled: true });
       assert.deepEqual(store.saveBrowserUseConfig({ enabled: true }), { enabled: true });
       assert.deepEqual(store.getBrowserUseConfig(), { enabled: true });
-      assert.deepEqual(store.getComputerUseConfig(), { enabled: true });
+      assert.deepEqual(store.getComputerUseConfig(), { enabled: false });
       const conversation = store.createConversation('能力覆盖');
       assert.deepEqual(store.getConversationCapabilities(conversation.id), { browserUse: 'default', computerUse: 'default' });
-      assert.deepEqual(store.getEffectiveConversationCapabilities(conversation.id), { browserUse: true, computerUse: true });
+      assert.deepEqual(store.getEffectiveConversationCapabilities(conversation.id), { browserUse: true, computerUse: false });
+      assert.throws(() => store.saveConversationCapabilities(conversation.id, { browserUse: 'enabled', computerUse: 'enabled' }), /不能同时开启/);
+      assert.deepEqual(store.saveConversationCapabilities(conversation.id, { browserUse: 'default', computerUse: 'enabled' }), { browserUse: 'disabled', computerUse: 'enabled' });
+      assert.deepEqual(store.getEffectiveConversationCapabilities(conversation.id), { browserUse: false, computerUse: true });
       assert.deepEqual(store.saveConversationCapabilities(conversation.id, { browserUse: 'disabled', computerUse: 'enabled' }), { browserUse: 'disabled', computerUse: 'enabled' });
       assert.deepEqual(store.getEffectiveConversationCapabilities(conversation.id), { browserUse: false, computerUse: true });
     } finally {

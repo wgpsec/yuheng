@@ -91,8 +91,12 @@ export class MigrationRunner {
         this.owner.transaction((db) => {
           createLedger(db);
           migration.up(db);
-          const invariant = validateCanonicalBusinessSchema(db);
-          if (!invariant.ok) throw new MigrationError('schema_invariant_failed', invariant.violations.join(', '));
+          // Intermediate migrations intentionally expose transitional schemas. The full
+          // business invariant is only meaningful once the target migration has run.
+          if (migration.version === targetVersion) {
+            const invariant = validateCanonicalBusinessSchema(db);
+            if (!invariant.ok) throw new MigrationError('schema_invariant_failed', invariant.violations.join(', '));
+          }
           insertLedger(db, migration, this.options.appVersion, 'applied', this.now());
           db.exec(`PRAGMA user_version = ${migration.version}`);
         });
