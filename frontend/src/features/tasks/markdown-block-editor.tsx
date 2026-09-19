@@ -39,7 +39,7 @@ const RECENT_SLASH_COMMANDS_KEY = 'yuheng-recent-slash-commands';
 const slashCommandIcons: Record<SlashCommandId, typeof Text> = { paragraph: Text, heading1: Heading1, heading2: Heading2, bulletList: List, orderedList: ListOrdered, taskList: CheckSquare, blockquote: Quote, callout: Info, details: List, horizontalRule: Minus, table: Table2, codeBlock: Braces, attachment: Paperclip };
 const blockActionItems = slashCommands.filter((command) => command.id !== 'attachment').map((command) => ({ ...command, icon: slashCommandIcons[command.id] }));
 
-export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAssets, onOpenAsset, noteLinkOptions = [], noteLinkHref, onOpenNote, mentionOptions = [], onOpenTask, onMoveBlock, extensions = [], floatingToolbar = false, blockRangeSelection = false }: {
+export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAssets, onOpenAsset, noteLinkOptions = [], noteLinkHref, onOpenNote, mentionOptions = [], onOpenTask, onMoveBlock, extensions = [], floatingToolbar = false, blockRangeSelection = false, autofocus = 'end' }: {
   value: string;
   onChange: (markdown: string) => void;
   onImportAsset?: (file: File) => Promise<TaskAsset>;
@@ -54,6 +54,7 @@ export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAsse
   extensions?: AnyExtension[];
   floatingToolbar?: boolean;
   blockRangeSelection?: boolean;
+  autofocus?: boolean | 'start' | 'end' | 'all';
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const noteLinkOptionsRef = useRef(noteLinkOptions);
@@ -149,7 +150,7 @@ export function MarkdownBlockEditor({ value, onChange, onImportAsset, onPickAsse
     ],
     content: value,
     contentType: 'markdown',
-    autofocus: 'end',
+    autofocus,
     editorProps: {
       attributes: { 'aria-label': '任务 Markdown 详情', spellcheck: 'true' },
       handlePaste: (view, event) => {
