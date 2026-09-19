@@ -2,6 +2,7 @@ import { Bell, Bookmark, CalendarDays, ChevronLeft, ChevronRight, ChevronsRight,
 import { useEffect, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import type { CreateTaskInput, Task, TaskAsset, TaskPriority, TaskStatus, TaskType, UpdateTaskInput } from '../../contracts/desktop-bridge';
 import { MarkdownBlockEditor } from './markdown-block-editor';
+import { normalizeTaskMarkdown, taskDescriptionPreview } from './task-description';
 import { filterBoardTasks, type TaskFilter } from './task-filter';
 import { calendarDays, tasksByDueDate, type TaskView } from './task-views';
 import { ContextAiDrawer } from '../ai/context-ai-drawer';
@@ -61,7 +62,7 @@ function draftFor(task?: Task, status: TaskStatus = 'todo'): Draft {
 }
 
 function inputFor(draft: Draft): CreateTaskInput {
-  return { title: draft.title, description: draft.description, status: draft.status, priority: draft.priority, dueAt: draft.dueAt || null, remindAt: draft.remindAt ? new Date(draft.remindAt).toISOString() : null };
+  return { title: draft.title, description: normalizeTaskMarkdown(draft.description), status: draft.status, priority: draft.priority, dueAt: draft.dueAt || null, remindAt: draft.remindAt ? new Date(draft.remindAt).toISOString() : null };
 }
 
 function draftSignature(draft: Draft): string {
@@ -95,27 +96,6 @@ const semanticColumnColors: Record<string, string> = {
 
 function columnColor(taskTypeId: string, index: number): string {
   return semanticColumnColors[taskTypeId] ?? customColumnColors[index % customColumnColors.length];
-}
-
-function taskDescriptionPreview(value: string): string {
-  return value
-    .replace(/```[\s\S]*?```/g, (block) => block.replace(/^```[^\n]*\n?/, '').replace(/```$/, '').trim())
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .split(/\r?\n/)
-    .map((line) => line
-      .replace(/^\s{0,3}[-*+]\s+\[([ xX]?)\]\s*/, (_match, checked: string) => checked.trim() ? '☑ ' : '☐ ')
-      // Accept the compact checklist syntax commonly pasted from task notes.
-      .replace(/(^|\s)\[([ xX]?)\]\s*/g, (_match, prefix: string, checked: string) => `${prefix}${checked.trim() ? '☑' : '☐'} `)
-      .replace(/^\s{0,3}#{1,6}\s+/, '')
-      .replace(/^\s{0,3}[-*+]\s+/, '• ')
-      .replace(/\*\*([^*]+)\*\*/g, '$1')
-      .replace(/__([^_]+)__/g, '$1')
-      .replace(/[*_`~]/g, '')
-      .trim())
-    .filter(Boolean)
-    .join('\n')
-    .trim();
 }
 
 export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loading, headerControl, requestedOpenTaskId, onOpenTaskHandled, taskActionRequest, onTaskActionHandled, sourceConversations = [], onOpenConversation, onCreate, onUpdate, onDelete, onReorder, onMoveToBoard, onCopyToBoard, onCreateType, onRenameType, onDeleteType, onImportAsset, onPickAssets, onOpenAsset, onRunAi }: {
@@ -517,12 +497,15 @@ export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loadin
     <div key={`content:${boardId ?? 'empty-board'}:${view}`} className={`task-board-scroll task-view-${view}`}>
       {view === 'list' && <div className="task-list-view" role="table" aria-label="任务列表">
         <div className="task-list-header" role="row"><span>任务</span><span>状态</span><span>优先级</span><span>截止日期</span></div>
-        {visibleTasks.length === 0 ? <div className="task-list-empty">{filtering ? '没有匹配任务' : '暂无任务'}</div> : visibleTasks.map((task) => <div className="task-list-row" role="row" key={task.id} onClick={() => openTask(task)} tabIndex={0} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openTask(task); } }}>
-          <div className="task-list-title"><strong>{task.title}</strong>{task.description && <small>{taskDescriptionPreview(task.description).split('\n')[0]}</small>}</div>
+        {visibleTasks.length === 0 ? <div className="task-list-empty">{filtering ? '没有匹配任务' : '暂无任务'}</div> : visibleTasks.map((task) => {
+          const preview = taskDescriptionPreview(task.description).split('\n')[0];
+          return <div className="task-list-row" role="row" key={task.id} onClick={() => openTask(task)} tabIndex={0} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openTask(task); } }}>
+          <div className="task-list-title"><strong>{task.title}</strong>{preview && <small>{preview}</small>}</div>
           <select value={task.status} aria-label={`${task.title}状态`} onClick={(event) => event.stopPropagation()} onChange={(event) => void changeStatus(task, event.target.value)}>{taskTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</select>
           <span className={`task-list-priority is-${task.priority}`}>{priorities.find((item) => item.value === task.priority)?.label}</span>
           <span className="task-list-due">{task.dueAt ? dueLabel(task.dueAt) : '—'}</span>
-        </div>)}
+        </div>;
+        })}
       </div>}
       {view === 'calendar' && <div className="task-calendar-view" aria-label="任务日历">
         <div className="task-calendar-toolbar"><button type="button" className="icon-button" onClick={() => setCalendarMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))} aria-label="上个月"><ChevronLeft size={16} /></button><strong>{new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long' }).format(calendarMonth)}</strong><button type="button" className="icon-button" onClick={() => setCalendarMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))} aria-label="下个月"><ChevronRight size={16} /></button></div>
@@ -647,7 +630,7 @@ export function TaskBoard({ boardId, boardName, boards, tasks, taskTypes, loadin
           })()}
         </div>
         <div className="task-description-field">
-          <MarkdownBlockEditor key={editorSessionKey} value={draft.description} onChange={(description) => updateDraft({ description })} onImportAsset={onImportAsset} onPickAssets={onPickAssets} onOpenAsset={onOpenAsset} />
+          <MarkdownBlockEditor key={editorSessionKey} value={draft.description} autofocus={false} onChange={(description) => updateDraft({ description })} onImportAsset={onImportAsset} onPickAssets={onPickAssets} onOpenAsset={onOpenAsset} />
         </div>
         {error && <p className="form-error" role="alert">{error}</p>}
       </form>

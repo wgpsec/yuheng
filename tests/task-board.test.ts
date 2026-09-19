@@ -10,3 +10,10 @@ describe('Task board card menu styling', () => {
     assert.match(css, /\.task-card-menu\s*\{[^}]*\bz-index:\s*40;/);
   });
 });
+
+describe('Task editor focus', () => {
+  it('keeps the title field focused when creating a task', () => {
+    const source = readFileSync(new URL('../frontend/src/features/tasks/task-board.tsx', import.meta.url), 'utf8');
+    assert.match(source, /<MarkdownBlockEditor key=\{editorSessionKey\} value=\{draft\.description\} autofocus=\{false\}/);
+  });
+});
